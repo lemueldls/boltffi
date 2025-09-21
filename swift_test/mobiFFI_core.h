@@ -94,6 +94,12 @@ typedef int8_t RustFuturePoll;
 #define RustFuturePoll_Ready 0
 #define RustFuturePoll_MaybeReady 1
 
+typedef uint8_t SchedulerStateTag;
+#define SchedulerStateTag_Empty 0
+#define SchedulerStateTag_Waked 1
+#define SchedulerStateTag_Cancelled 2
+#define SchedulerStateTag_ContinuationStored 3
+
 typedef const void* RustFutureHandle;
 typedef void (*RustFutureContinuationCallback)(uint64_t callback_data, RustFuturePoll poll_result);
 
