@@ -7,7 +7,7 @@
 public final class {{ class_name }} {
     let handle: OpaquePointer
 
-    init(handle: OpaquePointer) {
+    private init(handle: OpaquePointer) {
         self.handle = handle
     }
 {%- for ctor in constructors %}
@@ -15,14 +15,14 @@ public final class {{ class_name }} {
     /// {{ doc }}
 {%- endif %}
 
-    public init({% for param in ctor.params %}{{ param.swift_name }}: {{ param.swift_type }}{% if !loop.last %}, {% endif %}{% endfor %}) {
-        let ptr = {{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.swift_name }}{% if !loop.last %}, {% endif %}{% endfor %})
+    public convenience init({% for param in ctor.params %}{{ param.swift_name }}: {{ param.swift_type }}{% if !loop.last %}, {% endif %}{% endfor %}) {
+        let ptr = {{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.swift_name }}{% if !loop.last %}, {% endif %}{% endfor %})!
         self.init(handle: ptr)
     }
 {%- endfor %}
 
     deinit {
-        {{ ffi_free }}(handle)
+        _ = {{ ffi_free }}(handle)
     }
 {%- for method in methods %}
 {%- if let Some(doc) = method.doc %}

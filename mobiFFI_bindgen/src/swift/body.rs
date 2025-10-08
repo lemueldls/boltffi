@@ -1,6 +1,9 @@
+use askama::Template;
+
 use crate::model::{Class, Enumeration, Method, Module, Record, StreamMethod};
 
 use super::names::NamingConvention;
+use super::templates::{StreamBodyTemplate, SyncMethodBodyTemplate};
 use super::types::TypeMapper;
 
 pub struct BodyRenderer;
@@ -13,42 +16,16 @@ impl BodyRenderer {
             (true, true) => Self::async_throwing_body(method, &class_prefix),
             (true, false) => Self::async_body(method, &class_prefix),
             (false, true) => Self::throwing_body(method, &class_prefix),
-            (false, false) => Self::sync_body(method, &class_prefix),
+            (false, false) => SyncMethodBodyTemplate::from_method(method, class, module)
+                .render()
+                .expect("sync method template failed"),
         }
     }
 
     pub fn render_stream(stream: &StreamMethod, class: &Class, module: &Module) -> String {
-        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
-        let item_type = TypeMapper::map_type(&stream.item_type);
-        let subscribe_fn = stream.ffi_subscribe(&class_prefix);
-        let pop_batch_fn = stream.ffi_pop_batch(&class_prefix);
-        let wait_fn = stream.ffi_wait(&class_prefix);
-        let free_fn = stream.ffi_free(&class_prefix);
-
-        format!(
-            r#"AsyncStream<{item_type}> {{ continuation in
-    let subscription = {subscribe_fn}(self.handle)
-    
-    Task {{
-        var buffer = [{item_type}](repeating: {item_type}(), count: 64)
-        while true {{
-            let waitResult = {wait_fn}(subscription, 100)
-            if waitResult < 0 {{ break }}
-            
-            let count = buffer.withUnsafeMutableBufferPointer {{ ptr in
-                {pop_batch_fn}(subscription, ptr.baseAddress, ptr.count)
-            }}
-            
-            for index in 0..<count {{
-                continuation.yield(buffer[index])
-            }}
-        }}
-        
-        {free_fn}(subscription)
-        continuation.finish()
-    }}
-}}"#
-        )
+        StreamBodyTemplate::from_stream(stream, class, module)
+            .render()
+            .expect("stream body template failed")
     }
 
     pub fn render_record(record: &Record) -> String {

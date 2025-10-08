@@ -1,0 +1,1 @@
+{%- if has_return %}return {% endif %}{{ ffi_name }}(handle{% for arg in args %}, {{ arg }}{% endfor %})

@@ -1,10 +1,9 @@
 use askama::Template;
 
-use crate::model::{Class, Enumeration, Module, Record};
+use crate::model::{Class, Enumeration, Method, Module, Record, StreamMethod};
 
 use super::names::NamingConvention;
 use super::types::TypeMapper;
-use super::BodyRenderer;
 
 #[derive(Template)]
 #[template(path = "swift/record.txt", escape = "none")]
@@ -147,7 +146,13 @@ impl ClassTemplate {
                             swift_type: TypeMapper::map_type(&param.param_type),
                         })
                         .collect(),
-                    body: BodyRenderer::render_method(method, class, module),
+                    body: if !method.is_async && !method.throws() {
+                        SyncMethodBodyTemplate::from_method(method, class, module)
+                            .render()
+                            .expect("sync method template failed")
+                    } else {
+                        format!("/* async/throwing not yet implemented */")
+                    },
                 })
                 .collect(),
             streams: class
@@ -157,7 +162,9 @@ impl ClassTemplate {
                     doc: stream.doc.clone(),
                     swift_name: NamingConvention::method_name(&stream.name),
                     item_type: TypeMapper::map_type(&stream.item_type),
-                    body: BodyRenderer::render_stream(stream, class, module),
+                    body: StreamBodyTemplate::from_stream(stream, class, module)
+                        .render()
+                        .expect("stream body template failed"),
                 })
                 .collect(),
         }
@@ -209,4 +216,50 @@ pub struct StreamView {
     pub swift_name: String,
     pub item_type: String,
     pub body: String,
+}
+
+#[derive(Template)]
+#[template(path = "swift/stream_body.txt", escape = "none")]
+pub struct StreamBodyTemplate {
+    pub item_type: String,
+    pub subscribe_fn: String,
+    pub pop_batch_fn: String,
+    pub wait_fn: String,
+    pub free_fn: String,
+}
+
+impl StreamBodyTemplate {
+    pub fn from_stream(stream: &StreamMethod, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        Self {
+            item_type: TypeMapper::map_type(&stream.item_type),
+            subscribe_fn: stream.ffi_subscribe(&class_prefix),
+            pop_batch_fn: stream.ffi_pop_batch(&class_prefix),
+            wait_fn: stream.ffi_wait(&class_prefix),
+            free_fn: stream.ffi_free(&class_prefix),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/method_sync.txt", escape = "none")]
+pub struct SyncMethodBodyTemplate {
+    pub ffi_name: String,
+    pub args: Vec<String>,
+    pub has_return: bool,
+}
+
+impl SyncMethodBodyTemplate {
+    pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        Self {
+            ffi_name: method.ffi_name(&class_prefix),
+            args: method
+                .inputs
+                .iter()
+                .map(|p| NamingConvention::param_name(&p.name))
+                .collect(),
+            has_return: method.output.as_ref().map_or(false, |t| !t.is_void()),
+        }
+    }
 }

@@ -76,16 +76,6 @@ fn generate_swift(module: &Module) -> String {
 
     output.push_str("import Foundation\n\n");
 
-    for record in &module.records {
-        output.push_str(&Swift::render_record(record));
-        output.push_str("\n\n");
-    }
-
-    for enumeration in &module.enums {
-        output.push_str(&Swift::render_enum(enumeration));
-        output.push_str("\n\n");
-    }
-
     for class in &module.classes {
         output.push_str(&Swift::render_class(class, module));
         output.push_str("\n\n");
