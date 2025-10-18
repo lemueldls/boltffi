@@ -56,7 +56,7 @@ fn main() {
         module.records.len()
     );
 
-    let metadata_dir = PathBuf::from("target/mobiFFI");
+    let metadata_dir = PathBuf::from("target/bindgen");
     fs::create_dir_all(&metadata_dir).expect("Failed to create metadata directory");
     let metadata_path = metadata_dir.join(format!("{}.json", module_name));
     let metadata_json =
