@@ -5,6 +5,18 @@ use std::path::PathBuf;
 use mobiFFI_bindgen::model::Module;
 use mobiFFI_bindgen::{scan_crate, Swift};
 
+fn read_crate_name(crate_path: &PathBuf) -> String {
+    let cargo_toml_path = crate_path.join("Cargo.toml");
+    let content = fs::read_to_string(&cargo_toml_path).expect("Failed to read Cargo.toml");
+    
+    content
+        .lines()
+        .find(|line| line.starts_with("name"))
+        .and_then(|line| line.split('=').nth(1))
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .expect("Failed to find package name in Cargo.toml")
+}
+
 fn generate_swift(module: &Module) -> String {
     let mut output = String::new();
 
@@ -35,14 +47,11 @@ fn main() {
         )
     };
 
-    let module_name = crate_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("core");
+    let module_name = read_crate_name(&crate_path);
 
     println!("Scanning crate: {}", crate_path.display());
 
-    let module = match scan_crate(&crate_path, module_name) {
+    let module = match scan_crate(&crate_path, &module_name) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("Error scanning crate: {}", e);
