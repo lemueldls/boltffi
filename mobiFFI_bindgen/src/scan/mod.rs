@@ -240,23 +240,34 @@ impl SourceScanner {
             }
         };
 
-        let params: Vec<(String, MType)> = method
+        let typed_params: Vec<_> = method
             .sig
             .inputs
             .iter()
             .filter_map(|arg| {
                 if let syn::FnArg::Typed(pat_type) = arg {
-                    let param_name = match &*pat_type.pat {
-                        syn::Pat::Ident(ident) => ident.ident.to_string(),
-                        _ => return None,
-                    };
-                    let param_type = rust_type_to_ffi_type(&pat_type.ty)?;
-                    Some((param_name, param_type))
+                    Some(pat_type)
                 } else {
                     None
                 }
             })
             .collect();
+
+        let params: Vec<(String, MType)> = typed_params
+            .iter()
+            .filter_map(|pat_type| {
+                let param_name = match &*pat_type.pat {
+                    syn::Pat::Ident(ident) => ident.ident.to_string(),
+                    _ => return None,
+                };
+                let param_type = rust_type_to_ffi_type(&pat_type.ty)?;
+                Some((param_name, param_type))
+            })
+            .collect();
+
+        if params.len() != typed_params.len() {
+            return None;
+        }
 
         let output = match &method.sig.output {
             syn::ReturnType::Default => None,

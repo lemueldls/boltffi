@@ -10,8 +10,7 @@ echo "Copying header..."
 cp ../target/release/build/mobiFFI_core-*/out/mobiFFI_core.h .
 
 echo "Compiling Swift test..."
-swiftc -import-objc-header mobiFFI_core.h -L../target/release -lmobiFFI_core -parse-as-library Generated.swift -o libGenerated.o -emit-object
-swiftc -import-objc-header mobiFFI_core.h -L../target/release -lmobiFFI_core libGenerated.o test.swift -o test_ffi
+swiftc -import-objc-header mobiFFI_core.h -L../target/release -lmobiFFI_core -whole-module-optimization Generated.swift test.swift -o test_ffi
 
 echo "Running test..."
 DYLD_LIBRARY_PATH=../target/release ./test_ffi

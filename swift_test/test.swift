@@ -1,5 +1,14 @@
 import Foundation
+import Dispatch
 
+@main
+struct TestRunner {
+    static func main() {
+        runTests()
+    }
+}
+
+func runTests() {
 print("Testing MobiFFI Swift binding...")
 
 let major = mffi_version_major()
@@ -559,7 +568,6 @@ if isSuccess {
 
 print("\n--- Testing poll-based async (foreign-driven) ---")
 
-import Dispatch
 
 class PollContext {
     var pollResult: Int8 = -1
@@ -1016,3 +1024,4 @@ if sum == expectedSum {
 }
 
 print("\n=== ALL TESTS PASSED ===")
+}

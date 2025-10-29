@@ -55,10 +55,6 @@ public final class DataStore {
         return mffi_datastore_len(handle)
     }
 
-    public func copyInto() -> UInt {
-        return mffi_datastore_copy_into(handle)
-    }
-
     public func foreach(callback: @escaping (DataPoint) -> Void) {
         
         typealias ForeachCallbackFn = (DataPoint) -> Void
@@ -134,7 +130,10 @@ public final class SensorMonitor {
 
     public func readings() -> AsyncStream<SensorReading> {
         AsyncStream<SensorReading> { continuation in
-    let subscription = mffi_sensormonitor_readings(self.handle)
+    guard let subscription = mffi_sensormonitor_readings(self.handle) else {
+        continuation.finish()
+        return
+    }
     let buffer = UnsafeMutablePointer<SensorReading>.allocate(capacity: 16)
     
     continuation.onTermination = { @Sendable _ in

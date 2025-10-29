@@ -1,5 +1,8 @@
 AsyncStream<{{ item_type }}> { continuation in
-    let subscription = {{ subscribe_fn }}(self.handle)
+    guard let subscription = {{ subscribe_fn }}(self.handle) else {
+        continuation.finish()
+        return
+    }
     let buffer = UnsafeMutablePointer<{{ item_type }}>.allocate(capacity: 16)
     
     continuation.onTermination = { @Sendable _ in
