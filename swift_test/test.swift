@@ -45,6 +45,21 @@ func testFreeFunctions() {
     print("multiplyFloats(2.5, 4.0) = \(product)")
     assert(product == 10.0, "Expected 10.0")
     
+    var rangeSum: Int32 = 0
+    foreachRange(start: 1, end: 5) { value in
+        rangeSum += value
+    }
+    print("foreachRange(1, 5) sum = \(rangeSum)")
+    assert(rangeSum == 10, "Expected 10 (1+2+3+4)")
+    
+    let opposite = oppositeDirection(dir: Direction_North)
+    print("oppositeDirection(North) = \(opposite)")
+    assert(opposite == Direction_South, "Expected South")
+    
+    let degrees = directionToDegrees(dir: Direction_East)
+    print("directionToDegrees(East) = \(degrees)")
+    assert(degrees == 90, "Expected 90")
+    
     print("SUCCESS: Free functions work!\n")
 }
 

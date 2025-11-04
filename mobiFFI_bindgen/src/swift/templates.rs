@@ -53,6 +53,8 @@ pub struct FunctionTemplate {
     pub throws: bool,
     pub has_string_params: bool,
     pub has_slice_params: bool,
+    pub has_callbacks: bool,
+    pub callbacks: Vec<FunctionCallbackView>,
 }
 
 impl FunctionTemplate {
@@ -75,19 +77,57 @@ impl FunctionTemplate {
             .iter()
             .any(|p| matches!(p.param_type, Type::Slice(_) | Type::MutSlice(_)));
 
+        let has_callbacks = function
+            .inputs
+            .iter()
+            .any(|p| matches!(p.param_type, Type::Callback(_)));
+
+        let func_name_pascal = NamingConvention::class_name(&function.name);
+        let callbacks: Vec<FunctionCallbackView> = function
+            .inputs
+            .iter()
+            .filter(|p| matches!(p.param_type, Type::Callback(_)))
+            .enumerate()
+            .map(|(idx, p)| {
+                let param_name = NamingConvention::param_name(&p.name);
+                let inner_type = match &p.param_type {
+                    Type::Callback(inner) => TypeMapper::map_type(inner),
+                    _ => "Void".into(),
+                };
+                let ffi_inner = match &p.param_type {
+                    Type::Callback(inner) => TypeMapper::ffi_type(inner),
+                    _ => "Void".into(),
+                };
+                let suffix = if idx > 0 { format!("{}", idx + 1) } else { String::new() };
+
+                FunctionCallbackView {
+                    param_name: param_name.clone(),
+                    swift_type: inner_type,
+                    ffi_arg_type: ffi_inner,
+                    context_type: format!("{}CallbackFn{}", func_name_pascal, suffix),
+                    box_type: format!("{}CallbackBox{}", func_name_pascal, suffix),
+                    box_name: format!("{}Box{}", param_name, suffix),
+                    ptr_name: format!("{}Ptr{}", param_name, suffix),
+                    trampoline_name: format!("{}Trampoline{}", param_name, suffix),
+                }
+            })
+            .collect();
+
         Self {
             func_name: NamingConvention::method_name(&function.name),
             ffi_name: function.ffi_name(&module.ffi_prefix()),
             params: function
                 .inputs
                 .iter()
+                .filter(|p| !matches!(p.param_type, Type::Callback(_)))
                 .map(|p| FunctionParamView {
                     swift_name: NamingConvention::param_name(&p.name),
                     swift_type: TypeMapper::map_type(&p.param_type),
-                    ffi_conversion: TypeMapper::to_ffi_conversion(&p.name, &p.param_type),
+                    ffi_conversion: NamingConvention::param_name(&p.name),
                     is_string: matches!(p.param_type, Type::String),
                     is_slice: matches!(p.param_type, Type::Slice(_)),
                     is_mut_slice: matches!(p.param_type, Type::MutSlice(_)),
+                    is_callback: false,
                 })
                 .collect(),
             return_type: function
@@ -100,6 +140,8 @@ impl FunctionTemplate {
             throws: function.throws(),
             has_string_params,
             has_slice_params,
+            has_callbacks,
+            callbacks,
         }
     }
 }
@@ -111,6 +153,18 @@ pub struct FunctionParamView {
     pub is_string: bool,
     pub is_slice: bool,
     pub is_mut_slice: bool,
+    pub is_callback: bool,
+}
+
+pub struct FunctionCallbackView {
+    pub param_name: String,
+    pub swift_type: String,
+    pub ffi_arg_type: String,
+    pub context_type: String,
+    pub box_type: String,
+    pub box_name: String,
+    pub ptr_name: String,
+    pub trampoline_name: String,
 }
 
 #[derive(Template)]

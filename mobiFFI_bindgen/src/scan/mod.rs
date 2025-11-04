@@ -190,12 +190,12 @@ impl SourceScanner {
         };
 
         if let Some(ref out_ty) = output {
-            if matches!(out_ty, MType::Vec(_) | MType::Option(_) | MType::Result { .. } | MType::Enum(_) | MType::Record(_)) {
+            if matches!(out_ty, MType::Vec(_) | MType::Option(_) | MType::Result { .. }) {
                 return;
             }
         }
 
-        let has_unsupported_params = params.iter().any(|(_, ty)| matches!(ty, MType::Callback(_) | MType::Enum(_) | MType::Record(_) | MType::Slice(_) | MType::MutSlice(_)));
+        let has_unsupported_params = params.iter().any(|(_, ty)| matches!(ty, MType::Slice(_) | MType::MutSlice(_)));
         if has_unsupported_params {
             return;
         }
