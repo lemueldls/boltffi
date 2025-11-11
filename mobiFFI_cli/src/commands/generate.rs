@@ -31,91 +31,48 @@ pub fn run_generate(config: &Config, options: GenerateOptions) -> Result<()> {
 }
 
 fn generate_swift(config: &Config, output: Option<PathBuf>) -> Result<()> {
-    let output_dir = output.unwrap_or_else(|| config.swift.output.clone());
+    let output_path = output
+        .map(|dir| dir.join("Generated.swift"))
+        .unwrap_or_else(|| config.swift.output.join("Generated.swift"));
     
-    std::fs::create_dir_all(&output_dir)
-        .map_err(|source| CliError::CreateDirectoryFailed {
-            path: output_dir.clone(),
-            source,
-        })?;
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|source| CliError::CreateDirectoryFailed {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+    }
+
+    let crate_path = config.library_name();
 
     let status = Command::new("cargo")
-        .args(["run", "-p", "mobiFFI_bindgen", "--", "swift", "-o"])
-        .arg(&output_dir)
+        .args(["run", "-p", "mobiFFI_bindgen", "--"])
+        .arg(crate_path)
+        .arg(&output_path)
         .status()
         .map_err(|_| CliError::CommandFailed {
-            command: "mobiFFI_bindgen swift".to_string(),
+            command: "mobiFFI_bindgen".to_string(),
             status: None,
         })?;
 
     if !status.success() {
         return Err(CliError::CommandFailed {
-            command: "mobiFFI_bindgen swift".to_string(),
+            command: "mobiFFI_bindgen".to_string(),
             status: status.code(),
         });
     }
 
-    println!("Generated Swift bindings -> {}", output_dir.display());
+    println!("Generated Swift bindings -> {}", output_path.display());
     Ok(())
 }
 
-fn generate_kotlin(config: &Config, output: Option<PathBuf>) -> Result<()> {
-    let output_dir = output.unwrap_or_else(|| config.kotlin.output.clone());
-    
-    std::fs::create_dir_all(&output_dir)
-        .map_err(|source| CliError::CreateDirectoryFailed {
-            path: output_dir.clone(),
-            source,
-        })?;
-
-    let status = Command::new("cargo")
-        .args(["run", "-p", "mobiFFI_bindgen", "--", "kotlin", "-o"])
-        .arg(&output_dir)
-        .status()
-        .map_err(|_| CliError::CommandFailed {
-            command: "mobiFFI_bindgen kotlin".to_string(),
-            status: None,
-        })?;
-
-    if !status.success() {
-        return Err(CliError::CommandFailed {
-            command: "mobiFFI_bindgen kotlin".to_string(),
-            status: status.code(),
-        });
-    }
-
-    println!("Generated Kotlin bindings -> {}", output_dir.display());
+fn generate_kotlin(_config: &Config, _output: Option<PathBuf>) -> Result<()> {
+    println!("Kotlin generation not yet implemented");
     Ok(())
 }
 
-fn generate_header(config: &Config, output: Option<PathBuf>) -> Result<()> {
-    let output_dir = output.unwrap_or_else(|| PathBuf::from("include"));
-    
-    std::fs::create_dir_all(&output_dir)
-        .map_err(|source| CliError::CreateDirectoryFailed {
-            path: output_dir.clone(),
-            source,
-        })?;
-
-    let lib_name = config.library_name();
-    let header_path = output_dir.join(format!("{}.h", lib_name));
-
-    let status = Command::new("cargo")
-        .args(["run", "-p", "mobiFFI_bindgen", "--", "header", "-o"])
-        .arg(&header_path)
-        .status()
-        .map_err(|_| CliError::CommandFailed {
-            command: "mobiFFI_bindgen header".to_string(),
-            status: None,
-        })?;
-
-    if !status.success() {
-        return Err(CliError::CommandFailed {
-            command: "mobiFFI_bindgen header".to_string(),
-            status: status.code(),
-        });
-    }
-
-    println!("Generated header -> {}", header_path.display());
+fn generate_header(_config: &Config, _output: Option<PathBuf>) -> Result<()> {
+    println!("Header generation via CLI not yet implemented");
+    println!("Use: cargo build -p mobiFFI_core (headers generated via build.rs)");
     Ok(())
 }
