@@ -259,30 +259,44 @@ impl FunctionTemplate {
             params: function
                 .inputs
                 .iter()
-                .filter(|p| !matches!(p.param_type, Type::Callback(_)))
-                .map(|p| {
-                    let slice_inner_type = match &p.param_type {
-                        Type::Slice(inner) | Type::MutSlice(inner) => {
-                            Some(TypeMapper::map_type(inner))
-                        }
+                .filter(|param| !matches!(param.param_type, Type::Callback(_)))
+                .scan(false, |seen_pointer_param, param| {
+                    let slice_inner_type = match &param.param_type {
+                        Type::Slice(inner) | Type::MutSlice(inner) => Some(TypeMapper::map_type(inner)),
                         _ => None,
                     };
-                    let vec_inner_type = match &p.param_type {
+
+                    let vec_inner_type = match &param.param_type {
                         Type::Vec(inner) => Some(TypeMapper::map_type(inner)),
                         _ => None,
                     };
-                    FunctionParamView {
-                        swift_name: NamingConvention::param_name(&p.name),
-                        swift_type: TypeMapper::map_type(&p.param_type),
-                        ffi_conversion: NamingConvention::param_name(&p.name),
-                        is_string: matches!(p.param_type, Type::String),
-                        is_slice: matches!(p.param_type, Type::Slice(_)),
-                        is_mut_slice: matches!(p.param_type, Type::MutSlice(_)),
+
+                    let is_string = matches!(param.param_type, Type::String);
+                    let is_slice = matches!(param.param_type, Type::Slice(_));
+                    let is_mut_slice = matches!(param.param_type, Type::MutSlice(_));
+                    let is_vec = matches!(param.param_type, Type::Vec(_));
+
+                    let is_pointer_param = is_string || is_slice || is_mut_slice || is_vec;
+                    let is_first_pointer_param = is_pointer_param && !*seen_pointer_param;
+                    if is_pointer_param {
+                        *seen_pointer_param = true;
+                    }
+
+                    let swift_name = NamingConvention::param_name(&param.name);
+
+                    Some(FunctionParamView {
+                        swift_name: swift_name.clone(),
+                        swift_type: TypeMapper::map_type(&param.param_type),
+                        ffi_conversion: swift_name,
+                        is_string,
+                        is_slice,
+                        is_mut_slice,
                         is_callback: false,
-                        is_vec: matches!(p.param_type, Type::Vec(_)),
+                        is_vec,
+                        is_first_pointer_param,
                         slice_inner_type,
                         vec_inner_type,
-                    }
+                    })
                 })
                 .collect(),
             return_type: function.output.as_ref().and_then(|ty| {
@@ -345,6 +359,7 @@ pub struct FunctionParamView {
     pub is_mut_slice: bool,
     pub is_callback: bool,
     pub is_vec: bool,
+    pub is_first_pointer_param: bool,
     pub slice_inner_type: Option<String>,
     pub vec_inner_type: Option<String>,
 }
@@ -592,6 +607,7 @@ pub struct StreamAsyncBodyTemplate {
     pub poll_fn: String,
     pub unsubscribe_fn: String,
     pub free_fn: String,
+    pub atomic_cas_fn: String,
 }
 
 impl StreamAsyncBodyTemplate {
@@ -604,6 +620,7 @@ impl StreamAsyncBodyTemplate {
             poll_fn: stream.ffi_poll(&class_prefix),
             unsubscribe_fn: stream.ffi_unsubscribe(&class_prefix),
             free_fn: stream.ffi_free(&class_prefix),
+            atomic_cas_fn: format!("{}_atomic_u8_cas", module.ffi_prefix()),
         }
     }
 }
@@ -638,6 +655,7 @@ pub struct StreamCallbackBodyTemplate {
     pub poll_fn: String,
     pub unsubscribe_fn: String,
     pub free_fn: String,
+    pub atomic_cas_fn: String,
 }
 
 impl StreamCallbackBodyTemplate {
@@ -652,6 +670,7 @@ impl StreamCallbackBodyTemplate {
             poll_fn: stream.ffi_poll(&class_prefix),
             unsubscribe_fn: stream.ffi_unsubscribe(&class_prefix),
             free_fn: stream.ffi_free(&class_prefix),
+            atomic_cas_fn: format!("{}_atomic_u8_cas", module.ffi_prefix()),
         }
     }
 }
@@ -672,6 +691,7 @@ pub struct MethodParamView {
     pub is_slice: bool,
     pub is_mut_slice: bool,
     pub is_vec: bool,
+    pub is_first_pointer_param: bool,
 }
 
 fn param_to_ffi_arg(param: &crate::model::Parameter) -> String {
@@ -688,23 +708,41 @@ fn param_to_ffi_arg(param: &crate::model::Parameter) -> String {
     }
 }
 
+fn method_param_views<'a>(
+    params: impl Iterator<Item = &'a crate::model::Parameter>,
+) -> Vec<MethodParamView> {
+    params
+        .scan(false, |seen_pointer_param, param| {
+            let swift_name = NamingConvention::param_name(&param.name);
+
+            let is_string = matches!(param.param_type, crate::model::Type::String);
+            let is_slice = matches!(param.param_type, crate::model::Type::Slice(_));
+            let is_mut_slice = matches!(param.param_type, crate::model::Type::MutSlice(_));
+            let is_vec = matches!(param.param_type, crate::model::Type::Vec(_));
+            let is_pointer_param = is_string || is_slice || is_mut_slice || is_vec;
+
+            let is_first_pointer_param = is_pointer_param && !*seen_pointer_param;
+            if is_pointer_param {
+                *seen_pointer_param = true;
+            }
+
+            Some(MethodParamView {
+                swift_name: swift_name.clone(),
+                ffi_arg: param_to_ffi_arg(param),
+                is_string,
+                is_slice,
+                is_mut_slice,
+                is_vec,
+                is_first_pointer_param,
+            })
+        })
+        .collect()
+}
+
 impl SyncMethodBodyTemplate {
     pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
         let class_prefix = class.ffi_prefix(&module.ffi_prefix());
-        let params: Vec<_> = method
-            .non_callback_params()
-            .map(|param| {
-                let swift_name = NamingConvention::param_name(&param.name);
-                MethodParamView {
-                    swift_name: swift_name.clone(),
-                    ffi_arg: param_to_ffi_arg(param),
-                    is_string: matches!(param.param_type, crate::model::Type::String),
-                    is_slice: matches!(param.param_type, crate::model::Type::Slice(_)),
-                    is_mut_slice: matches!(param.param_type, crate::model::Type::MutSlice(_)),
-                    is_vec: matches!(param.param_type, crate::model::Type::Vec(_)),
-                }
-            })
-            .collect();
+        let params = method_param_views(method.non_callback_params());
         let has_pointer_params = params
             .iter()
             .any(|param| param.is_string || param.is_slice || param.is_mut_slice || param.is_vec);
@@ -743,20 +781,7 @@ impl CallbackMethodBodyTemplate {
         let class_prefix = class.ffi_prefix(&module.ffi_prefix());
         let method_name_pascal = NamingConvention::class_name(&method.name);
 
-        let params: Vec<_> = method
-            .non_callback_params()
-            .map(|param| {
-                let swift_name = NamingConvention::param_name(&param.name);
-                MethodParamView {
-                    swift_name: swift_name.clone(),
-                    ffi_arg: param_to_ffi_arg(param),
-                    is_string: matches!(param.param_type, crate::model::Type::String),
-                    is_slice: matches!(param.param_type, crate::model::Type::Slice(_)),
-                    is_mut_slice: matches!(param.param_type, crate::model::Type::MutSlice(_)),
-                    is_vec: matches!(param.param_type, crate::model::Type::Vec(_)),
-                }
-            })
-            .collect();
+        let params = method_param_views(method.non_callback_params());
 
         let has_pointer_params = params
             .iter()
@@ -814,21 +839,7 @@ pub struct ThrowingMethodBodyTemplate {
 impl ThrowingMethodBodyTemplate {
     pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
         let class_prefix = class.ffi_prefix(&module.ffi_prefix());
-        let params: Vec<_> = method
-            .inputs
-            .iter()
-            .map(|param| {
-                let swift_name = NamingConvention::param_name(&param.name);
-                MethodParamView {
-                    swift_name: swift_name.clone(),
-                    ffi_arg: param_to_ffi_arg(param),
-                    is_string: matches!(param.param_type, crate::model::Type::String),
-                    is_slice: matches!(param.param_type, crate::model::Type::Slice(_)),
-                    is_mut_slice: matches!(param.param_type, crate::model::Type::MutSlice(_)),
-                    is_vec: matches!(param.param_type, crate::model::Type::Vec(_)),
-                }
-            })
-            .collect();
+        let params = method_param_views(method.inputs.iter());
 
         let has_pointer_params = params
             .iter()

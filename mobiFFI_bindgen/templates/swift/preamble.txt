@@ -19,7 +19,7 @@ private func stringFromFfi(_ ffiString: FfiString) -> String {
 private func lastErrorMessage() -> String? {
     var errorString = FfiString(ptr: nil, len: 0, cap: 0)
     let status = {{ prefix }}_last_error_message(&errorString)
-    defer { {{ prefix }}_free_string(errorString) }
+    defer { {{ prefix }}_free_string(errorString); {{ prefix }}_clear_last_error() }
     guard status.code == 0 else { return nil }
     return stringFromFfi(errorString)
 }
@@ -41,7 +41,7 @@ private func ensureOk(_ status: FfiStatus, context: StaticString = #function) {
 }
 
 {%- if has_async %}
-final class FfiFutureState<T> {
+final class FfiFutureState<T>: @unchecked Sendable {
     typealias Continuation = CheckedContinuation<T, Error>
     
     enum FinishDecision {
@@ -59,29 +59,36 @@ final class FfiFutureState<T> {
     }
     
     func installContinuation(_ continuation: Continuation) -> Bool {
+        let claimed = withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 0, 1) }
+        guard claimed else { return false }
         self.continuation = continuation
-        let installed = withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 0, 1) }
-        if !installed {
-            self.continuation = nil
-        }
-        return installed
+        let installed = withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 1, 2) }
+        if installed { return true }
+        self.continuation = nil
+        return false
+    }
+
+    func canPoll() -> Bool {
+        !(withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 3, 3) })
     }
     
     func decideFinish() -> FinishDecision {
-        let finishedWithContinuation = withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 1, 2) }
-        if finishedWithContinuation {
+        if (withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 2, 3) }) {
             if let continuation = continuation {
                 self.continuation = nil
                 return .finishWithContinuation(continuation)
             }
             return .finishWithoutContinuation
         }
-        
-        let finishedWithoutContinuation = withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 0, 2) }
-        if finishedWithoutContinuation {
+
+        if (withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 0, 3) }) {
             return .finishWithoutContinuation
         }
-        
+
+        if (withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 1, 3) }) {
+            return .finishWithoutContinuation
+        }
+
         return .alreadyFinished
     }
 }

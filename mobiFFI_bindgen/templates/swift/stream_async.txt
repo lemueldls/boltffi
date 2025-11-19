@@ -3,51 +3,103 @@ AsyncStream<{{ item_type }}> { continuation in
         continuation.finish()
         return
     }
-    let buffer = UnsafeMutablePointer<{{ item_type }}>.allocate(capacity: 16)
-    
-    continuation.onTermination = { @Sendable _ in
-        {{ unsubscribe_fn }}(subscription)
-        {{ free_fn }}(subscription)
-        buffer.deallocate()
-    }
-    
-    class StreamContext {
+
+    final class StreamContext: @unchecked Sendable {
         let subscription: SubscriptionHandle
+        let bufferCapacity: UInt
         let buffer: UnsafeMutablePointer<{{ item_type }}>
-        let continuation: AsyncStream<{{ item_type }}>.Continuation
-        var isActive = true
-        
-        init(subscription: SubscriptionHandle, buffer: UnsafeMutablePointer<{{ item_type }}>, continuation: AsyncStream<{{ item_type }}>.Continuation) {
+        private var lifecycleTag: UInt8 = 0
+        private var callbackTag: UInt8 = 0
+        private var continuation: AsyncStream<{{ item_type }}>.Continuation?
+
+        init(
+            subscription: SubscriptionHandle,
+            bufferCapacity: UInt,
+            continuation: AsyncStream<{{ item_type }}>.Continuation
+        ) {
             self.subscription = subscription
-            self.buffer = buffer
+            self.bufferCapacity = bufferCapacity
+            self.buffer = UnsafeMutablePointer<{{ item_type }}>.allocate(capacity: Int(bufferCapacity))
             self.continuation = continuation
         }
-    }
-    
-    let context = StreamContext(subscription: subscription, buffer: buffer, continuation: continuation)
-    
-    func poll(ctx: StreamContext) {
-        guard ctx.isActive else { return }
-        
-        {{ poll_fn }}(ctx.subscription, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
-            let ctx = Unmanaged<StreamContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
-            guard ctx.isActive else { return }
-            
-            let count = {{ pop_batch_fn }}(ctx.subscription, ctx.buffer, 16)
-            if count > 0 {
-                for i in 0..<Int(count) {
-                    ctx.continuation.yield(ctx.buffer[i])
-                }
+
+        func start() {
+            registerPoll()
+        }
+
+        func requestTermination() {
+            let terminationStarted = withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 0, 1) }
+            if terminationStarted {
+                {{ unsubscribe_fn }}(subscription)
+                _ = withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 1, 2) }
             }
-            
-            if pollResult == 0 {
-                poll(ctx: ctx)
-            } else {
-                ctx.isActive = false
-                ctx.continuation.finish()
+            attemptFinalize()
+        }
+
+        private func attemptFinalize() {
+            guard (withUnsafeMutablePointer(to: &callbackTag) { {{ atomic_cas_fn }}($0, 0, 0) }) else { return }
+            guard (withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 2, 3) }) else { return }
+            {{ free_fn }}(subscription)
+            buffer.deallocate()
+            continuation?.finish()
+            continuation = nil
+        }
+
+        private func schedulePoll() {
+            Task { [self] in
+                await Task.yield()
+                registerPoll()
             }
         }
+
+        private func registerPoll() {
+            guard (withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 0, 0) }) else {
+                attemptFinalize()
+                return
+            }
+
+            let callbackData = UInt64(UInt(bitPattern: Unmanaged.passRetained(self).toOpaque()))
+            {{ poll_fn }}(subscription, callbackData) { callbackData, pollResult in
+                let context = Unmanaged<StreamContext>
+                    .fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!)
+                    .takeRetainedValue()
+                context.handlePoll(pollResult: pollResult)
+            }
+        }
+
+        private func handlePoll(pollResult: Int8) {
+            _ = pollResult
+
+            let entered = withUnsafeMutablePointer(to: &callbackTag) { {{ atomic_cas_fn }}($0, 0, 1) }
+            guard entered else {
+                attemptFinalize()
+                return
+            }
+
+            defer {
+                _ = withUnsafeMutablePointer(to: &callbackTag) { {{ atomic_cas_fn }}($0, 1, 0) }
+                attemptFinalize()
+            }
+
+            guard (withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 0, 0) }) else { return }
+            guard let continuation = continuation else { return }
+
+            while true {
+                let count = {{ pop_batch_fn }}(subscription, buffer, bufferCapacity)
+                guard count > 0 else { break }
+                UnsafeBufferPointer(start: buffer, count: Int(count)).forEach { element in
+                    _ = continuation.yield(element)
+                }
+            }
+
+            guard (withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 0, 0) }) else { return }
+            schedulePoll()
+        }
     }
-    
-    poll(ctx: context)
+
+    let context = StreamContext(subscription: subscription, bufferCapacity: 16, continuation: continuation)
+    continuation.onTermination = { @Sendable _ in
+        context.requestTermination()
+    }
+    context.start()
 }

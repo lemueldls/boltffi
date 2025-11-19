@@ -16,7 +16,7 @@ private func stringFromFfi(_ ffiString: FfiString) -> String {
 private func lastErrorMessage() -> String? {
     var errorString = FfiString(ptr: nil, len: 0, cap: 0)
     let status = mffi_last_error_message(&errorString)
-    defer { mffi_free_string(errorString) }
+    defer { mffi_free_string(errorString); mffi_clear_last_error() }
     guard status.code == 0 else { return nil }
     return stringFromFfi(errorString)
 }
@@ -36,7 +36,7 @@ private func ensureOk(_ status: FfiStatus, context: StaticString = #function) {
         fatalError(message.isEmpty ? "FFI failed in \(context) [\(status.code)]" : message)
     }
 }
-final class FfiFutureState<T> {
+final class FfiFutureState<T>: @unchecked Sendable {
     typealias Continuation = CheckedContinuation<T, Error>
     
     enum FinishDecision {
@@ -54,37 +54,43 @@ final class FfiFutureState<T> {
     }
     
     func installContinuation(_ continuation: Continuation) -> Bool {
+        let claimed = withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 0, 1) }
+        guard claimed else { return false }
         self.continuation = continuation
-        let installed = withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 0, 1) }
-        if !installed {
-            self.continuation = nil
-        }
-        return installed
+        let installed = withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 1, 2) }
+        if installed { return true }
+        self.continuation = nil
+        return false
+    }
+
+    func canPoll() -> Bool {
+        !(withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 3, 3) })
     }
     
     func decideFinish() -> FinishDecision {
-        let finishedWithContinuation = withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 1, 2) }
-        if finishedWithContinuation {
+        if (withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 2, 3) }) {
             if let continuation = continuation {
                 self.continuation = nil
                 return .finishWithContinuation(continuation)
             }
             return .finishWithoutContinuation
         }
-        
-        let finishedWithoutContinuation = withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 0, 2) }
-        if finishedWithoutContinuation {
+
+        if (withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 0, 3) }) {
             return .finishWithoutContinuation
         }
-        
+
+        if (withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 1, 3) }) {
+            return .finishWithoutContinuation
+        }
+
         return .alreadyFinished
     }
 }
 
 public func greeting(name: String) -> String {
     var result = FfiString(ptr: nil, len: 0, cap: 0)
-	    return
-	    name.withCString { namePtr in
+	    return name.withCString { namePtr in
 	    let status = mffi_greeting(UnsafeRawPointer(namePtr).assumingMemoryBound(to: UInt8.self), UInt(name.utf8.count), &result)
 	    defer { mffi_free_string(result) }
 	    ensureOk(status)
@@ -94,8 +100,7 @@ public func greeting(name: String) -> String {
 
 public func concat(first: String, second: String) -> String {
     var result = FfiString(ptr: nil, len: 0, cap: 0)
-	    return
-	    first.withCString { firstPtr in
+	    return first.withCString { firstPtr in
 	    second.withCString { secondPtr in
 	    let status = mffi_concat(UnsafeRawPointer(firstPtr).assumingMemoryBound(to: UInt8.self), UInt(first.utf8.count), UnsafeRawPointer(secondPtr).assumingMemoryBound(to: UInt8.self), UInt(second.utf8.count), &result)
 	    defer { mffi_free_string(result) }
@@ -107,8 +112,7 @@ public func concat(first: String, second: String) -> String {
 
 public func reverseString(input: String) -> String {
     var result = FfiString(ptr: nil, len: 0, cap: 0)
-	    return
-	    input.withCString { inputPtr in
+	    return input.withCString { inputPtr in
 	    let status = mffi_reverse_string(UnsafeRawPointer(inputPtr).assumingMemoryBound(to: UInt8.self), UInt(input.utf8.count), &result)
 	    defer { mffi_free_string(result) }
 	    ensureOk(status)
@@ -117,8 +121,7 @@ public func reverseString(input: String) -> String {
 }
 
 public func copyBytes(src: [UInt8], dst: inout [UInt8]) -> UInt {
-	    return
-	    src.withUnsafeBufferPointer { srcPtr in
+	    return src.withUnsafeBufferPointer { srcPtr in
 	    dst.withUnsafeMutableBufferPointer { dstPtr in
 	    return mffi_copy_bytes(srcPtr.baseAddress, UInt(srcPtr.count), dstPtr.baseAddress, UInt(dstPtr.count))
     }
@@ -135,8 +138,7 @@ public func multiplyFloats(first: Double, second: Double) -> Double {
 
 public func makeGreeting(name: String) -> String {
     var result = FfiString(ptr: nil, len: 0, cap: 0)
-	    return
-	    name.withCString { namePtr in
+	    return name.withCString { namePtr in
 	    let status = mffi_make_greeting(UnsafeRawPointer(namePtr).assumingMemoryBound(to: UInt8.self), UInt(name.utf8.count), &result)
 	    defer { mffi_free_string(result) }
 	    ensureOk(status)
@@ -212,6 +214,7 @@ public func computeHeavy(input: Int32) async throws -> Int32 {
             }
             
             func poll(ctx: FutureContext) {
+                guard ctx.canPoll() else { return }
                 mffi_compute_heavy_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -234,7 +237,11 @@ public func computeHeavy(input: Int32) async throws -> Int32 {
                             break
                         }
                     } else {
-                        poll(ctx: ctx)
+                        guard ctx.canPoll() else { return }
+                        Task { [ctx] in
+                            await Task.yield()
+                            poll(ctx: ctx)
+                        }
                     }
                 }
             }
@@ -246,11 +253,11 @@ public func computeHeavy(input: Int32) async throws -> Int32 {
         case .alreadyFinished:
             break
         case .finishWithoutContinuation:
-            mffi_compute_heavy_cancel(futureHandle)
-            mffi_compute_heavy_free(futureHandle)
+            mffi_compute_heavy_cancel(state.handle)
+            mffi_compute_heavy_free(state.handle)
         case .finishWithContinuation(let continuation):
-            mffi_compute_heavy_cancel(futureHandle)
-            mffi_compute_heavy_free(futureHandle)
+            mffi_compute_heavy_cancel(state.handle)
+            mffi_compute_heavy_free(state.handle)
             continuation.resume(throwing: CancellationError())
         }
     }
@@ -271,6 +278,7 @@ public func fetchData(id: Int32) async throws -> Int32 {
             }
             
             func poll(ctx: FutureContext) {
+                guard ctx.canPoll() else { return }
                 mffi_fetch_data_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -293,7 +301,11 @@ public func fetchData(id: Int32) async throws -> Int32 {
                             break
                         }
                     } else {
-                        poll(ctx: ctx)
+                        guard ctx.canPoll() else { return }
+                        Task { [ctx] in
+                            await Task.yield()
+                            poll(ctx: ctx)
+                        }
                     }
                 }
             }
@@ -305,11 +317,11 @@ public func fetchData(id: Int32) async throws -> Int32 {
         case .alreadyFinished:
             break
         case .finishWithoutContinuation:
-            mffi_fetch_data_cancel(futureHandle)
-            mffi_fetch_data_free(futureHandle)
+            mffi_fetch_data_cancel(state.handle)
+            mffi_fetch_data_free(state.handle)
         case .finishWithContinuation(let continuation):
-            mffi_fetch_data_cancel(futureHandle)
-            mffi_fetch_data_free(futureHandle)
+            mffi_fetch_data_cancel(state.handle)
+            mffi_fetch_data_free(state.handle)
             continuation.resume(throwing: CancellationError())
         }
     }
@@ -330,6 +342,7 @@ public func asyncMakeString(value: Int32) async throws -> String {
             }
             
             func poll(ctx: FutureContext) {
+                guard ctx.canPoll() else { return }
                 mffi_async_make_string_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -354,7 +367,11 @@ public func asyncMakeString(value: Int32) async throws -> String {
                             break
                         }
                     } else {
-                        poll(ctx: ctx)
+                        guard ctx.canPoll() else { return }
+                        Task { [ctx] in
+                            await Task.yield()
+                            poll(ctx: ctx)
+                        }
                     }
                 }
             }
@@ -366,11 +383,11 @@ public func asyncMakeString(value: Int32) async throws -> String {
         case .alreadyFinished:
             break
         case .finishWithoutContinuation:
-            mffi_async_make_string_cancel(futureHandle)
-            mffi_async_make_string_free(futureHandle)
+            mffi_async_make_string_cancel(state.handle)
+            mffi_async_make_string_free(state.handle)
         case .finishWithContinuation(let continuation):
-            mffi_async_make_string_cancel(futureHandle)
-            mffi_async_make_string_free(futureHandle)
+            mffi_async_make_string_cancel(state.handle)
+            mffi_async_make_string_free(state.handle)
             continuation.resume(throwing: CancellationError())
         }
     }
@@ -391,6 +408,7 @@ public func asyncFetchPoint(x: Double, y: Double) async throws -> DataPoint {
             }
             
             func poll(ctx: FutureContext) {
+                guard ctx.canPoll() else { return }
                 mffi_async_fetch_point_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -413,7 +431,11 @@ public func asyncFetchPoint(x: Double, y: Double) async throws -> DataPoint {
                             break
                         }
                     } else {
-                        poll(ctx: ctx)
+                        guard ctx.canPoll() else { return }
+                        Task { [ctx] in
+                            await Task.yield()
+                            poll(ctx: ctx)
+                        }
                     }
                 }
             }
@@ -425,11 +447,11 @@ public func asyncFetchPoint(x: Double, y: Double) async throws -> DataPoint {
         case .alreadyFinished:
             break
         case .finishWithoutContinuation:
-            mffi_async_fetch_point_cancel(futureHandle)
-            mffi_async_fetch_point_free(futureHandle)
+            mffi_async_fetch_point_cancel(state.handle)
+            mffi_async_fetch_point_free(state.handle)
         case .finishWithContinuation(let continuation):
-            mffi_async_fetch_point_cancel(futureHandle)
-            mffi_async_fetch_point_free(futureHandle)
+            mffi_async_fetch_point_cancel(state.handle)
+            mffi_async_fetch_point_free(state.handle)
             continuation.resume(throwing: CancellationError())
         }
     }
@@ -450,6 +472,7 @@ public func asyncGetNumbers(count: Int32) async throws -> [Int32] {
             }
             
             func poll(ctx: FutureContext) {
+                guard ctx.canPoll() else { return }
                 mffi_async_get_numbers_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -475,7 +498,11 @@ public func asyncGetNumbers(count: Int32) async throws -> [Int32] {
                             break
                         }
                     } else {
-                        poll(ctx: ctx)
+                        guard ctx.canPoll() else { return }
+                        Task { [ctx] in
+                            await Task.yield()
+                            poll(ctx: ctx)
+                        }
                     }
                 }
             }
@@ -487,11 +514,11 @@ public func asyncGetNumbers(count: Int32) async throws -> [Int32] {
         case .alreadyFinished:
             break
         case .finishWithoutContinuation:
-            mffi_async_get_numbers_cancel(futureHandle)
-            mffi_async_get_numbers_free(futureHandle)
+            mffi_async_get_numbers_cancel(state.handle)
+            mffi_async_get_numbers_free(state.handle)
         case .finishWithContinuation(let continuation):
-            mffi_async_get_numbers_cancel(futureHandle)
-            mffi_async_get_numbers_free(futureHandle)
+            mffi_async_get_numbers_cancel(state.handle)
+            mffi_async_get_numbers_free(state.handle)
             continuation.resume(throwing: CancellationError())
         }
     }
@@ -512,6 +539,7 @@ public func asyncFindValue(needle: Int32) async throws -> Int32? {
             }
             
             func poll(ctx: FutureContext) {
+                guard ctx.canPoll() else { return }
                 mffi_async_find_value_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -534,7 +562,11 @@ public func asyncFindValue(needle: Int32) async throws -> Int32? {
                             break
                         }
                     } else {
-                        poll(ctx: ctx)
+                        guard ctx.canPoll() else { return }
+                        Task { [ctx] in
+                            await Task.yield()
+                            poll(ctx: ctx)
+                        }
                     }
                 }
             }
@@ -546,11 +578,11 @@ public func asyncFindValue(needle: Int32) async throws -> Int32? {
         case .alreadyFinished:
             break
         case .finishWithoutContinuation:
-            mffi_async_find_value_cancel(futureHandle)
-            mffi_async_find_value_free(futureHandle)
+            mffi_async_find_value_cancel(state.handle)
+            mffi_async_find_value_free(state.handle)
         case .finishWithContinuation(let continuation):
-            mffi_async_find_value_cancel(futureHandle)
-            mffi_async_find_value_free(futureHandle)
+            mffi_async_find_value_cancel(state.handle)
+            mffi_async_find_value_free(state.handle)
             continuation.resume(throwing: CancellationError())
         }
     }
@@ -573,6 +605,7 @@ public func asyncGreeting(name: String) async throws -> String {
             }
             
             func poll(ctx: FutureContext) {
+                guard ctx.canPoll() else { return }
                 mffi_async_greeting_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -597,7 +630,11 @@ public func asyncGreeting(name: String) async throws -> String {
                             break
                         }
                     } else {
-                        poll(ctx: ctx)
+                        guard ctx.canPoll() else { return }
+                        Task { [ctx] in
+                            await Task.yield()
+                            poll(ctx: ctx)
+                        }
                     }
                 }
             }
@@ -609,11 +646,11 @@ public func asyncGreeting(name: String) async throws -> String {
         case .alreadyFinished:
             break
         case .finishWithoutContinuation:
-            mffi_async_greeting_cancel(futureHandle)
-            mffi_async_greeting_free(futureHandle)
+            mffi_async_greeting_cancel(state.handle)
+            mffi_async_greeting_free(state.handle)
         case .finishWithContinuation(let continuation):
-            mffi_async_greeting_cancel(futureHandle)
-            mffi_async_greeting_free(futureHandle)
+            mffi_async_greeting_cancel(state.handle)
+            mffi_async_greeting_free(state.handle)
             continuation.resume(throwing: CancellationError())
         }
     }
@@ -634,6 +671,7 @@ public func asyncFetchNumbers(id: Int32) async throws -> [Int32] {
             }
             
             func poll(ctx: FutureContext) {
+                guard ctx.canPoll() else { return }
                 mffi_async_fetch_numbers_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -659,7 +697,11 @@ public func asyncFetchNumbers(id: Int32) async throws -> [Int32] {
                             break
                         }
                     } else {
-                        poll(ctx: ctx)
+                        guard ctx.canPoll() else { return }
+                        Task { [ctx] in
+                            await Task.yield()
+                            poll(ctx: ctx)
+                        }
                     }
                 }
             }
@@ -671,11 +713,11 @@ public func asyncFetchNumbers(id: Int32) async throws -> [Int32] {
         case .alreadyFinished:
             break
         case .finishWithoutContinuation:
-            mffi_async_fetch_numbers_cancel(futureHandle)
-            mffi_async_fetch_numbers_free(futureHandle)
+            mffi_async_fetch_numbers_cancel(state.handle)
+            mffi_async_fetch_numbers_free(state.handle)
         case .finishWithContinuation(let continuation):
-            mffi_async_fetch_numbers_cancel(futureHandle)
-            mffi_async_fetch_numbers_free(futureHandle)
+            mffi_async_fetch_numbers_cancel(state.handle)
+            mffi_async_fetch_numbers_free(state.handle)
             continuation.resume(throwing: CancellationError())
         }
     }
@@ -744,8 +786,7 @@ ensureOk(status)
 
     public func copyInto(dst: inout [DataPoint]) -> UInt {
         
-return
-dst.withUnsafeMutableBufferPointer { dstPtr in
+return dst.withUnsafeMutableBufferPointer { dstPtr in
 mffi_datastore_copy_into(handle, dstPtr.baseAddress, UInt(dstPtr.count))
 }
     }
@@ -836,53 +877,105 @@ ensureOk(status)
         continuation.finish()
         return
     }
-    let buffer = UnsafeMutablePointer<SensorReading>.allocate(capacity: 16)
-    
-    continuation.onTermination = { @Sendable _ in
-        mffi_sensormonitor_readings_unsubscribe(subscription)
-        mffi_sensormonitor_readings_free(subscription)
-        buffer.deallocate()
-    }
-    
-    class StreamContext {
+
+    final class StreamContext: @unchecked Sendable {
         let subscription: SubscriptionHandle
+        let bufferCapacity: UInt
         let buffer: UnsafeMutablePointer<SensorReading>
-        let continuation: AsyncStream<SensorReading>.Continuation
-        var isActive = true
-        
-        init(subscription: SubscriptionHandle, buffer: UnsafeMutablePointer<SensorReading>, continuation: AsyncStream<SensorReading>.Continuation) {
+        private var lifecycleTag: UInt8 = 0
+        private var callbackTag: UInt8 = 0
+        private var continuation: AsyncStream<SensorReading>.Continuation?
+
+        init(
+            subscription: SubscriptionHandle,
+            bufferCapacity: UInt,
+            continuation: AsyncStream<SensorReading>.Continuation
+        ) {
             self.subscription = subscription
-            self.buffer = buffer
+            self.bufferCapacity = bufferCapacity
+            self.buffer = UnsafeMutablePointer<SensorReading>.allocate(capacity: Int(bufferCapacity))
             self.continuation = continuation
         }
-    }
-    
-    let context = StreamContext(subscription: subscription, buffer: buffer, continuation: continuation)
-    
-    func poll(ctx: StreamContext) {
-        guard ctx.isActive else { return }
-        
-        mffi_sensormonitor_readings_poll(ctx.subscription, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
-            let ctx = Unmanaged<StreamContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
-            guard ctx.isActive else { return }
-            
-            let count = mffi_sensormonitor_readings_pop_batch(ctx.subscription, ctx.buffer, 16)
-            if count > 0 {
-                for i in 0..<Int(count) {
-                    ctx.continuation.yield(ctx.buffer[i])
-                }
+
+        func start() {
+            registerPoll()
+        }
+
+        func requestTermination() {
+            let terminationStarted = withUnsafeMutablePointer(to: &lifecycleTag) { mffi_atomic_u8_cas($0, 0, 1) }
+            if terminationStarted {
+                mffi_sensormonitor_readings_unsubscribe(subscription)
+                _ = withUnsafeMutablePointer(to: &lifecycleTag) { mffi_atomic_u8_cas($0, 1, 2) }
             }
-            
-            if pollResult == 0 {
-                poll(ctx: ctx)
-            } else {
-                ctx.isActive = false
-                ctx.continuation.finish()
+            attemptFinalize()
+        }
+
+        private func attemptFinalize() {
+            guard (withUnsafeMutablePointer(to: &callbackTag) { mffi_atomic_u8_cas($0, 0, 0) }) else { return }
+            guard (withUnsafeMutablePointer(to: &lifecycleTag) { mffi_atomic_u8_cas($0, 2, 3) }) else { return }
+            mffi_sensormonitor_readings_free(subscription)
+            buffer.deallocate()
+            continuation?.finish()
+            continuation = nil
+        }
+
+        private func schedulePoll() {
+            Task { [self] in
+                await Task.yield()
+                registerPoll()
             }
         }
+
+        private func registerPoll() {
+            guard (withUnsafeMutablePointer(to: &lifecycleTag) { mffi_atomic_u8_cas($0, 0, 0) }) else {
+                attemptFinalize()
+                return
+            }
+
+            let callbackData = UInt64(UInt(bitPattern: Unmanaged.passRetained(self).toOpaque()))
+            mffi_sensormonitor_readings_poll(subscription, callbackData) { callbackData, pollResult in
+                let context = Unmanaged<StreamContext>
+                    .fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!)
+                    .takeRetainedValue()
+                context.handlePoll(pollResult: pollResult)
+            }
+        }
+
+        private func handlePoll(pollResult: Int8) {
+            _ = pollResult
+
+            let entered = withUnsafeMutablePointer(to: &callbackTag) { mffi_atomic_u8_cas($0, 0, 1) }
+            guard entered else {
+                attemptFinalize()
+                return
+            }
+
+            defer {
+                _ = withUnsafeMutablePointer(to: &callbackTag) { mffi_atomic_u8_cas($0, 1, 0) }
+                attemptFinalize()
+            }
+
+            guard (withUnsafeMutablePointer(to: &lifecycleTag) { mffi_atomic_u8_cas($0, 0, 0) }) else { return }
+            guard let continuation = continuation else { return }
+
+            while true {
+                let count = mffi_sensormonitor_readings_pop_batch(subscription, buffer, bufferCapacity)
+                guard count > 0 else { break }
+                UnsafeBufferPointer(start: buffer, count: Int(count)).forEach { element in
+                    _ = continuation.yield(element)
+                }
+            }
+
+            guard (withUnsafeMutablePointer(to: &lifecycleTag) { mffi_atomic_u8_cas($0, 0, 0) }) else { return }
+            schedulePoll()
+        }
     }
-    
-    poll(ctx: context)
+
+    let context = StreamContext(subscription: subscription, bufferCapacity: 16, continuation: continuation)
+    continuation.onTermination = { @Sendable _ in
+        context.requestTermination()
+    }
+    context.start()
 }
     }
 }

@@ -1232,7 +1232,9 @@ fn append_macro_exports(
         } else {
             ""
         };
-        let atomic_cas_defs = if has_async && !header.contains("mffi_atomic_u8_cas") {
+        let has_streams = !stream_exports.is_empty();
+        let atomic_cas_defs = if (has_async || has_streams) && !header.contains("mffi_atomic_u8_cas")
+        {
             let include_stdatomic = if header.contains("<stdatomic.h>") {
                 ""
             } else {
@@ -1246,7 +1248,6 @@ fn append_macro_exports(
             String::new()
         };
 
-        let has_streams = !stream_exports.is_empty();
         let stream_continuation_defs = if has_streams
             && !header.contains("StreamContinuationCallback")
         {
