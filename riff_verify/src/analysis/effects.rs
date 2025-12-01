@@ -123,8 +123,14 @@ impl Capacity {
             (Self::Literal(a), Self::Literal(b)) => a == b,
             (Self::Variable(a), Self::Variable(b)) => a == b,
             (
-                Self::FfiResult { function_name: fn_a, arguments: args_a },
-                Self::FfiResult { function_name: fn_b, arguments: args_b },
+                Self::FfiResult {
+                    function_name: fn_a,
+                    arguments: args_a,
+                },
+                Self::FfiResult {
+                    function_name: fn_b,
+                    arguments: args_b,
+                },
             ) => fn_a == fn_b && args_a == args_b,
             (Self::Unknown, _) | (_, Self::Unknown) => true,
             _ => false,
@@ -145,7 +151,9 @@ pub struct EffectEntry {
 
 impl EffectTrace {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     pub fn push(&mut self, effect: Effect, span: SourceSpan) {

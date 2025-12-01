@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::VarId;
-use crate::analysis::{Effect, EffectTrace};
 use super::{Rule, Violation, ViolationKind};
+use crate::analysis::{Effect, EffectTrace};
+use crate::ir::VarId;
 
 pub struct AllocFreeBalance;
 
@@ -20,38 +20,36 @@ impl Rule for AllocFreeBalance {
         let mut freed: HashSet<VarId> = HashSet::new();
         let mut violations = Vec::new();
 
-        trace.iter().for_each(|entry| {
-            match &entry.effect {
-                Effect::Allocate { pointer, .. } => {
-                    if allocated.contains_key(pointer) {
-                        violations.push(Violation::new(
-                            ViolationKind::DoubleAllocation { pointer: *pointer },
-                            self.id(),
-                            entry.span.clone(),
-                        ));
-                    } else {
-                        allocated.insert(*pointer, &entry.span);
-                    }
+        trace.iter().for_each(|entry| match &entry.effect {
+            Effect::Allocate { pointer, .. } => {
+                if allocated.contains_key(pointer) {
+                    violations.push(Violation::new(
+                        ViolationKind::DoubleAllocation { pointer: *pointer },
+                        self.id(),
+                        entry.span.clone(),
+                    ));
+                } else {
+                    allocated.insert(*pointer, &entry.span);
                 }
-                Effect::Free { pointer } => {
-                    if !allocated.contains_key(pointer) {
-                        violations.push(Violation::new(
-                            ViolationKind::FreeUnallocated { pointer: *pointer },
-                            self.id(),
-                            entry.span.clone(),
-                        ));
-                    } else if freed.contains(pointer) {
-                        violations.push(Violation::new(
-                            ViolationKind::DoubleFree { pointer: *pointer },
-                            self.id(),
-                            entry.span.clone(),
-                        ));
-                    } else {
-                        freed.insert(*pointer);
-                    }
-                }
-                _ => {}
             }
+            Effect::Free { pointer } => {
+                if !allocated.contains_key(pointer) {
+                    violations.push(Violation::new(
+                        ViolationKind::FreeUnallocated { pointer: *pointer },
+                        self.id(),
+                        entry.span.clone(),
+                    ));
+                } else if freed.contains(pointer) {
+                    violations.push(Violation::new(
+                        ViolationKind::DoubleFree { pointer: *pointer },
+                        self.id(),
+                        entry.span.clone(),
+                    ));
+                } else {
+                    freed.insert(*pointer);
+                }
+            }
+            _ => {}
         });
 
         allocated
@@ -85,23 +83,21 @@ impl Rule for NoUseAfterFree {
 
         trace
             .iter()
-            .filter_map(|entry| {
-                match &entry.effect {
-                    Effect::Free { pointer } => {
-                        freed.insert(*pointer);
-                        None
-                    }
-                    Effect::BufferRead { pointer, .. } | Effect::BufferWrite { pointer, .. } => {
-                        freed.contains(pointer).then(|| {
-                            Violation::new(
-                                ViolationKind::UseAfterFree { pointer: *pointer },
-                                self.id(),
-                                entry.span.clone(),
-                            )
-                        })
-                    }
-                    _ => None,
+            .filter_map(|entry| match &entry.effect {
+                Effect::Free { pointer } => {
+                    freed.insert(*pointer);
+                    None
                 }
+                Effect::BufferRead { pointer, .. } | Effect::BufferWrite { pointer, .. } => {
+                    freed.contains(pointer).then(|| {
+                        Violation::new(
+                            ViolationKind::UseAfterFree { pointer: *pointer },
+                            self.id(),
+                            entry.span.clone(),
+                        )
+                    })
+                }
+                _ => None,
             })
             .collect()
     }
@@ -146,8 +142,8 @@ impl Rule for NoDoubleFree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::{SourceFile, SourceSpan};
     use crate::analysis::Capacity;
+    use crate::source::{SourceFile, SourceSpan};
     use std::sync::Arc;
 
     fn test_span() -> SourceSpan {
@@ -192,7 +188,10 @@ mod tests {
         let rule = AllocFreeBalance;
         let violations = rule.check(&trace);
         assert_eq!(violations.len(), 1);
-        assert!(matches!(violations[0].kind, ViolationKind::MemoryLeak { .. }));
+        assert!(matches!(
+            violations[0].kind,
+            ViolationKind::MemoryLeak { .. }
+        ));
     }
 
     #[test]
@@ -214,7 +213,10 @@ mod tests {
         let rule = NoDoubleFree;
         let violations = rule.check(&trace);
         assert_eq!(violations.len(), 1);
-        assert!(matches!(violations[0].kind, ViolationKind::DoubleFree { .. }));
+        assert!(matches!(
+            violations[0].kind,
+            ViolationKind::DoubleFree { .. }
+        ));
     }
 
     #[test]
@@ -242,6 +244,9 @@ mod tests {
         let rule = NoUseAfterFree;
         let violations = rule.check(&trace);
         assert_eq!(violations.len(), 1);
-        assert!(matches!(violations[0].kind, ViolationKind::UseAfterFree { .. }));
+        assert!(matches!(
+            violations[0].kind,
+            ViolationKind::UseAfterFree { .. }
+        ));
     }
 }

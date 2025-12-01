@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::VarId;
-use crate::analysis::{Effect, EffectTrace};
 use super::{Rule, Violation, ViolationKind};
+use crate::analysis::{Effect, EffectTrace};
+use crate::ir::VarId;
 
 pub struct RetainReleaseBalance;
 
@@ -20,24 +20,24 @@ impl Rule for RetainReleaseBalance {
         let mut released: HashSet<VarId> = HashSet::new();
         let mut violations = Vec::new();
 
-        trace.iter().for_each(|entry| {
-            match &entry.effect {
-                Effect::Retain { opaque_handle, .. } => {
-                    retained.insert(*opaque_handle, &entry.span);
-                }
-                Effect::Release { opaque_handle } | Effect::TakeRetained { opaque_handle, .. } => {
-                    if !retained.contains_key(opaque_handle) {
-                        violations.push(Violation::new(
-                            ViolationKind::ReleaseUnretained { handle: *opaque_handle },
-                            self.id(),
-                            entry.span.clone(),
-                        ));
-                    } else {
-                        released.insert(*opaque_handle);
-                    }
-                }
-                _ => {}
+        trace.iter().for_each(|entry| match &entry.effect {
+            Effect::Retain { opaque_handle, .. } => {
+                retained.insert(*opaque_handle, &entry.span);
             }
+            Effect::Release { opaque_handle } | Effect::TakeRetained { opaque_handle, .. } => {
+                if !retained.contains_key(opaque_handle) {
+                    violations.push(Violation::new(
+                        ViolationKind::ReleaseUnretained {
+                            handle: *opaque_handle,
+                        },
+                        self.id(),
+                        entry.span.clone(),
+                    ));
+                } else {
+                    released.insert(*opaque_handle);
+                }
+            }
+            _ => {}
         });
 
         retained
@@ -119,7 +119,12 @@ mod tests {
             },
             test_span(),
         );
-        trace.push(Effect::Release { opaque_handle: handle }, test_span());
+        trace.push(
+            Effect::Release {
+                opaque_handle: handle,
+            },
+            test_span(),
+        );
 
         let rule = RetainReleaseBalance;
         let violations = rule.check(&trace);
@@ -143,7 +148,10 @@ mod tests {
         let rule = RetainReleaseBalance;
         let violations = rule.check(&trace);
         assert_eq!(violations.len(), 1);
-        assert!(matches!(violations[0].kind, ViolationKind::RetainLeak { .. }));
+        assert!(matches!(
+            violations[0].kind,
+            ViolationKind::RetainLeak { .. }
+        ));
     }
 
     #[test]
@@ -159,13 +167,26 @@ mod tests {
             },
             test_span(),
         );
-        trace.push(Effect::Release { opaque_handle: handle }, test_span());
-        trace.push(Effect::Release { opaque_handle: handle }, test_span());
+        trace.push(
+            Effect::Release {
+                opaque_handle: handle,
+            },
+            test_span(),
+        );
+        trace.push(
+            Effect::Release {
+                opaque_handle: handle,
+            },
+            test_span(),
+        );
 
         let rule = NoDoubleRelease;
         let violations = rule.check(&trace);
         assert_eq!(violations.len(), 1);
-        assert!(matches!(violations[0].kind, ViolationKind::DoubleRelease { .. }));
+        assert!(matches!(
+            violations[0].kind,
+            ViolationKind::DoubleRelease { .. }
+        ));
     }
 
     #[test]
