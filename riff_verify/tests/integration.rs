@@ -174,3 +174,72 @@ public func correctRetain() {
     let result = verify_swift(source);
     assert!(result.is_verified(), "Correct code should pass verification");
 }
+
+#[test]
+fn test_callback_bridge_pattern_no_false_positive() {
+    let source = r#"
+public enum DataProviderBridge {
+    static func create(_ provider: DataProvider) -> UnsafeMutableRawPointer {
+        let box = DataProviderBox(provider)
+        return Unmanaged.passRetained(box).toOpaque()
+    }
+}
+"#;
+    let result = verify_swift(source);
+    assert!(result.is_verified(), "Callback bridge pattern should not trigger false positive");
+}
+
+#[test]
+fn test_continuation_box_pattern_no_false_positive() {
+    let source = r#"
+final class ContinuationBox {
+    let continuation: Continuation
+    init(_ continuation: Continuation) { self.continuation = continuation }
+}
+
+func installContinuation(_ continuation: Continuation) -> Bool {
+    let box = ContinuationBox(continuation)
+    let raw = UInt64(UInt(bitPattern: Unmanaged.passRetained(box).toOpaque()))
+    return true
+}
+"#;
+    let result = verify_swift(source);
+    assert!(result.is_verified(), "ContinuationBox pattern should not trigger false positive");
+}
+
+#[test]
+fn test_take_retained_value_pattern() {
+    let source = r#"
+func decideFinish(prior: UInt) -> Continuation {
+    let box = Unmanaged<ContinuationBox>.fromOpaque(UnsafeRawPointer(bitPattern: prior)!).takeRetainedValue()
+    return box.continuation
+}
+"#;
+    let result = verify_swift(source);
+    assert!(result.is_verified(), "takeRetainedValue pattern should pass");
+}
+
+#[test]
+fn test_async_rust_future_pattern() {
+    let source = r#"
+public final class RustFuture<T> {
+    final class ContinuationBox {
+        let continuation: Continuation
+        init(_ continuation: Continuation) { self.continuation = continuation }
+    }
+
+    func installContinuation(_ continuation: Continuation) -> Bool {
+        let box = ContinuationBox(continuation)
+        let raw = UInt64(UInt(bitPattern: Unmanaged.passRetained(box).toOpaque()))
+        return true
+    }
+
+    func decideFinish(prior: UInt) -> ContinuationBox {
+        let box = Unmanaged<ContinuationBox>.fromOpaque(UnsafeRawPointer(bitPattern: prior)!).takeRetainedValue()
+        return box
+    }
+}
+"#;
+    let result = verify_swift(source);
+    assert!(result.is_verified(), "RustFuture async pattern should pass verification");
+}
