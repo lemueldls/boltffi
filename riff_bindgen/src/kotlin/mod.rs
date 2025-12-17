@@ -1,14 +1,18 @@
+mod marshal;
 mod names;
 mod templates;
 mod types;
 
 use askama::Template;
 
+pub use marshal::{ParamConversion, ReturnKind};
 pub use names::NamingConvention;
-pub use templates::{CStyleEnumTemplate, PreambleTemplate, RecordTemplate, SealedEnumTemplate};
+pub use templates::{
+    CStyleEnumTemplate, FunctionTemplate, PreambleTemplate, RecordTemplate, SealedEnumTemplate,
+};
 pub use types::TypeMapper;
 
-use crate::model::{Enumeration, Module, Record};
+use crate::model::{Enumeration, Function, Module, Record};
 
 pub struct Kotlin;
 
@@ -27,6 +31,11 @@ impl Kotlin {
             .records
             .iter()
             .for_each(|record| sections.push(Self::render_record(record)));
+
+        module
+            .functions
+            .iter()
+            .for_each(|function| sections.push(Self::render_function(function)));
 
         let mut output = sections
             .into_iter()
@@ -60,6 +69,12 @@ impl Kotlin {
         RecordTemplate::from_record(record)
             .render()
             .expect("record template failed")
+    }
+
+    pub fn render_function(function: &Function) -> String {
+        FunctionTemplate::from_function(function)
+            .render()
+            .expect("function template failed")
     }
 }
 
