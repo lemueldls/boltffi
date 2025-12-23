@@ -1,0 +1,28 @@
+fun {{ func_name }}({% for param in params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% match return_type %}{% when Some with (ret) %}: {{ ret }}{% when None %}{% endmatch %} {
+{%- if return_kind.is_primitive() %}
+    return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- else if return_kind.is_string() %}
+    val result = FfiString()
+    val status = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}{% if !params.is_empty() %}, {% endif %}result)
+    checkStatus(status)
+    return result.toKotlinString().also { Native.{{ prefix }}_free_string(result) }
+{%- else if return_kind.is_vec() %}
+{%- match len_fn %}{% when Some with (len) %}
+    val len = Native.{{ len }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- when None %}{% endmatch %}
+{%- match inner_type %}{% when Some with (inner) %}
+    val buffer = {{ inner }}Array(len.toInt())
+{%- when None %}{% endmatch %}
+    val written = LongByReference()
+{%- match copy_fn %}{% when Some with (copy) %}
+    val status = Native.{{ copy }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}{% if !params.is_empty() %}, {% endif %}buffer, len, written)
+{%- when None %}{% endmatch %}
+    checkStatus(status)
+    return buffer.take(written.value.toInt())
+{%- else if return_kind.is_unit() %}
+    val status = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+    checkStatus(status)
+{%- else %}
+    TODO("return kind not implemented")
+{%- endif %}
+}

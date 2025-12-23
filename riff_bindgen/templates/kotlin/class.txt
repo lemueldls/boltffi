@@ -1,0 +1,27 @@
+{%- match doc %}{% when Some with (d) %}
+/**
+ * {{ d }}
+ */
+{%- when None %}{% endmatch %}
+class {{ class_name }} private constructor(private val handle: Long) : AutoCloseable {
+{%- for ctor in constructors %}
+
+    constructor({% for param in ctor.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) : this(
+        Native.{{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+    )
+{%- endfor %}
+
+    override fun close() {
+        Native.{{ ffi_free }}(handle)
+    }
+
+    protected fun finalize() {
+        close()
+    }
+{%- for method in methods %}
+
+    fun {{ method.name }}({% for param in method.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% match method.return_type %}{% when Some with (ret) %}: {{ ret }}{% when None %}{% endmatch %} {
+        {{ method.body }}
+    }
+{%- endfor %}
+}
