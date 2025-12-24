@@ -113,6 +113,95 @@ impl ParamConversion {
     }
 }
 
+// JNI-specific types for C glue generation
+
+#[derive(Debug, Clone)]
+pub enum JniReturnKind {
+    Void,
+    Primitive { jni_type: String },
+    String { ffi_name: String },
+    Vec { len_fn: String, copy_fn: String },
+    Enum { ffi_name: String },
+}
+
+impl JniReturnKind {
+    pub fn from_type(ty: Option<&Type>, func_name: &str) -> Self {
+        use riff_ffi_rules::naming;
+        match ty {
+            None | Some(Type::Void) => Self::Void,
+            Some(Type::Primitive(p)) => Self::Primitive {
+                jni_type: super::TypeMapper::jni_type(&Type::Primitive(*p)),
+            },
+            Some(Type::String) => Self::String {
+                ffi_name: naming::function_ffi_name(func_name),
+            },
+            Some(Type::Vec(_)) => Self::Vec {
+                len_fn: naming::function_ffi_vec_len(func_name),
+                copy_fn: naming::function_ffi_vec_copy_into(func_name),
+            },
+            Some(Type::Enum(_)) => Self::Enum {
+                ffi_name: naming::function_ffi_name(func_name),
+            },
+            _ => Self::Void,
+        }
+    }
+
+    pub fn is_void(&self) -> bool {
+        matches!(self, Self::Void)
+    }
+
+    pub fn is_string(&self) -> bool {
+        matches!(self, Self::String { .. })
+    }
+
+    pub fn is_vec(&self) -> bool {
+        matches!(self, Self::Vec { .. })
+    }
+
+    pub fn jni_return_type(&self) -> &str {
+        match self {
+            Self::Void => "void",
+            Self::Primitive { jni_type } => jni_type,
+            Self::String { .. } => "jstring",
+            Self::Vec { .. } => "jlong",
+            Self::Enum { .. } => "jint",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JniParamInfo {
+    pub name: String,
+    pub jni_type: String,
+    pub is_string: bool,
+    pub is_handle: bool,
+}
+
+impl JniParamInfo {
+    pub fn from_param(name: &str, ty: &Type) -> Self {
+        Self {
+            name: super::NamingConvention::param_name(name),
+            jni_type: super::TypeMapper::jni_type(ty),
+            is_string: matches!(ty, Type::String),
+            is_handle: matches!(ty, Type::Object(_) | Type::BoxedTrait(_)),
+        }
+    }
+
+    pub fn jni_param_decl(&self) -> String {
+        format!("{} {}", self.jni_type, self.name)
+    }
+
+    pub fn ffi_arg(&self) -> String {
+        if self.is_string {
+            format!("(const uint8_t*)_{}_c, {} ? strlen(_{}_c) : 0", self.name, self.name, self.name)
+        } else if self.is_handle {
+            format!("(void*){}", self.name)
+        } else {
+            self.name.clone()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
