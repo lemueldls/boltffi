@@ -1,16 +1,32 @@
-use crate::model::Type;
+use crate::model::{Primitive, Type};
 
 #[derive(Debug, Clone)]
 pub enum ReturnKind {
     Void,
     Primitive,
     String,
-    Vec { inner: String, len_fn: String, copy_fn: String },
-    VecRecord { inner: String, reader: String },
-    Option { inner: String },
-    Result { ok: String },
-    Enum { name: String },
-    Record { name: String },
+    Vec {
+        inner: String,
+        len_fn: String,
+        copy_fn: String,
+        primitive: Option<Primitive>,
+    },
+    VecRecord {
+        inner: String,
+        reader: String,
+    },
+    Option {
+        inner: String,
+    },
+    Result {
+        ok: String,
+    },
+    Enum {
+        name: String,
+    },
+    Record {
+        name: String,
+    },
 }
 
 impl ReturnKind {
@@ -28,6 +44,10 @@ impl ReturnKind {
                     inner: super::TypeMapper::map_type(inner),
                     len_fn: format!("{}_len", ffi_base),
                     copy_fn: format!("{}_copy_into", ffi_base),
+                    primitive: match inner.as_ref() {
+                        Type::Primitive(p) => Some(*p),
+                        _ => None,
+                    },
                 },
             },
             Type::Option(inner) => Self::Option {
@@ -44,10 +64,20 @@ impl ReturnKind {
             },
             Type::Bytes => panic!("Bytes return type not yet supported in Kotlin bindings"),
             Type::Slice(_) => panic!("Slice return type not yet supported in Kotlin bindings"),
-            Type::MutSlice(_) => panic!("MutSlice return type not yet supported in Kotlin bindings"),
-            Type::Object(name) => panic!("Object return type '{}' not yet supported in Kotlin bindings", name),
-            Type::BoxedTrait(name) => panic!("BoxedTrait return type '{}' not yet supported in Kotlin bindings", name),
-            Type::Callback(_) => panic!("Callback return type not yet supported in Kotlin bindings"),
+            Type::MutSlice(_) => {
+                panic!("MutSlice return type not yet supported in Kotlin bindings")
+            }
+            Type::Object(name) => panic!(
+                "Object return type '{}' not yet supported in Kotlin bindings",
+                name
+            ),
+            Type::BoxedTrait(name) => panic!(
+                "BoxedTrait return type '{}' not yet supported in Kotlin bindings",
+                name
+            ),
+            Type::Callback(_) => {
+                panic!("Callback return type not yet supported in Kotlin bindings")
+            }
         }
     }
 
@@ -113,6 +143,29 @@ impl ReturnKind {
             _ => None,
         }
     }
+
+    pub fn vec_list_suffix(&self) -> &str {
+        match self {
+            Self::Vec {
+                primitive: Some(Primitive::U8),
+                ..
+            } => ".map { it.toUByte() }",
+            Self::Vec {
+                primitive: Some(Primitive::U16),
+                ..
+            } => ".map { it.toUShort() }",
+            Self::Vec {
+                primitive: Some(Primitive::U32),
+                ..
+            } => ".map { it.toUInt() }",
+            Self::Vec {
+                primitive: Some(Primitive::U64),
+                ..
+            } => ".map { it.toULong() }",
+            Self::Vec { .. } => ".toList()",
+            _ => "",
+        }
+    }
 }
 
 pub struct ParamConversion;
@@ -120,13 +173,47 @@ pub struct ParamConversion;
 impl ParamConversion {
     pub fn to_ffi(param_name: &str, ty: &Type) -> String {
         match ty {
-            Type::String => format!("{}.toByteArray()", param_name),
+            Type::String => param_name.to_string(),
             Type::Bytes => param_name.to_string(),
-            Type::Primitive(_) => param_name.to_string(),
+            Type::Primitive(primitive) => match primitive {
+                Primitive::U8 => format!("{}.toByte()", param_name),
+                Primitive::U16 => format!("{}.toShort()", param_name),
+                Primitive::U32 => format!("{}.toInt()", param_name),
+                Primitive::U64 => format!("{}.toLong()", param_name),
+                _ => param_name.to_string(),
+            },
             Type::Record(_) => param_name.to_string(),
             Type::Enum(_) => format!("{}.value", param_name),
             Type::Object(_) => format!("{}.handle", param_name),
-            Type::Slice(_) => format!("{}.toTypedArray()", param_name),
+            Type::Vec(inner) | Type::Slice(inner) => match inner.as_ref() {
+                Type::Record(name) => {
+                    format!(
+                        "{}Writer.pack({})",
+                        super::NamingConvention::class_name(name),
+                        param_name
+                    )
+                }
+                Type::Primitive(Primitive::I8) => format!("{}.toByteArray()", param_name),
+                Type::Primitive(Primitive::U8) => {
+                    format!("{}.map {{ it.toByte() }}.toByteArray()", param_name)
+                }
+                Type::Primitive(Primitive::I16) => format!("{}.toShortArray()", param_name),
+                Type::Primitive(Primitive::U16) => {
+                    format!("{}.map {{ it.toShort() }}.toShortArray()", param_name)
+                }
+                Type::Primitive(Primitive::I32) => format!("{}.toIntArray()", param_name),
+                Type::Primitive(Primitive::U32) => {
+                    format!("{}.map {{ it.toInt() }}.toIntArray()", param_name)
+                }
+                Type::Primitive(Primitive::I64) => format!("{}.toLongArray()", param_name),
+                Type::Primitive(Primitive::U64) => {
+                    format!("{}.map {{ it.toLong() }}.toLongArray()", param_name)
+                }
+                Type::Primitive(Primitive::F32) => format!("{}.toFloatArray()", param_name),
+                Type::Primitive(Primitive::F64) => format!("{}.toDoubleArray()", param_name),
+                Type::Primitive(Primitive::Bool) => format!("{}.toBooleanArray()", param_name),
+                _ => param_name.to_string(),
+            },
             _ => param_name.to_string(),
         }
     }
@@ -194,15 +281,43 @@ pub struct JniParamInfo {
     pub jni_type: String,
     pub is_string: bool,
     pub is_handle: bool,
+    pub array_primitive: Option<Primitive>,
+    pub array_is_mutable: bool,
+    pub record_name: Option<String>,
+    pub record_struct_size: usize,
+    pub record_is_mutable: bool,
 }
 
 impl JniParamInfo {
     pub fn from_param(name: &str, ty: &Type) -> Self {
+        let (array_primitive, array_is_mutable) = match ty {
+            Type::Vec(inner) | Type::Slice(inner) | Type::MutSlice(inner) => match inner.as_ref() {
+                Type::Primitive(primitive) => (Some(*primitive), matches!(ty, Type::MutSlice(_))),
+                _ => (None, false),
+            },
+            _ => (None, false),
+        };
+
+        let (record_name, record_is_mutable) = match ty {
+            Type::Vec(inner) | Type::Slice(inner) | Type::MutSlice(inner) => match inner.as_ref() {
+                Type::Record(record_name) => {
+                    (Some(record_name.clone()), matches!(ty, Type::MutSlice(_)))
+                }
+                _ => (None, false),
+            },
+            _ => (None, false),
+        };
+
         Self {
             name: name.to_string(),
             jni_type: super::TypeMapper::c_jni_type(ty),
             is_string: matches!(ty, Type::String),
             is_handle: matches!(ty, Type::Object(_) | Type::BoxedTrait(_)),
+            array_primitive,
+            array_is_mutable,
+            record_name,
+            record_struct_size: 0,
+            record_is_mutable,
         }
     }
 
@@ -212,11 +327,60 @@ impl JniParamInfo {
 
     pub fn ffi_arg(&self) -> String {
         if self.is_string {
-            format!("(const uint8_t*)_{}_c, {} ? strlen(_{}_c) : 0", self.name, self.name, self.name)
+            format!(
+                "(const uint8_t*)_{}_c, {} ? strlen(_{}_c) : 0",
+                self.name, self.name, self.name
+            )
+        } else if let Some(record_name) = &self.record_name {
+            let c_name = super::NamingConvention::class_name(record_name);
+            let ptr_type = if self.record_is_mutable {
+                format!("{}*", c_name)
+            } else {
+                format!("const {}*", c_name)
+            };
+
+            format!(
+                "({})_{}_ptr, (uintptr_t)_{}_len",
+                ptr_type, self.name, self.name
+            )
+        } else if let Some(primitive) = self.array_primitive {
+            let c_type = primitive.c_type_name();
+            let ptr_type = if self.array_is_mutable {
+                format!("{}*", c_type)
+            } else {
+                format!("const {}*", c_type)
+            };
+
+            format!(
+                "({})_{}_ptr, (uintptr_t)_{}_len",
+                ptr_type, self.name, self.name
+            )
         } else if self.is_handle {
             format!("(void*){}", self.name)
         } else {
             self.name.clone()
+        }
+    }
+
+    pub fn is_primitive_array(&self) -> bool {
+        self.array_primitive.is_some()
+    }
+
+    pub fn is_record_buffer(&self) -> bool {
+        self.record_name.is_some()
+    }
+
+    pub fn array_c_type(&self) -> &'static str {
+        self.array_primitive
+            .expect("array_c_type called on non-array param")
+            .c_type_name()
+    }
+
+    pub fn array_release_mode(&self) -> &'static str {
+        if self.array_is_mutable {
+            "0"
+        } else {
+            "JNI_ABORT"
         }
     }
 }
@@ -254,7 +418,10 @@ mod tests {
 
     #[test]
     fn test_param_conversion_string() {
-        assert_eq!(ParamConversion::to_ffi("name", &Type::String), "name.toByteArray()");
+        assert_eq!(
+            ParamConversion::to_ffi("name", &Type::String),
+            "name"
+        );
     }
 
     #[test]

@@ -131,7 +131,10 @@ impl JniGenerator {
 impl JniGlueTemplate {
     pub fn from_module(module: &Module, package: &str) -> Self {
         let prefix = naming::ffi_prefix().to_string();
-        let jni_prefix = package.replace('_', "_1").replace('.', "_").replace('-', "_1");
+        let jni_prefix = package
+            .replace('_', "_1")
+            .replace('.', "_")
+            .replace('-', "_1");
 
         let functions: Vec<JniFunctionView> = module
             .functions
@@ -168,10 +171,15 @@ impl JniGlueTemplate {
             _ => false,
         };
 
-        let supported_inputs = func
-            .inputs
-            .iter()
-            .all(|param| matches!(&param.param_type, Type::Primitive(_) | Type::String));
+        let supported_inputs = func.inputs.iter().all(|param| match &param.param_type {
+            Type::Primitive(_) | Type::String => true,
+            Type::Vec(inner) | Type::Slice(inner) => match inner.as_ref() {
+                Type::Primitive(_) => true,
+                Type::Record(record_name) => Self::is_record_blittable(record_name, module),
+                _ => false,
+            },
+            _ => false,
+        });
 
         supported_output && supported_inputs
     }
@@ -192,27 +200,44 @@ impl JniGlueTemplate {
             _ => false,
         };
 
-        let supported_inputs = method.inputs.iter().all(|p| {
-            matches!(&p.param_type, Type::Primitive(_))
-        });
+        let supported_inputs = method
+            .inputs
+            .iter()
+            .all(|p| matches!(&p.param_type, Type::Primitive(_)));
 
         supported_output && supported_inputs
     }
 
-    fn map_function(func: &Function, prefix: &str, jni_prefix: &str, module: &Module) -> JniFunctionView {
+    fn map_function(
+        func: &Function,
+        prefix: &str,
+        jni_prefix: &str,
+        module: &Module,
+    ) -> JniFunctionView {
         let ffi_name = format!("{}_{}", prefix, func.name);
-        let jni_name = format!(
-            "Java_{}_Native_{}",
-            jni_prefix,
-            ffi_name.replace('_', "_1")
-        );
+        let jni_name = format!("Java_{}_Native_{}", jni_prefix, ffi_name.replace('_', "_1"));
 
         let return_kind = JniReturnKind::from_type(func.output.as_ref(), &func.name);
-        let params: Vec<JniParamInfo> = func
+        let mut params: Vec<JniParamInfo> = func
             .inputs
             .iter()
             .map(|param| JniParamInfo::from_param(&param.name, &param.param_type))
             .collect();
+
+        for param in params.iter_mut() {
+            let Some(record_name) = &param.record_name else {
+                continue;
+            };
+
+            let struct_size = module
+                .records
+                .iter()
+                .find(|record| &record.name == record_name)
+                .map(|record| record.struct_size().as_usize())
+                .unwrap_or(0);
+
+            param.record_struct_size = struct_size;
+        }
 
         let jni_return = return_kind.jni_return_type().to_string();
         let jni_params = Self::format_jni_params(&params);
@@ -340,11 +365,8 @@ impl JniGlueTemplate {
             .filter(|m| Self::is_supported_method(m))
             .map(|method| {
                 let ffi_name = naming::method_ffi_name(&class.name, &method.name);
-                let jni_name = format!(
-                    "Java_{}_Native_{}",
-                    jni_prefix,
-                    ffi_name.replace('_', "_1")
-                );
+                let jni_name =
+                    format!("Java_{}_Native_{}", jni_prefix, ffi_name.replace('_', "_1"));
                 let return_kind = JniReturnKind::from_type(method.output.as_ref(), &method.name);
                 let params: Vec<JniParamInfo> = method
                     .inputs

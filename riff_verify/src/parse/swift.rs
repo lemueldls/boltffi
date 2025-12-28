@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use tree_sitter::{Node, Parser, Tree};
 
+use super::ParseError;
 use super::language::LanguageParser;
 use super::patterns::FfiPatterns;
-use super::ParseError;
 use crate::ir::{
     BinaryOp, Expression, Literal, Param, PointerType, Statement, StatusCheckKind, UnitKind, VarId,
     VarIdGenerator, VarName, VerifyUnit,
@@ -676,7 +676,7 @@ impl SwiftExtractor {
                 _ => {
                     return Expression::Other {
                         description: self.node_text(node),
-                    }
+                    };
                 }
             };
 

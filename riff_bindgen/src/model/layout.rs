@@ -104,20 +104,18 @@ impl StructLayout {
     where
         I: IntoIterator<Item = Layout>,
     {
-        let (fields, final_offset, max_alignment) = layouts
-            .into_iter()
-            .fold(
-                (Vec::new(), Offset::ZERO, Alignment::new(1)),
-                |(mut fields, offset, max_align), layout| {
-                    let aligned_offset = offset.aligned_to(layout.alignment);
-                    fields.push(FieldLayout::new(aligned_offset, layout));
-                    (
-                        fields,
-                        aligned_offset + layout.size,
-                        max_align.max(layout.alignment),
-                    )
-                },
-            );
+        let (fields, final_offset, max_alignment) = layouts.into_iter().fold(
+            (Vec::new(), Offset::ZERO, Alignment::new(1)),
+            |(mut fields, offset, max_align), layout| {
+                let aligned_offset = offset.aligned_to(layout.alignment);
+                fields.push(FieldLayout::new(aligned_offset, layout));
+                (
+                    fields,
+                    aligned_offset + layout.size,
+                    max_align.max(layout.alignment),
+                )
+            },
+        );
 
         let total_size = Size::new(final_offset.as_usize()).padded_to(max_alignment);
 
@@ -173,12 +171,12 @@ mod tests {
     #[test]
     fn struct_layout_location() {
         let layouts = [
-            Layout::new(8, 8),  // id: i64
-            Layout::new(8, 8),  // lat: f64
-            Layout::new(8, 8),  // lng: f64
-            Layout::new(8, 8),  // rating: f64
-            Layout::new(4, 4),  // review_count: i32
-            Layout::new(1, 1),  // is_open: bool
+            Layout::new(8, 8), // id: i64
+            Layout::new(8, 8), // lat: f64
+            Layout::new(8, 8), // lng: f64
+            Layout::new(8, 8), // rating: f64
+            Layout::new(4, 4), // review_count: i32
+            Layout::new(1, 1), // is_open: bool
         ];
 
         let struct_layout = StructLayout::from_layouts(layouts);

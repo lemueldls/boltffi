@@ -3,8 +3,18 @@ fun {{ func_name }}({% for param in params %}{{ param.name }}: {{ param.kotlin_t
     return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- else if return_kind.is_string() %}
     return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}) ?: throw FfiException(-1, "Null string returned")
+{%- else if return_kind.is_enum() %}
+{%- if enum_is_data %}
+    val buf = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+    return useDirectBuffer(buf) { buffer ->
+        buffer.order(ByteOrder.nativeOrder())
+        {{ enum_codec_name.as_ref().unwrap() }}.read(buffer)
+    }
+{%- else %}
+    return {{ enum_name.as_ref().unwrap() }}.fromValue(Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}))
+{%- endif %}
 {%- else if return_kind.is_vec() %}
-    return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}).toList()
+    return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}){{ return_kind.vec_list_suffix() }}
 {%- else if return_kind.is_vec_record() %}
     val buf = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
     return useDirectBuffer(buf) { buffer ->

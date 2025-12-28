@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use riff_bindgen::{CHeaderGenerator, Kotlin, JniGenerator, Swift, scan_crate};
+use riff_bindgen::{CHeaderGenerator, JniGenerator, Kotlin, Swift, scan_crate};
 
 use crate::config::Config;
 use crate::error::{CliError, Result};
@@ -60,9 +60,11 @@ fn generate_swift(config: &Config, output: Option<PathBuf>) -> Result<()> {
 }
 
 fn generate_kotlin(config: &Config, output: Option<PathBuf>) -> Result<()> {
-    let package_name = config.kotlin_package().unwrap_or_else(|| "com.example".to_string());
+    let package_name = config
+        .kotlin_package()
+        .unwrap_or_else(|| "com.example".to_string());
     let package_path = package_name.replace('.', "/");
-    
+
     let output_dir = output.unwrap_or_else(|| PathBuf::from("dist/kotlin"));
     let kotlin_dir = output_dir.join(&package_path);
     let jni_dir = output_dir.join("jni");

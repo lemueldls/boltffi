@@ -190,7 +190,6 @@ impl Type {
             err: Box::new(err),
         }
     }
-
 }
 
 use super::layout::{CLayout, Layout};

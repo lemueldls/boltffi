@@ -45,7 +45,9 @@ impl Record {
     }
 
     pub fn is_blittable(&self) -> bool {
-        self.fields.iter().all(|field| field.field_type.is_primitive())
+        self.fields
+            .iter()
+            .all(|field| field.field_type.is_primitive())
     }
 
     pub fn layout(&self) -> StructLayout {

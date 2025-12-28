@@ -11,7 +11,7 @@ pub use model::{
     Parameter, Primitive, Receiver, Record, RecordField, StreamMethod, StreamMode, Type, Variant,
 };
 
-pub use kotlin::{Kotlin, JniGenerator};
+pub use kotlin::{JniGenerator, Kotlin};
 pub use scan::{SourceScanner, scan_crate};
 pub use swift::Swift;
 

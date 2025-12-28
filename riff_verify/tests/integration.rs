@@ -101,9 +101,11 @@ public func leaksMemory() {
     assert!(result.error_count() > 0);
 
     if let VerificationResult::Failed { violations, .. } = &result {
-        assert!(violations
-            .iter()
-            .any(|v| matches!(v.kind, ViolationKind::MemoryLeak { .. })));
+        assert!(
+            violations
+                .iter()
+                .any(|v| matches!(v.kind, ViolationKind::MemoryLeak { .. }))
+        );
     }
 }
 
@@ -120,9 +122,11 @@ public func doublesFree() {
     assert!(result.is_failed(), "Should detect double free");
 
     if let VerificationResult::Failed { violations, .. } = &result {
-        assert!(violations
-            .iter()
-            .any(|v| matches!(v.kind, ViolationKind::DoubleFree { .. })));
+        assert!(
+            violations
+                .iter()
+                .any(|v| matches!(v.kind, ViolationKind::DoubleFree { .. }))
+        );
     }
 }
 
@@ -139,9 +143,11 @@ public func leaksRetain() {
     assert!(result.is_failed(), "Should detect retain leak");
 
     if let VerificationResult::Failed { violations, .. } = &result {
-        assert!(violations
-            .iter()
-            .any(|v| matches!(v.kind, ViolationKind::RetainLeak { .. })));
+        assert!(
+            violations
+                .iter()
+                .any(|v| matches!(v.kind, ViolationKind::RetainLeak { .. }))
+        );
     }
 }
 
@@ -159,9 +165,11 @@ public func doublesRelease() {
     assert!(result.is_failed(), "Should detect double release");
 
     if let VerificationResult::Failed { violations, .. } = &result {
-        assert!(violations
-            .iter()
-            .any(|v| matches!(v.kind, ViolationKind::DoubleRelease { .. })));
+        assert!(
+            violations
+                .iter()
+                .any(|v| matches!(v.kind, ViolationKind::DoubleRelease { .. }))
+        );
     }
 }
 

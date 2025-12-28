@@ -11,8 +11,9 @@ pub use jni::JniGenerator;
 pub use marshal::{JniParamInfo, JniReturnKind, ParamConversion, ReturnKind};
 pub use names::NamingConvention;
 pub use templates::{
-    CStyleEnumTemplate, ClassTemplate, FunctionTemplate, NativeTemplate, PreambleTemplate,
-    RecordReaderTemplate, RecordTemplate, SealedEnumTemplate,
+    CStyleEnumTemplate, ClassTemplate, DataEnumCodecTemplate, FunctionTemplate, NativeTemplate,
+    PreambleTemplate, RecordReaderTemplate, RecordTemplate, RecordWriterTemplate,
+    SealedEnumTemplate,
 };
 pub use types::TypeMapper;
 
@@ -30,23 +31,30 @@ impl Kotlin {
 
         sections.push(Self::render_preamble_with_package(package_name));
 
-        module
-            .enums
-            .iter()
-            .for_each(|enumeration| sections.push(Self::render_enum(enumeration)));
+        module.enums.iter().for_each(|enumeration| {
+            sections.push(Self::render_enum(enumeration));
+            if enumeration.is_data_enum() {
+                sections.push(Self::render_data_enum_codec(enumeration));
+            }
+        });
 
-        let blittable_vec_records = Self::find_blittable_vec_records(module);
+        let blittable_vec_return_records = Self::find_blittable_vec_return_records(module);
+        let blittable_vec_param_records = Self::find_blittable_vec_param_records(module);
+
         module.records.iter().for_each(|record| {
             sections.push(Self::render_record(record));
-            if blittable_vec_records.contains(&record.name.as_str()) {
+            if blittable_vec_return_records.contains(&record.name.as_str()) {
                 sections.push(Self::render_record_reader(record));
+            }
+            if blittable_vec_param_records.contains(&record.name.as_str()) {
+                sections.push(Self::render_record_writer(record));
             }
         });
 
         module
             .functions
             .iter()
-            .filter(|f| Self::is_supported_function(f))
+            .filter(|func| Self::is_supported_function(func, module))
             .for_each(|function| sections.push(Self::render_function(function, module)));
 
         module
@@ -90,6 +98,12 @@ impl Kotlin {
         }
     }
 
+    pub fn render_data_enum_codec(enumeration: &Enumeration) -> String {
+        DataEnumCodecTemplate::from_enum(enumeration)
+            .render()
+            .expect("data enum codec template failed")
+    }
+
     pub fn render_record(record: &Record) -> String {
         RecordTemplate::from_record(record)
             .render()
@@ -100,6 +114,12 @@ impl Kotlin {
         RecordReaderTemplate::from_record(record)
             .render()
             .expect("record reader template failed")
+    }
+
+    pub fn render_record_writer(record: &Record) -> String {
+        RecordWriterTemplate::from_record(record)
+            .render()
+            .expect("record writer template failed")
     }
 
     pub fn render_function(function: &Function, module: &Module) -> String {
@@ -120,7 +140,7 @@ impl Kotlin {
             .expect("native template failed")
     }
 
-    fn find_blittable_vec_records(module: &Module) -> std::collections::HashSet<&str> {
+    fn find_blittable_vec_return_records(module: &Module) -> std::collections::HashSet<&str> {
         module
             .functions
             .iter()
@@ -143,18 +163,70 @@ impl Kotlin {
             .collect()
     }
 
-    fn is_supported_function(func: &Function) -> bool {
+    fn find_blittable_vec_param_records(module: &Module) -> std::collections::HashSet<&str> {
+        module
+            .functions
+            .iter()
+            .flat_map(|func| func.inputs.iter())
+            .filter_map(|param| match &param.param_type {
+                Type::Vec(inner) | Type::Slice(inner) => match inner.as_ref() {
+                    Type::Record(record_name) => {
+                        let is_blittable = module
+                            .records
+                            .iter()
+                            .find(|record| &record.name == record_name)
+                            .map(|record| record.is_blittable())
+                            .unwrap_or(false);
+                        if is_blittable {
+                            Some(record_name.as_str())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn is_supported_function(func: &Function, module: &Module) -> bool {
         if func.is_async {
             return false;
         }
 
-        if let Some(Type::Vec(inner)) = &func.output {
-            if !matches!(inner.as_ref(), Type::Primitive(_) | Type::Record(_)) {
-                return false;
-            }
-        }
+        let supported_output = match &func.output {
+            None => true,
+            Some(Type::Primitive(_)) => true,
+            Some(Type::String) => true,
+            Some(Type::Vec(inner)) => match inner.as_ref() {
+                Type::Primitive(_) => true,
+                Type::Record(record_name) => Self::is_record_blittable(record_name, module),
+                _ => false,
+            },
+            _ => false,
+        };
 
-        true
+        let supported_inputs = func.inputs.iter().all(|param| match &param.param_type {
+            Type::Primitive(_) | Type::String => true,
+            Type::Vec(inner) | Type::Slice(inner) => match inner.as_ref() {
+                Type::Primitive(_) => true,
+                Type::Record(record_name) => Self::is_record_blittable(record_name, module),
+                _ => false,
+            },
+            _ => false,
+        });
+
+        supported_output && supported_inputs
+    }
+
+    fn is_record_blittable(record_name: &str, module: &Module) -> bool {
+        module
+            .records
+            .iter()
+            .find(|record| record.name == record_name)
+            .map(|record| record.is_blittable())
+            .unwrap_or(false)
     }
 }
 
