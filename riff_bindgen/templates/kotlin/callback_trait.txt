@@ -28,6 +28,14 @@ private class {{ wrapper_class }}(private val impl: {{ interface_name }}) {
     }
 }
 
+private interface {{ vtable_type }} {
+    fun free(handle: Long)
+    fun clone(handle: Long): Long
+{%- for method in methods %}
+    fun {{ method.ffi_name }}(handle: Long{% for param in method.params %}, {{ param.ffi_name }}: {{ param.jni_type }}{% endfor %}): {{ method.return_jni_type }}
+{%- endfor %}
+}
+
 private val {{ vtable_var }} = object : {{ vtable_type }} {
     override fun free(handle: Long) {
         {{ wrapper_class }}.unregister(handle)
@@ -38,13 +46,12 @@ private val {{ vtable_var }} = object : {{ vtable_type }} {
     }
 {%- for method in methods %}
 
-    override fun {{ method.ffi_name }}(handle: Long{% for param in method.params %}, {{ param.ffi_name }}: {{ param.jni_type }}{% endfor %}{% if method.has_out_param %}, out: {{ method.out_type }}{% endif %}): {{ method.return_jni_type }} {
-        val wrapper = {{ wrapper_class }}.get(handle) ?: return {% if method.has_return %}0{% else %}FfiStatus().apply { code = 1 }{% endif %}
-        {% if method.has_return %}val result = {% endif %}wrapper.impl.{{ method.name }}({% for param in method.params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- if method.has_out_param %}
-        out.value = result
+    override fun {{ method.ffi_name }}(handle: Long{% for param in method.params %}, {{ param.ffi_name }}: {{ param.jni_type }}{% endfor %}): {{ method.return_jni_type }} {
+        val wrapper = {{ wrapper_class }}.get(handle) ?: return {% if method.has_return %}0{% else %}1{% endif %}
+        {% if method.has_return %}return {% endif %}wrapper.impl.{{ method.name }}({% for param in method.params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- if !method.has_return %}
+        return 0
 {%- endif %}
-        return {% if method.has_return %}result{% else %}FfiStatus(){% endif %}
     }
 {%- endfor %}
 }
@@ -54,13 +61,12 @@ object {{ bridge_name }} {
 
     fun register() {
         if (!registered.compareAndSet(false, true)) return
-        Native.{{ register_fn }}({{ vtable_var }})
     }
 
     fun create(impl: {{ interface_name }}): Long {
         register()
         val wrapper = {{ wrapper_class }}(impl)
         {{ wrapper_class }}.register(wrapper)
-        return Native.{{ create_fn }}(wrapper.handle)
+        return wrapper.handle
     }
 }

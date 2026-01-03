@@ -192,6 +192,14 @@ impl Config {
             .clone()
             .unwrap_or_else(|| self.swift_module_name())
     }
+
+    pub fn kotlin_package(&self) -> Option<String> {
+        Some(self.kotlin.package.clone())
+    }
+
+    pub fn kotlin_class_name(&self) -> String {
+        to_pascal_case(&self.package.name)
+    }
 }
 
 fn to_pascal_case(input: &str) -> String {

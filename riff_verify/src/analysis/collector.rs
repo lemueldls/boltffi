@@ -1,5 +1,5 @@
 use super::effects::{Capacity, Effect, EffectTrace};
-use super::flow::{check_branch_consistency, merge_branch_states, BranchDivergence, BranchState};
+use super::flow::{BranchDivergence, BranchState, check_branch_consistency, merge_branch_states};
 use crate::ir::{Expression, Literal, Statement, VarId, VerifyUnit};
 use crate::source::SourceSpan;
 

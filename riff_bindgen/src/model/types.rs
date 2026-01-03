@@ -94,6 +94,30 @@ impl Primitive {
             Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize
         )
     }
+
+    pub fn jni_array_type(self) -> &'static str {
+        match self {
+            Self::Bool => "jbooleanArray",
+            Self::I8 | Self::U8 => "jbyteArray",
+            Self::I16 | Self::U16 => "jshortArray",
+            Self::I32 | Self::U32 => "jintArray",
+            Self::I64 | Self::U64 | Self::Isize | Self::Usize => "jlongArray",
+            Self::F32 => "jfloatArray",
+            Self::F64 => "jdoubleArray",
+        }
+    }
+
+    pub fn jni_new_array_fn(self) -> &'static str {
+        match self {
+            Self::Bool => "NewBooleanArray",
+            Self::I8 | Self::U8 => "NewByteArray",
+            Self::I16 | Self::U16 => "NewShortArray",
+            Self::I32 | Self::U32 => "NewIntArray",
+            Self::I64 | Self::U64 | Self::Isize | Self::Usize => "NewLongArray",
+            Self::F32 => "NewFloatArray",
+            Self::F64 => "NewDoubleArray",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +188,41 @@ impl Type {
         Self::Result {
             ok: Box::new(ok),
             err: Box::new(err),
+        }
+    }
+}
+
+use super::layout::{CLayout, Layout};
+
+impl CLayout for Type {
+    fn c_layout(&self) -> Layout {
+        match self {
+            Self::Primitive(primitive) => primitive.c_layout(),
+            Self::String | Self::Bytes | Self::Vec(_) | Self::Slice(_) | Self::MutSlice(_) => {
+                Layout::new(24, 8)
+            }
+            Self::Object(_) | Self::BoxedTrait(_) | Self::Callback(_) => Layout::new(8, 8),
+            Self::Record(_) | Self::Enum(_) => Layout::new(8, 8),
+            Self::Option(inner) => {
+                let inner_layout = inner.c_layout();
+                Layout::new(
+                    inner_layout.size.as_usize() + inner_layout.alignment.as_usize(),
+                    inner_layout.alignment.as_usize(),
+                )
+            }
+            Self::Result { ok, .. } => ok.c_layout(),
+            Self::Void => Layout::new(0, 1),
+        }
+    }
+}
+
+impl CLayout for Primitive {
+    fn c_layout(&self) -> Layout {
+        match self {
+            Self::Bool | Self::I8 | Self::U8 => Layout::new(1, 1),
+            Self::I16 | Self::U16 => Layout::new(2, 2),
+            Self::I32 | Self::U32 | Self::F32 => Layout::new(4, 4),
+            Self::I64 | Self::U64 | Self::F64 | Self::Usize | Self::Isize => Layout::new(8, 8),
         }
     }
 }

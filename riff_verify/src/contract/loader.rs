@@ -171,9 +171,11 @@ public func generateLocations(count: Int32) -> [Location] {
 
         let contract = ContractLoader::from_source(source, "riff");
 
-        assert!(contract
-            .get_function("riff_generate_locations_len")
-            .is_some());
+        assert!(
+            contract
+                .get_function("riff_generate_locations_len")
+                .is_some()
+        );
     }
 
     #[test]

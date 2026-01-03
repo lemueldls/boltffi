@@ -3,7 +3,7 @@ sealed class {{ class_name }} {
 {%- if variant.fields.is_empty() %}
     data object {{ variant.name }} : {{ class_name }}()
 {%- else %}
-    data class {{ variant.name }}({% for field in variant.fields %}val {{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) : {{ class_name }}()
+    data class {{ variant.name }}({% for field in variant.fields %}val {% if field.is_tuple %}value{{ field.index }}{% else %}{{ field.name }}{% endif %}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) : {{ class_name }}()
 {%- endif %}
 {%- endfor %}
 }

@@ -1,15 +1,214 @@
-use crate::model::Type;
+use super::{NamingConvention, TypeMapper};
+use crate::model::{DataEnumLayout, Module, Primitive, Type};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OptionStrategy {
+    PackedLong,
+    BoxedLong,
+    BoxedDouble,
+    NullableString,
+    NullableRecord { name: String, struct_size: usize },
+    NullableDataEnum { name: String, struct_size: usize },
+}
+
+impl OptionStrategy {
+    pub fn from_primitive(primitive: Primitive) -> Self {
+        match primitive {
+            Primitive::Bool
+            | Primitive::I8
+            | Primitive::U8
+            | Primitive::I16
+            | Primitive::U16
+            | Primitive::I32
+            | Primitive::U32
+            | Primitive::F32 => Self::PackedLong,
+            Primitive::I64 | Primitive::U64 | Primitive::Isize | Primitive::Usize => {
+                Self::BoxedLong
+            }
+            Primitive::F64 => Self::BoxedDouble,
+        }
+    }
+
+    pub fn jni_return_type(&self) -> &'static str {
+        match self {
+            Self::PackedLong => "jlong",
+            Self::BoxedLong | Self::BoxedDouble => "jobject",
+            Self::NullableString => "jstring",
+            Self::NullableRecord { .. } | Self::NullableDataEnum { .. } => "jobject",
+        }
+    }
+
+    pub fn box_class(&self) -> &'static str {
+        match self {
+            Self::BoxedLong => "java/lang/Long",
+            Self::BoxedDouble => "java/lang/Double",
+            _ => "",
+        }
+    }
+
+    pub fn box_signature(&self) -> &'static str {
+        match self {
+            Self::BoxedLong => "(J)Ljava/lang/Long;",
+            Self::BoxedDouble => "(D)Ljava/lang/Double;",
+            _ => "",
+        }
+    }
+
+    pub fn box_jni_type(&self) -> &'static str {
+        match self {
+            Self::BoxedLong => "jlong",
+            Self::BoxedDouble => "jdouble",
+            _ => "",
+        }
+    }
+
+    pub fn is_packed(&self) -> bool {
+        matches!(self, Self::PackedLong)
+    }
+
+    pub fn is_boxed(&self) -> bool {
+        matches!(self, Self::BoxedLong | Self::BoxedDouble)
+    }
+
+    pub fn is_nullable_string(&self) -> bool {
+        matches!(self, Self::NullableString)
+    }
+
+    pub fn is_nullable_buffer(&self) -> bool {
+        matches!(self, Self::NullableRecord { .. } | Self::NullableDataEnum { .. })
+    }
+
+    pub fn struct_size(&self) -> usize {
+        match self {
+            Self::NullableRecord { struct_size, .. }
+            | Self::NullableDataEnum { struct_size, .. } => *struct_size,
+            _ => 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OptionView {
+    pub strategy: OptionStrategy,
+    pub c_out_type: String,
+    pub kotlin_native_type: String,
+    pub reader_name: Option<String>,
+    pub codec_name: Option<String>,
+}
+
+impl OptionView {
+    pub fn from_inner(inner: &Type, module: &Module) -> Self {
+        let strategy = Self::resolve_strategy(inner, module);
+        let c_out_type = Self::resolve_c_out_type(inner);
+        let kotlin_native_type = Self::resolve_kotlin_native_type(&strategy, inner);
+        let reader_name = Self::resolve_reader_name(&strategy);
+        let codec_name = Self::resolve_codec_name(&strategy);
+
+        Self {
+            strategy,
+            c_out_type,
+            kotlin_native_type,
+            reader_name,
+            codec_name,
+        }
+    }
+
+    fn resolve_strategy(inner: &Type, module: &Module) -> OptionStrategy {
+        match inner {
+            Type::Primitive(p) => OptionStrategy::from_primitive(*p),
+            Type::String => OptionStrategy::NullableString,
+            Type::Record(name) => OptionStrategy::NullableRecord {
+                name: name.clone(),
+                struct_size: module
+                    .records
+                    .iter()
+                    .find(|r| &r.name == name)
+                    .map(|r| r.struct_size().as_usize())
+                    .unwrap_or(0),
+            },
+            Type::Enum(name) => OptionStrategy::NullableDataEnum {
+                name: name.clone(),
+                struct_size: module
+                    .enums
+                    .iter()
+                    .find(|e| &e.name == name)
+                    .filter(|e| e.is_data_enum())
+                    .and_then(|e| DataEnumLayout::from_enum(e))
+                    .map(|l| l.struct_size().as_usize())
+                    .unwrap_or(0),
+            },
+            _ => OptionStrategy::PackedLong,
+        }
+    }
+
+    fn resolve_c_out_type(inner: &Type) -> String {
+        match inner {
+            Type::Primitive(p) => p.c_type_name().to_string(),
+            Type::String => "FfiString".to_string(),
+            Type::Record(name) | Type::Enum(name) => NamingConvention::class_name(name),
+            _ => "void".to_string(),
+        }
+    }
+
+    fn resolve_kotlin_native_type(strategy: &OptionStrategy, inner: &Type) -> String {
+        match strategy {
+            OptionStrategy::PackedLong => "Long".to_string(),
+            OptionStrategy::BoxedLong | OptionStrategy::BoxedDouble => {
+                format!("{}?", TypeMapper::map_type(inner))
+            }
+            OptionStrategy::NullableString => "String?".to_string(),
+            OptionStrategy::NullableRecord { .. } | OptionStrategy::NullableDataEnum { .. } => {
+                "ByteBuffer?".to_string()
+            }
+        }
+    }
+
+    fn resolve_reader_name(strategy: &OptionStrategy) -> Option<String> {
+        match strategy {
+            OptionStrategy::NullableRecord { name, .. } => {
+                Some(format!("{}Reader", NamingConvention::class_name(name)))
+            }
+            _ => None,
+        }
+    }
+
+    fn resolve_codec_name(strategy: &OptionStrategy) -> Option<String> {
+        match strategy {
+            OptionStrategy::NullableDataEnum { name, .. } => {
+                Some(format!("{}Codec", NamingConvention::class_name(name)))
+            }
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum ReturnKind {
     Void,
     Primitive,
     String,
-    Vec { inner: String, len_fn: String, copy_fn: String },
-    Option { inner: String },
-    Result { ok: String },
-    Enum { name: String },
-    Record { name: String },
+    Vec {
+        inner: String,
+        len_fn: String,
+        copy_fn: String,
+        primitive: Option<Primitive>,
+    },
+    VecRecord {
+        inner: String,
+        reader: String,
+    },
+    Option {
+        inner: String,
+    },
+    Result {
+        ok: String,
+    },
+    Enum {
+        name: String,
+    },
+    Record {
+        name: String,
+    },
 }
 
 impl ReturnKind {
@@ -18,29 +217,49 @@ impl ReturnKind {
             Type::Void => Self::Void,
             Type::Primitive(_) => Self::Primitive,
             Type::String => Self::String,
-            Type::Vec(inner) => Self::Vec {
-                inner: super::TypeMapper::map_type(inner),
-                len_fn: format!("{}_len", ffi_base),
-                copy_fn: format!("{}_copy_into", ffi_base),
+            Type::Vec(inner) => match inner.as_ref() {
+                Type::Record(name) => Self::VecRecord {
+                    inner: NamingConvention::class_name(name),
+                    reader: format!("{}Reader", NamingConvention::class_name(name)),
+                },
+                _ => Self::Vec {
+                    inner: TypeMapper::map_type(inner),
+                    len_fn: format!("{}_len", ffi_base),
+                    copy_fn: format!("{}_copy_into", ffi_base),
+                    primitive: match inner.as_ref() {
+                        Type::Primitive(p) => Some(*p),
+                        _ => None,
+                    },
+                },
             },
             Type::Option(inner) => Self::Option {
-                inner: super::TypeMapper::map_type(inner),
+                inner: TypeMapper::map_type(inner),
             },
             Type::Result { ok, .. } => Self::Result {
-                ok: super::TypeMapper::map_type(ok),
+                ok: TypeMapper::map_type(ok),
             },
             Type::Enum(name) => Self::Enum {
-                name: super::NamingConvention::class_name(name),
+                name: NamingConvention::class_name(name),
             },
             Type::Record(name) => Self::Record {
-                name: super::NamingConvention::class_name(name),
+                name: NamingConvention::class_name(name),
             },
             Type::Bytes => panic!("Bytes return type not yet supported in Kotlin bindings"),
             Type::Slice(_) => panic!("Slice return type not yet supported in Kotlin bindings"),
-            Type::MutSlice(_) => panic!("MutSlice return type not yet supported in Kotlin bindings"),
-            Type::Object(name) => panic!("Object return type '{}' not yet supported in Kotlin bindings", name),
-            Type::BoxedTrait(name) => panic!("BoxedTrait return type '{}' not yet supported in Kotlin bindings", name),
-            Type::Callback(_) => panic!("Callback return type not yet supported in Kotlin bindings"),
+            Type::MutSlice(_) => {
+                panic!("MutSlice return type not yet supported in Kotlin bindings")
+            }
+            Type::Object(name) => panic!(
+                "Object return type '{}' not yet supported in Kotlin bindings",
+                name
+            ),
+            Type::BoxedTrait(name) => panic!(
+                "BoxedTrait return type '{}' not yet supported in Kotlin bindings",
+                name
+            ),
+            Type::Callback(_) => {
+                panic!("Callback return type not yet supported in Kotlin bindings")
+            }
         }
     }
 
@@ -54,6 +273,17 @@ impl ReturnKind {
 
     pub fn is_vec(&self) -> bool {
         matches!(self, Self::Vec { .. })
+    }
+
+    pub fn is_vec_record(&self) -> bool {
+        matches!(self, Self::VecRecord { .. })
+    }
+
+    pub fn reader_name(&self) -> Option<&str> {
+        match self {
+            Self::VecRecord { reader, .. } => Some(reader),
+            _ => None,
+        }
     }
 
     pub fn is_option(&self) -> bool {
@@ -75,6 +305,7 @@ impl ReturnKind {
     pub fn inner_type(&self) -> Option<&str> {
         match self {
             Self::Vec { inner, .. } => Some(inner),
+            Self::VecRecord { inner, .. } => Some(inner),
             Self::Option { inner } => Some(inner),
             Self::Result { ok } => Some(ok),
             _ => None,
@@ -94,6 +325,29 @@ impl ReturnKind {
             _ => None,
         }
     }
+
+    pub fn vec_list_suffix(&self) -> &str {
+        match self {
+            Self::Vec {
+                primitive: Some(Primitive::U8),
+                ..
+            } => ".map { it.toUByte() }",
+            Self::Vec {
+                primitive: Some(Primitive::U16),
+                ..
+            } => ".map { it.toUShort() }",
+            Self::Vec {
+                primitive: Some(Primitive::U32),
+                ..
+            } => ".map { it.toUInt() }",
+            Self::Vec {
+                primitive: Some(Primitive::U64),
+                ..
+            } => ".map { it.toULong() }",
+            Self::Vec { .. } => ".toList()",
+            _ => "",
+        }
+    }
 }
 
 pub struct ParamConversion;
@@ -101,14 +355,394 @@ pub struct ParamConversion;
 impl ParamConversion {
     pub fn to_ffi(param_name: &str, ty: &Type) -> String {
         match ty {
-            Type::String => format!("{}.toByteArray()", param_name),
+            Type::String => param_name.to_string(),
             Type::Bytes => param_name.to_string(),
-            Type::Primitive(_) => param_name.to_string(),
+            Type::Primitive(primitive) => match primitive {
+                Primitive::U8 => format!("{}.toByte()", param_name),
+                Primitive::U16 => format!("{}.toShort()", param_name),
+                Primitive::U32 => format!("{}.toInt()", param_name),
+                Primitive::U64 => format!("{}.toLong()", param_name),
+                _ => param_name.to_string(),
+            },
             Type::Record(_) => param_name.to_string(),
             Type::Enum(_) => format!("{}.value", param_name),
             Type::Object(_) => format!("{}.handle", param_name),
-            Type::Slice(_) => format!("{}.toTypedArray()", param_name),
+            Type::Vec(inner) | Type::Slice(inner) => match inner.as_ref() {
+                Type::Record(name) => {
+                    format!(
+                        "{}Writer.pack({})",
+                        NamingConvention::class_name(name),
+                        param_name
+                    )
+                }
+                Type::Primitive(Primitive::I8) => format!("{}.toByteArray()", param_name),
+                Type::Primitive(Primitive::U8) => {
+                    format!("{}.map {{ it.toByte() }}.toByteArray()", param_name)
+                }
+                Type::Primitive(Primitive::I16) => format!("{}.toShortArray()", param_name),
+                Type::Primitive(Primitive::U16) => {
+                    format!("{}.map {{ it.toShort() }}.toShortArray()", param_name)
+                }
+                Type::Primitive(Primitive::I32) => format!("{}.toIntArray()", param_name),
+                Type::Primitive(Primitive::U32) => {
+                    format!("{}.map {{ it.toInt() }}.toIntArray()", param_name)
+                }
+                Type::Primitive(Primitive::I64) => format!("{}.toLongArray()", param_name),
+                Type::Primitive(Primitive::U64) => {
+                    format!("{}.map {{ it.toLong() }}.toLongArray()", param_name)
+                }
+                Type::Primitive(Primitive::F32) => format!("{}.toFloatArray()", param_name),
+                Type::Primitive(Primitive::F64) => format!("{}.toDoubleArray()", param_name),
+                Type::Primitive(Primitive::Bool) => format!("{}.toBooleanArray()", param_name),
+                _ => param_name.to_string(),
+            },
             _ => param_name.to_string(),
+        }
+    }
+}
+
+// JNI-specific types for C glue generation
+
+#[derive(Debug, Clone)]
+pub enum JniReturnKind {
+    Void,
+    Primitive { jni_type: String },
+    String { ffi_name: String },
+    Vec { len_fn: String, copy_fn: String },
+    CStyleEnum,
+    DataEnum { enum_name: String, struct_size: usize },
+    Option(OptionView),
+}
+
+impl JniReturnKind {
+    pub fn from_type(ty: Option<&Type>, func_name: &str) -> Self {
+        match ty {
+            None | Some(Type::Void) => Self::Void,
+            Some(Type::Primitive(primitive)) => Self::Primitive {
+                jni_type: TypeMapper::c_jni_type(&Type::Primitive(*primitive)),
+            },
+            Some(Type::String) => Self::String {
+                ffi_name: riff_ffi_rules::naming::function_ffi_name(func_name),
+            },
+            Some(Type::Vec(_)) => Self::Vec {
+                len_fn: riff_ffi_rules::naming::function_ffi_vec_len(func_name),
+                copy_fn: riff_ffi_rules::naming::function_ffi_vec_copy_into(func_name),
+            },
+            Some(Type::Enum(_)) => Self::CStyleEnum,
+            _ => Self::Void,
+        }
+    }
+
+    pub fn from_type_with_module(
+        ty: Option<&Type>,
+        func_name: &str,
+        module: &Module,
+    ) -> Self {
+        match ty {
+            Some(Type::Option(inner)) => Self::Option(OptionView::from_inner(inner, module)),
+            Some(Type::Enum(enum_name)) => {
+                module
+                    .enums
+                    .iter()
+                    .find(|e| &e.name == enum_name)
+                    .filter(|e| e.is_data_enum())
+                    .and_then(|e| DataEnumLayout::from_enum(e))
+                    .map(|layout| Self::DataEnum {
+                        enum_name: NamingConvention::class_name(enum_name),
+                        struct_size: layout.struct_size().as_usize(),
+                    })
+                    .unwrap_or(Self::CStyleEnum)
+            }
+            _ => Self::from_type(ty, func_name),
+        }
+    }
+
+    pub fn is_void(&self) -> bool {
+        matches!(self, Self::Void)
+    }
+
+    pub fn is_string(&self) -> bool {
+        matches!(self, Self::String { .. })
+    }
+
+    pub fn is_vec(&self) -> bool {
+        matches!(self, Self::Vec { .. })
+    }
+
+    pub fn is_c_style_enum(&self) -> bool {
+        matches!(self, Self::CStyleEnum)
+    }
+
+    pub fn is_data_enum(&self) -> bool {
+        matches!(self, Self::DataEnum { .. })
+    }
+
+    pub fn is_option(&self) -> bool {
+        matches!(self, Self::Option(_))
+    }
+
+    pub fn option_view(&self) -> Option<&OptionView> {
+        match self {
+            Self::Option(view) => Some(view),
+            _ => None,
+        }
+    }
+
+    pub fn jni_return_type(&self) -> &str {
+        match self {
+            Self::Void => "void",
+            Self::Primitive { jni_type } => jni_type,
+            Self::String { .. } => "jstring",
+            Self::Vec { .. } => "jlong",
+            Self::CStyleEnum => "jint",
+            Self::DataEnum { .. } => "jobject",
+            Self::Option(view) => view.strategy.jni_return_type(),
+        }
+    }
+
+    pub fn data_enum_struct_size(&self) -> usize {
+        match self {
+            Self::DataEnum { struct_size, .. } => *struct_size,
+            _ => 0,
+        }
+    }
+
+    pub fn data_enum_name(&self) -> Option<&str> {
+        match self {
+            Self::DataEnum { enum_name, .. } => Some(enum_name),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ArrayInfo {
+    primitive: Option<Primitive>,
+    is_mutable: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RecordInfo {
+    name: Option<String>,
+    struct_size: usize,
+    is_mutable: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DataEnumInfo {
+    name: Option<String>,
+    struct_size: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct JniParamInfo {
+    pub name: String,
+    pub jni_type: String,
+    pub is_string: bool,
+    pub is_handle: bool,
+    pub array_primitive: Option<Primitive>,
+    pub array_is_mutable: bool,
+    pub record_name: Option<String>,
+    pub record_struct_size: usize,
+    pub record_is_mutable: bool,
+    pub data_enum_name: Option<String>,
+    pub data_enum_struct_size: usize,
+}
+
+impl JniParamInfo {
+    /// Simple constructor for class methods - doesn't detect data enums
+    pub fn from_param(name: &str, ty: &Type) -> Self {
+        let array_info = Self::extract_array_info(ty);
+
+        let (record_name, record_is_mutable) = match ty {
+            Type::Vec(inner) | Type::Slice(inner) | Type::MutSlice(inner) => match inner.as_ref() {
+                Type::Record(name) => (Some(name.clone()), matches!(ty, Type::MutSlice(_))),
+                _ => (None, false),
+            },
+            _ => (None, false),
+        };
+
+        Self {
+            name: name.to_string(),
+            jni_type: TypeMapper::c_jni_type(ty),
+            is_string: matches!(ty, Type::String),
+            is_handle: matches!(ty, Type::Object(_) | Type::BoxedTrait(_)),
+            array_primitive: array_info.primitive,
+            array_is_mutable: array_info.is_mutable,
+            record_name,
+            record_struct_size: 0,
+            record_is_mutable,
+            data_enum_name: None,
+            data_enum_struct_size: 0,
+        }
+    }
+
+    pub fn from_param_with_module(
+        name: &str,
+        ty: &Type,
+        module: &Module,
+    ) -> Self {
+        let array_info = Self::extract_array_info(ty);
+        let record_info = Self::extract_record_info(ty, module);
+        let enum_info = Self::extract_enum_info(ty, module);
+
+        let jni_type = Self::compute_jni_type(ty, &enum_info);
+
+        Self {
+            name: name.to_string(),
+            jni_type,
+            is_string: matches!(ty, Type::String),
+            is_handle: matches!(ty, Type::Object(_) | Type::BoxedTrait(_)),
+            array_primitive: array_info.primitive,
+            array_is_mutable: array_info.is_mutable,
+            record_name: record_info.name,
+            record_struct_size: record_info.struct_size,
+            record_is_mutable: record_info.is_mutable,
+            data_enum_name: enum_info.name,
+            data_enum_struct_size: enum_info.struct_size,
+        }
+    }
+
+    fn extract_array_info(ty: &Type) -> ArrayInfo {
+        match ty {
+            Type::Vec(inner) | Type::Slice(inner) | Type::MutSlice(inner) => match inner.as_ref() {
+                Type::Primitive(primitive) => ArrayInfo {
+                    primitive: Some(*primitive),
+                    is_mutable: matches!(ty, Type::MutSlice(_)),
+                },
+                _ => ArrayInfo::default(),
+            },
+            _ => ArrayInfo::default(),
+        }
+    }
+
+    fn extract_record_info(ty: &Type, module: &Module) -> RecordInfo {
+        match ty {
+            Type::Vec(inner) | Type::Slice(inner) | Type::MutSlice(inner) => match inner.as_ref() {
+                Type::Record(record_name) => {
+                    let struct_size = module
+                        .records
+                        .iter()
+                        .find(|r| &r.name == record_name)
+                        .map(|r| r.struct_size().as_usize())
+                        .unwrap_or(0);
+
+                    RecordInfo {
+                        name: Some(record_name.clone()),
+                        struct_size,
+                        is_mutable: matches!(ty, Type::MutSlice(_)),
+                    }
+                }
+                _ => RecordInfo::default(),
+            },
+            _ => RecordInfo::default(),
+        }
+    }
+
+    fn extract_enum_info(ty: &Type, module: &Module) -> DataEnumInfo {
+        let Type::Enum(enum_name) = ty else {
+            return DataEnumInfo::default();
+        };
+
+        let Some(enumeration) = module.enums.iter().find(|e| &e.name == enum_name) else {
+            return DataEnumInfo::default();
+        };
+
+        if !enumeration.is_data_enum() {
+            return DataEnumInfo::default();
+        }
+
+        let struct_size = DataEnumLayout::from_enum(enumeration)
+            .map(|layout| layout.struct_size().as_usize())
+            .unwrap_or(0);
+
+        DataEnumInfo {
+            name: Some(enum_name.clone()),
+            struct_size,
+        }
+    }
+
+    fn compute_jni_type(ty: &Type, enum_info: &DataEnumInfo) -> String {
+        if enum_info.name.is_some() {
+            return "jobject".to_string();
+        }
+        TypeMapper::c_jni_type(ty)
+    }
+
+    pub fn jni_param_decl(&self) -> String {
+        format!("{} {}", self.jni_type, self.name)
+    }
+
+    pub fn ffi_arg(&self) -> String {
+        if self.is_string {
+            format!(
+                "(const uint8_t*)_{}_c, {} ? strlen(_{}_c) : 0",
+                self.name, self.name, self.name
+            )
+        } else if let Some(enum_name) = &self.data_enum_name {
+            let c_name = NamingConvention::class_name(enum_name);
+            format!("*({}*)_{}_ptr", c_name, self.name)
+        } else if let Some(record_name) = &self.record_name {
+            let c_name = NamingConvention::class_name(record_name);
+            let ptr_type = if self.record_is_mutable {
+                format!("{}*", c_name)
+            } else {
+                format!("const {}*", c_name)
+            };
+
+            format!(
+                "({})_{}_ptr, (uintptr_t)_{}_len",
+                ptr_type, self.name, self.name
+            )
+        } else if let Some(primitive) = self.array_primitive {
+            let c_type = primitive.c_type_name();
+            let ptr_type = if self.array_is_mutable {
+                format!("{}*", c_type)
+            } else {
+                format!("const {}*", c_type)
+            };
+
+            format!(
+                "({})_{}_ptr, (uintptr_t)_{}_len",
+                ptr_type, self.name, self.name
+            )
+        } else if self.is_handle {
+            format!("(void*){}", self.name)
+        } else {
+            self.name.clone()
+        }
+    }
+
+    pub fn is_primitive_array(&self) -> bool {
+        self.array_primitive.is_some()
+    }
+
+    pub fn is_record_buffer(&self) -> bool {
+        self.record_name.is_some()
+    }
+
+    pub fn is_data_enum(&self) -> bool {
+        self.data_enum_name.is_some()
+    }
+
+    pub fn data_enum_c_type(&self) -> String {
+        self.data_enum_name
+            .as_ref()
+            .map(|name| NamingConvention::class_name(name))
+            .unwrap_or_default()
+    }
+
+    pub fn array_c_type(&self) -> &'static str {
+        self.array_primitive
+            .expect("array_c_type called on non-array param")
+            .c_type_name()
+    }
+
+    pub fn array_release_mode(&self) -> &'static str {
+        if self.array_is_mutable {
+            "0"
+        } else {
+            "JNI_ABORT"
         }
     }
 }
@@ -146,7 +780,10 @@ mod tests {
 
     #[test]
     fn test_param_conversion_string() {
-        assert_eq!(ParamConversion::to_ffi("name", &Type::String), "name.toByteArray()");
+        assert_eq!(
+            ParamConversion::to_ffi("name", &Type::String),
+            "name"
+        );
     }
 
     #[test]
@@ -171,5 +808,91 @@ mod tests {
             ParamConversion::to_ffi("count", &Type::Primitive(Primitive::I32)),
             "count"
         );
+    }
+
+    #[test]
+    fn test_jni_param_data_enum() {
+        use crate::model::{Enumeration, RecordField, Variant};
+
+        let mut data_enum = Enumeration::new("Result");
+        data_enum.variants.push(
+            Variant::new("Ok").with_field(RecordField::new("value", Type::Primitive(Primitive::I32)))
+        );
+        data_enum.variants.push(
+            Variant::new("Err").with_field(RecordField::new("code", Type::Primitive(Primitive::I32)))
+        );
+
+        let mut module = Module::new("test");
+        module.enums.push(data_enum);
+
+        let param = JniParamInfo::from_param_with_module("result", &Type::Enum("Result".into()), &module);
+
+        assert!(param.data_enum_name.is_some());
+        assert_eq!(param.data_enum_name.as_deref(), Some("Result"));
+        assert!(param.data_enum_struct_size > 0);
+        assert_eq!(param.jni_type, "jobject");
+    }
+
+    #[test]
+    fn test_jni_param_c_style_enum() {
+        use crate::model::{Enumeration, Variant};
+
+        let mut c_style_enum = Enumeration::new("Status");
+        c_style_enum.variants.push(Variant::new("Ok"));
+        c_style_enum.variants.push(Variant::new("Error"));
+
+        let mut module = Module::new("test");
+        module.enums.push(c_style_enum);
+
+        let param = JniParamInfo::from_param_with_module("status", &Type::Enum("Status".into()), &module);
+
+        assert!(param.data_enum_name.is_none());
+        assert_eq!(param.data_enum_struct_size, 0);
+        assert_eq!(param.jni_type, "jint");
+    }
+
+    #[test]
+    fn test_jni_return_kind_data_enum() {
+        use crate::model::{Enumeration, RecordField, Variant};
+
+        let mut data_enum = Enumeration::new("Response");
+        data_enum.variants.push(
+            Variant::new("Success").with_field(RecordField::new("data", Type::Primitive(Primitive::I64)))
+        );
+
+        let mut module = Module::new("test");
+        module.enums.push(data_enum);
+
+        let return_kind = JniReturnKind::from_type_with_module(
+            Some(&Type::Enum("Response".into())),
+            "get_response",
+            &module,
+        );
+
+        assert!(return_kind.is_data_enum());
+        assert_eq!(return_kind.data_enum_name(), Some("Response"));
+        assert!(return_kind.data_enum_struct_size() > 0);
+        assert_eq!(return_kind.jni_return_type(), "jobject");
+    }
+
+    #[test]
+    fn test_jni_return_kind_c_style_enum() {
+        use crate::model::{Enumeration, Variant};
+
+        let mut c_style_enum = Enumeration::new("Status");
+        c_style_enum.variants.push(Variant::new("Active"));
+
+        let mut module = Module::new("test");
+        module.enums.push(c_style_enum);
+
+        let return_kind = JniReturnKind::from_type_with_module(
+            Some(&Type::Enum("Status".into())),
+            "get_status",
+            &module,
+        );
+
+        assert!(return_kind.is_c_style_enum());
+        assert!(!return_kind.is_data_enum());
+        assert_eq!(return_kind.jni_return_type(), "jint");
     }
 }

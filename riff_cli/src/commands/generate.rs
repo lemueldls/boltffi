@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use riff_bindgen::{CHeaderGenerator, Swift, scan_crate};
+use riff_bindgen::{CHeaderGenerator, JniGenerator, Kotlin, Swift, scan_crate};
 
 use crate::config::Config;
 use crate::error::{CliError, Result};
@@ -59,8 +59,49 @@ fn generate_swift(config: &Config, output: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn generate_kotlin(_config: &Config, _output: Option<PathBuf>) -> Result<()> {
-    println!("Kotlin generation not yet implemented");
+fn generate_kotlin(config: &Config, output: Option<PathBuf>) -> Result<()> {
+    let package_name = config
+        .kotlin_package()
+        .unwrap_or_else(|| "com.example".to_string());
+    let package_path = package_name.replace('.', "/");
+
+    let output_dir = output.unwrap_or_else(|| PathBuf::from("dist/kotlin"));
+    let kotlin_dir = output_dir.join(&package_path);
+    let jni_dir = output_dir.join("jni");
+
+    std::fs::create_dir_all(&kotlin_dir).map_err(|source| CliError::CreateDirectoryFailed {
+        path: kotlin_dir.clone(),
+        source,
+    })?;
+    std::fs::create_dir_all(&jni_dir).map_err(|source| CliError::CreateDirectoryFailed {
+        path: jni_dir.clone(),
+        source,
+    })?;
+
+    let crate_dir = PathBuf::from(".");
+    let crate_name = config.library_name();
+
+    let module = scan_crate(&crate_dir, crate_name).map_err(|e| CliError::CommandFailed {
+        command: format!("scan_crate: {}", e),
+        status: None,
+    })?;
+
+    let kotlin_code = Kotlin::render_module_with_package(&module, &package_name);
+    let kotlin_path = kotlin_dir.join(format!("{}.kt", config.kotlin_class_name()));
+    std::fs::write(&kotlin_path, kotlin_code).map_err(|source| CliError::WriteFailed {
+        path: kotlin_path.clone(),
+        source,
+    })?;
+    println!("Generated: {}", kotlin_path.display());
+
+    let jni_code = JniGenerator::generate(&module, &package_name);
+    let jni_path = jni_dir.join("jni_glue.c");
+    std::fs::write(&jni_path, jni_code).map_err(|source| CliError::WriteFailed {
+        path: jni_path.clone(),
+        source,
+    })?;
+    println!("Generated: {}", jni_path.display());
+
     Ok(())
 }
 

@@ -1,9 +1,11 @@
 use askama::Template;
+use heck::ToShoutySnakeCase;
 use riff_ffi_rules::naming;
 
-use crate::model::{CallbackTrait, Class, Enumeration, Function, Module, Record, Type};
+use crate::model::{Class, DataEnumLayout, Enumeration, Function, Module, Record, Type};
 
-use super::marshal::{ParamConversion, ReturnKind};
+use super::layout::{KotlinBufferRead, KotlinBufferWrite};
+use super::marshal::{OptionView, ParamConversion, ReturnKind};
 use super::{NamingConvention, TypeMapper};
 
 #[derive(Template)]
@@ -17,6 +19,13 @@ impl PreambleTemplate {
     pub fn from_module(module: &Module) -> Self {
         Self {
             package_name: NamingConvention::class_name(&module.name).to_lowercase(),
+            prefix: naming::ffi_prefix().to_string(),
+        }
+    }
+
+    pub fn with_package(package_name: &str) -> Self {
+        Self {
+            package_name: package_name.to_string(),
             prefix: naming::ffi_prefix().to_string(),
         }
     }
@@ -62,7 +71,129 @@ pub struct SealedEnumTemplate {
 
 pub struct SealedVariantView {
     pub name: String,
-    pub fields: Vec<FieldView>,
+    pub is_tuple: bool,
+    pub fields: Vec<SealedFieldView>,
+}
+
+pub struct SealedFieldView {
+    pub name: String,
+    pub index: usize,
+    pub kotlin_type: String,
+    pub is_tuple: bool,
+}
+
+#[derive(Template)]
+#[template(path = "kotlin/enum_data_codec.txt", escape = "none")]
+pub struct DataEnumCodecTemplate {
+    pub codec_name: String,
+    pub class_name: String,
+    pub struct_size: usize,
+    pub payload_offset: usize,
+    pub variants: Vec<DataEnumVariantView>,
+}
+
+pub struct DataEnumVariantView {
+    pub name: String,
+    pub const_name: String,
+    pub tag_value: i32,
+    pub fields: Vec<DataEnumFieldView>,
+}
+
+pub struct DataEnumFieldView {
+    pub param_name: String,
+    pub offset: usize,
+    pub getter: String,
+    pub conversion: String,
+    pub putter: String,
+    pub value_expr: String,
+}
+
+impl DataEnumCodecTemplate {
+    pub fn from_enum(enumeration: &Enumeration) -> Self {
+        let layout = DataEnumLayout::from_enum(enumeration)
+            .expect("DataEnumCodecTemplate used for c-style enum");
+        let payload_offset = layout.payload_offset().as_usize();
+        let struct_size = layout.struct_size().as_usize();
+
+        let variants = enumeration
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(variant_index, variant)| {
+                let tag_value = variant
+                    .discriminant
+                    .unwrap_or(variant_index as i64)
+                    .try_into()
+                    .unwrap_or(variant_index as i32);
+
+                let fields = variant
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .map(|(field_index, field)| {
+                        let field_is_tuple = field.name.starts_with('_')
+                            && field
+                                .name
+                                .chars()
+                                .nth(1)
+                                .map_or(false, |c| c.is_ascii_digit());
+                        let param_name = if field_is_tuple {
+                            format!("value{}", field_index)
+                        } else {
+                            NamingConvention::property_name(&field.name)
+                        };
+
+                        let raw_value_expr = format!("value.{}", param_name);
+                        let offset = layout
+                            .field_offset(variant_index, field_index)
+                            .unwrap_or_default()
+                            .as_usize();
+
+                        let (getter, conversion, putter, value_expr) = match &field.field_type {
+                            Type::Primitive(primitive) => (
+                                primitive.buffer_getter().to_string(),
+                                primitive.buffer_conversion().to_string(),
+                                primitive.buffer_putter().to_string(),
+                                primitive.buffer_value_expr(&raw_value_expr),
+                            ),
+                            _ => (
+                                "getLong".to_string(),
+                                String::new(),
+                                "putLong".to_string(),
+                                raw_value_expr,
+                            ),
+                        };
+
+                        DataEnumFieldView {
+                            param_name,
+                            offset,
+                            getter,
+                            conversion,
+                            putter,
+                            value_expr,
+                        }
+                    })
+                    .collect();
+
+                DataEnumVariantView {
+                    name: NamingConvention::class_name(&variant.name),
+                    const_name: variant.name.to_shouty_snake_case(),
+                    tag_value,
+                    fields,
+                }
+            })
+            .collect();
+
+        let class_name = NamingConvention::class_name(&enumeration.name);
+
+        Self {
+            codec_name: format!("{}Codec", class_name),
+            class_name,
+            struct_size,
+            payload_offset,
+            variants,
+        }
+    }
 }
 
 impl SealedEnumTemplate {
@@ -70,16 +201,34 @@ impl SealedEnumTemplate {
         let variants = enumeration
             .variants
             .iter()
-            .map(|variant| SealedVariantView {
-                name: NamingConvention::class_name(&variant.name),
-                fields: variant
-                    .fields
-                    .iter()
-                    .map(|field| FieldView {
-                        name: NamingConvention::property_name(&field.name),
-                        kotlin_type: TypeMapper::map_type(&field.field_type),
-                    })
-                    .collect(),
+            .map(|variant| {
+                let is_tuple = variant.fields.iter().any(|f| {
+                    f.name.starts_with('_')
+                        && f.name.chars().nth(1).map_or(false, |c| c.is_ascii_digit())
+                });
+                SealedVariantView {
+                    name: NamingConvention::class_name(&variant.name),
+                    is_tuple,
+                    fields: variant
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .map(|(i, field)| {
+                            let field_is_tuple = field.name.starts_with('_')
+                                && field
+                                    .name
+                                    .chars()
+                                    .nth(1)
+                                    .map_or(false, |c| c.is_ascii_digit());
+                            SealedFieldView {
+                                name: NamingConvention::property_name(&field.name),
+                                index: i,
+                                kotlin_type: TypeMapper::map_type(&field.field_type),
+                                is_tuple: field_is_tuple,
+                            }
+                        })
+                        .collect(),
+                }
             })
             .collect();
 
@@ -121,6 +270,113 @@ impl RecordTemplate {
 }
 
 #[derive(Template)]
+#[template(path = "kotlin/record_reader.txt", escape = "none")]
+pub struct RecordReaderTemplate {
+    pub reader_name: String,
+    pub class_name: String,
+    pub struct_size: usize,
+    pub fields: Vec<ReaderFieldView>,
+}
+
+pub struct ReaderFieldView {
+    pub name: String,
+    pub const_name: String,
+    pub offset: usize,
+    pub getter: String,
+    pub conversion: String,
+}
+
+impl RecordReaderTemplate {
+    pub fn from_record(record: &Record) -> Self {
+        let offsets = record.field_offsets();
+        let fields = record
+            .fields
+            .iter()
+            .zip(offsets)
+            .map(|(field, offset)| {
+                let (getter, conversion) = match &field.field_type {
+                    Type::Primitive(primitive) => (
+                        primitive.buffer_getter().to_string(),
+                        primitive.buffer_conversion().to_string(),
+                    ),
+                    _ => ("getLong".to_string(), String::new()),
+                };
+
+                ReaderFieldView {
+                    name: NamingConvention::property_name(&field.name),
+                    const_name: field.name.to_shouty_snake_case(),
+                    offset,
+                    getter,
+                    conversion,
+                }
+            })
+            .collect();
+
+        Self {
+            reader_name: format!("{}Reader", NamingConvention::class_name(&record.name)),
+            class_name: NamingConvention::class_name(&record.name),
+            struct_size: record.struct_size().as_usize(),
+            fields,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "kotlin/record_writer.txt", escape = "none")]
+pub struct RecordWriterTemplate {
+    pub writer_name: String,
+    pub class_name: String,
+    pub struct_size: usize,
+    pub fields: Vec<WriterFieldView>,
+}
+
+pub struct WriterFieldView {
+    pub name: String,
+    pub const_name: String,
+    pub offset: usize,
+    pub putter: String,
+    pub value_expr: String,
+}
+
+impl RecordWriterTemplate {
+    pub fn from_record(record: &Record) -> Self {
+        let offsets = record.field_offsets();
+        let fields = record
+            .fields
+            .iter()
+            .zip(offsets)
+            .map(|(field, offset)| {
+                let field_name = NamingConvention::property_name(&field.name);
+                let item_expr = format!("item.{}", field_name);
+
+                let (putter, value_expr) = match &field.field_type {
+                    Type::Primitive(primitive) => (
+                        primitive.buffer_putter().to_string(),
+                        primitive.buffer_value_expr(&item_expr),
+                    ),
+                    _ => ("putLong".to_string(), item_expr),
+                };
+
+                WriterFieldView {
+                    name: field_name,
+                    const_name: field.name.to_shouty_snake_case(),
+                    offset,
+                    putter,
+                    value_expr,
+                }
+            })
+            .collect();
+
+        Self {
+            writer_name: format!("{}Writer", NamingConvention::class_name(&record.name)),
+            class_name: NamingConvention::class_name(&record.name),
+            struct_size: record.struct_size().as_usize(),
+            fields,
+        }
+    }
+}
+
+#[derive(Template)]
 #[template(path = "kotlin/function.txt", escape = "none")]
 pub struct FunctionTemplate {
     pub func_name: String,
@@ -129,10 +385,15 @@ pub struct FunctionTemplate {
     pub params: Vec<ParamView>,
     pub return_type: Option<String>,
     pub return_kind: ReturnKind,
+    pub enum_name: Option<String>,
+    pub enum_codec_name: Option<String>,
+    pub enum_is_data: bool,
     pub inner_type: Option<String>,
     pub len_fn: Option<String>,
     pub copy_fn: Option<String>,
+    pub reader_name: Option<String>,
     pub is_async: bool,
+    pub option: Option<OptionView>,
 }
 
 pub struct ParamView {
@@ -142,8 +403,26 @@ pub struct ParamView {
 }
 
 impl FunctionTemplate {
-    pub fn from_function(function: &Function) -> Self {
+    pub fn from_function(function: &Function, _module: &Module) -> Self {
         let ffi_name = format!("{}_{}", naming::ffi_prefix(), function.name);
+
+        let enum_output = function.output.as_ref().and_then(|ty| match ty {
+            Type::Enum(name) => _module.enums.iter().find(|e| &e.name == name),
+            _ => None,
+        });
+
+        let enum_name = function.output.as_ref().and_then(|ty| match ty {
+            Type::Enum(name) => Some(NamingConvention::class_name(name)),
+            _ => None,
+        });
+
+        let enum_is_data = enum_output.map(|e| e.is_data_enum()).unwrap_or(false);
+        let enum_codec_name = if enum_is_data {
+            enum_name.as_ref().map(|name| format!("{}Codec", name))
+        } else {
+            None
+        };
+
         let return_kind = function
             .output
             .as_ref()
@@ -153,13 +432,36 @@ impl FunctionTemplate {
         let params: Vec<ParamView> = function
             .inputs
             .iter()
-            .map(|param| ParamView {
-                name: NamingConvention::param_name(&param.name),
-                kotlin_type: TypeMapper::map_type(&param.param_type),
-                conversion: ParamConversion::to_ffi(
-                    &NamingConvention::param_name(&param.name),
-                    &param.param_type,
-                ),
+            .map(|param| {
+                let param_name = NamingConvention::param_name(&param.name);
+
+                let conversion = match &param.param_type {
+                    Type::Enum(enum_name) => {
+                        let is_data_enum = _module
+                            .enums
+                            .iter()
+                            .find(|e| &e.name == enum_name)
+                            .map(|e| e.is_data_enum())
+                            .unwrap_or(false);
+
+                        if is_data_enum {
+                            format!(
+                                "{}Codec.pack({})",
+                                NamingConvention::class_name(enum_name),
+                                param_name
+                            )
+                        } else {
+                            ParamConversion::to_ffi(&param_name, &param.param_type)
+                        }
+                    }
+                    _ => ParamConversion::to_ffi(&param_name, &param.param_type),
+                };
+
+                ParamView {
+                    name: param_name,
+                    kotlin_type: TypeMapper::map_type(&param.param_type),
+                    conversion,
+                }
             })
             .collect();
 
@@ -167,6 +469,12 @@ impl FunctionTemplate {
         let inner_type = return_kind.inner_type().map(String::from);
         let len_fn = return_kind.len_fn().map(String::from);
         let copy_fn = return_kind.copy_fn().map(String::from);
+        let reader_name = return_kind.reader_name().map(String::from);
+
+        let option = function.output.as_ref().and_then(|ty| match ty {
+            Type::Option(inner) => Some(OptionView::from_inner(inner, _module)),
+            _ => None,
+        });
 
         Self {
             func_name: NamingConvention::method_name(&function.name),
@@ -175,10 +483,15 @@ impl FunctionTemplate {
             params,
             return_type,
             return_kind,
+            enum_name,
+            enum_codec_name,
+            enum_is_data,
             inner_type,
             len_fn,
             copy_fn,
+            reader_name,
             is_async: function.is_async,
+            option,
         }
     }
 }
@@ -213,6 +526,11 @@ impl ClassTemplate {
         let constructors: Vec<ConstructorView> = class
             .constructors
             .iter()
+            .filter(|ctor| {
+                ctor.inputs
+                    .iter()
+                    .all(|param| matches!(&param.param_type, Type::Primitive(_)))
+            })
             .map(|ctor| ConstructorView {
                 ffi_name: format!("{}_new", ffi_prefix),
                 params: ctor
@@ -233,6 +551,7 @@ impl ClassTemplate {
         let methods: Vec<MethodView> = class
             .methods
             .iter()
+            .filter(|method| Self::is_supported_method(method))
             .map(|method| {
                 let method_ffi = naming::method_ffi_name(&class.name, &method.name);
                 let return_type = method.output.as_ref().map(TypeMapper::map_type);
@@ -267,23 +586,42 @@ impl ClassTemplate {
         }
     }
 
+    fn is_supported_method(method: &crate::model::Method) -> bool {
+        let supported_output = match &method.output {
+            None => true,
+            Some(Type::Primitive(_)) => true,
+            _ => false,
+        };
+
+        let supported_inputs = method
+            .inputs
+            .iter()
+            .all(|param| matches!(&param.param_type, Type::Primitive(_)));
+
+        supported_output && supported_inputs
+    }
+
     fn generate_method_body(method: &crate::model::Method, ffi_name: &str) -> String {
         let args = std::iter::once("handle".to_string())
             .chain(method.inputs.iter().map(|p| {
-                ParamConversion::to_ffi(
-                    &NamingConvention::param_name(&p.name),
-                    &p.param_type,
-                )
+                ParamConversion::to_ffi(&NamingConvention::param_name(&p.name), &p.param_type)
             }))
             .collect::<Vec<_>>()
             .join(", ");
 
         match &method.output {
-            Some(ty) if ty.is_primitive() => format!("return Native.{}({})", ffi_name, args),
-            Some(_) => format!(
-                "val status = Native.{}({})\n        checkStatus(status)\n        return result",
-                ffi_name, args
-            ),
+            Some(Type::Primitive(primitive)) => {
+                let call = format!("Native.{}({})", ffi_name, args);
+                let converted = match primitive {
+                    crate::model::Primitive::U8 => format!("{}.toUByte()", call),
+                    crate::model::Primitive::U16 => format!("{}.toUShort()", call),
+                    crate::model::Primitive::U32 => format!("{}.toUInt()", call),
+                    crate::model::Primitive::U64 => format!("{}.toULong()", call),
+                    _ => call,
+                };
+                format!("return {}", converted)
+            }
+            Some(_) => format!("return Native.{}({})", ffi_name, args),
             None => format!(
                 "val status = Native.{}({})\n        checkStatus(status)",
                 ffi_name, args
@@ -299,12 +637,6 @@ pub struct NativeTemplate {
     pub prefix: String,
     pub functions: Vec<NativeFunctionView>,
     pub classes: Vec<NativeClassView>,
-    pub callback_traits: Vec<NativeCallbackTraitView>,
-}
-
-pub struct NativeCallbackTraitView {
-    pub register_fn: String,
-    pub create_fn: String,
 }
 
 pub struct NativeFunctionView {
@@ -345,7 +677,7 @@ impl NativeTemplate {
             .map(|func| {
                 let ffi_name = naming::function_ffi_name(&func.name);
                 let (has_out_param, out_type, return_jni_type) =
-                    Self::analyze_return(&func.output);
+                    Self::analyze_return(&func.output, module);
 
                 NativeFunctionView {
                     ffi_name,
@@ -354,7 +686,24 @@ impl NativeTemplate {
                         .iter()
                         .map(|p| NativeParamView {
                             name: NamingConvention::param_name(&p.name),
-                            jni_type: TypeMapper::jni_type(&p.param_type),
+                            jni_type: match &p.param_type {
+                                Type::Vec(inner) | Type::Slice(inner)
+                                    if matches!(inner.as_ref(), Type::Record(_)) =>
+                                {
+                                    "ByteArray".to_string()
+                                }
+                                Type::Enum(enum_name)
+                                    if module
+                                        .enums
+                                        .iter()
+                                        .find(|e| &e.name == enum_name)
+                                        .map(|e| e.is_data_enum())
+                                        .unwrap_or(false) =>
+                                {
+                                    "ByteArray".to_string()
+                                }
+                                _ => TypeMapper::jni_type(&p.param_type),
+                            },
                         })
                         .collect(),
                     has_out_param,
@@ -376,6 +725,7 @@ impl NativeTemplate {
                     .map(|ctor| {
                         ctor.inputs
                             .iter()
+                            .filter(|param| matches!(&param.param_type, Type::Primitive(_)))
                             .map(|p| NativeParamView {
                                 name: NamingConvention::param_name(&p.name),
                                 jni_type: TypeMapper::jni_type(&p.param_type),
@@ -387,10 +737,24 @@ impl NativeTemplate {
                 let methods: Vec<NativeMethodView> = class
                     .methods
                     .iter()
+                    .filter(|method| {
+                        let supported_output = match &method.output {
+                            None => true,
+                            Some(Type::Primitive(_)) => true,
+                            _ => false,
+                        };
+
+                        let supported_inputs = method
+                            .inputs
+                            .iter()
+                            .all(|param| matches!(&param.param_type, Type::Primitive(_)));
+
+                        supported_output && supported_inputs
+                    })
                     .map(|method| {
                         let method_ffi = naming::method_ffi_name(&class.name, &method.name);
                         let (has_out_param, out_type, return_jni_type) =
-                            Self::analyze_return(&method.output);
+                            Self::analyze_return(&method.output, module);
 
                         NativeMethodView {
                             ffi_name: method_ffi,
@@ -418,134 +782,42 @@ impl NativeTemplate {
             })
             .collect();
 
-        let callback_traits: Vec<NativeCallbackTraitView> = module
-            .callback_traits
-            .iter()
-            .map(|cb| {
-                let ffi_prefix = format!("{}_{}", naming::ffi_prefix(), cb.name);
-                NativeCallbackTraitView {
-                    register_fn: format!("{}_register_vtable", ffi_prefix),
-                    create_fn: format!("{}_create", ffi_prefix),
-                }
-            })
-            .collect();
-
         Self {
-            lib_name: module.name.clone(),
+            lib_name: format!("{}_jni", module.name),
             prefix,
             functions,
             classes,
-            callback_traits,
         }
     }
 
-    fn analyze_return(output: &Option<Type>) -> (bool, String, String) {
+    fn analyze_return(output: &Option<Type>, module: &Module) -> (bool, String, String) {
         match output {
-            None => (false, String::new(), "FfiStatus".to_string()),
+            None => (false, String::new(), "Int".to_string()),
             Some(ty) => match ty {
                 Type::Primitive(_) => (false, String::new(), TypeMapper::jni_type(ty)),
-                Type::String => (true, "FfiString.ByReference".to_string(), "FfiStatus".to_string()),
-                Type::Bytes => (true, "FfiBytes.ByReference".to_string(), "FfiStatus".to_string()),
-                Type::Vec(_) => (true, "LongByReference".to_string(), "FfiStatus".to_string()),
+                Type::String => (false, String::new(), "String?".to_string()),
+                Type::Bytes => (false, String::new(), "ByteArray?".to_string()),
+                Type::Option(inner) => {
+                    let view = OptionView::from_inner(inner, module);
+                    (false, String::new(), view.kotlin_native_type)
+                }
+                Type::Vec(inner) => match inner.as_ref() {
+                    Type::Primitive(_) => (false, String::new(), TypeMapper::jni_type(ty)),
+                    Type::Record(_) => (false, String::new(), "ByteBuffer".to_string()),
+                    _ => (false, String::new(), "Long".to_string()),
+                },
+                Type::Enum(enum_name)
+                    if module
+                        .enums
+                        .iter()
+                        .find(|e| &e.name == enum_name)
+                        .map(|e| e.is_data_enum())
+                        .unwrap_or(false) =>
+                {
+                    (false, String::new(), "ByteBuffer".to_string())
+                }
                 _ => (false, String::new(), TypeMapper::jni_type(ty)),
             },
-        }
-    }
-}
-
-#[derive(Template)]
-#[template(path = "kotlin/callback_trait.txt", escape = "none")]
-pub struct CallbackTraitTemplate {
-    pub doc: Option<String>,
-    pub interface_name: String,
-    pub wrapper_class: String,
-    pub vtable_var: String,
-    pub vtable_type: String,
-    pub bridge_name: String,
-    pub register_fn: String,
-    pub create_fn: String,
-    pub methods: Vec<TraitMethodView>,
-}
-
-pub struct TraitMethodView {
-    pub name: String,
-    pub ffi_name: String,
-    pub params: Vec<TraitParamView>,
-    pub return_type: Option<String>,
-    pub return_jni_type: String,
-    pub has_return: bool,
-    pub has_out_param: bool,
-    pub out_type: String,
-}
-
-pub struct TraitParamView {
-    pub name: String,
-    pub ffi_name: String,
-    pub kotlin_type: String,
-    pub jni_type: String,
-    pub conversion: String,
-}
-
-impl CallbackTraitTemplate {
-    pub fn from_trait(callback_trait: &CallbackTrait, _module: &Module) -> Self {
-        let trait_name = &callback_trait.name;
-        let interface_name = NamingConvention::class_name(trait_name);
-        let wrapper_class = format!("{}Wrapper", interface_name);
-        let vtable_type = format!("{}VTable", interface_name);
-        let ffi_prefix = format!("{}_{}", naming::ffi_prefix(), trait_name);
-
-        let methods: Vec<TraitMethodView> = callback_trait
-            .methods
-            .iter()
-            .map(|method| {
-                let has_return = method.has_return();
-                let return_jni_type = if has_return {
-                    method
-                        .output
-                        .as_ref()
-                        .map(TypeMapper::jni_type)
-                        .unwrap_or_else(|| "Unit".to_string())
-                } else {
-                    "FfiStatus".to_string()
-                };
-
-                TraitMethodView {
-                    name: NamingConvention::method_name(&method.name),
-                    ffi_name: NamingConvention::method_name(&method.name),
-                    params: method
-                        .inputs
-                        .iter()
-                        .map(|p| TraitParamView {
-                            name: NamingConvention::param_name(&p.name),
-                            ffi_name: NamingConvention::param_name(&p.name),
-                            kotlin_type: TypeMapper::map_type(&p.param_type),
-                            jni_type: TypeMapper::jni_type(&p.param_type),
-                            conversion: NamingConvention::param_name(&p.name),
-                        })
-                        .collect(),
-                    return_type: method.output.as_ref().map(TypeMapper::map_type),
-                    return_jni_type,
-                    has_return,
-                    has_out_param: has_return,
-                    out_type: method
-                        .output
-                        .as_ref()
-                        .map(|_| "LongByReference".to_string())
-                        .unwrap_or_default(),
-                }
-            })
-            .collect();
-
-        Self {
-            doc: callback_trait.doc.clone(),
-            interface_name,
-            wrapper_class,
-            vtable_var: format!("{}VTableImpl", NamingConvention::method_name(trait_name)),
-            vtable_type,
-            bridge_name: format!("{}Bridge", NamingConvention::class_name(trait_name)),
-            register_fn: format!("{}_register_vtable", ffi_prefix),
-            create_fn: format!("{}_create", ffi_prefix),
-            methods,
         }
     }
 }

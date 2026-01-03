@@ -1,3 +1,5 @@
+mod jni;
+mod layout;
 mod marshal;
 mod names;
 mod templates;
@@ -5,48 +7,60 @@ mod types;
 
 use askama::Template;
 
-pub use marshal::{ParamConversion, ReturnKind};
+pub use jni::JniGenerator;
+pub use marshal::{JniParamInfo, JniReturnKind, ParamConversion, ReturnKind};
 pub use names::NamingConvention;
 pub use templates::{
-    CallbackTraitTemplate, ClassTemplate, CStyleEnumTemplate, FunctionTemplate, NativeTemplate,
-    PreambleTemplate, RecordTemplate, SealedEnumTemplate,
+    CStyleEnumTemplate, ClassTemplate, DataEnumCodecTemplate, FunctionTemplate, NativeTemplate,
+    PreambleTemplate, RecordReaderTemplate, RecordTemplate, RecordWriterTemplate,
+    SealedEnumTemplate,
 };
 pub use types::TypeMapper;
 
-use crate::model::{CallbackTrait, Class, Enumeration, Function, Module, Record};
+use crate::model::{Class, Enumeration, Function, Module, Record, Type};
 
 pub struct Kotlin;
 
 impl Kotlin {
     pub fn render_module(module: &Module) -> String {
+        Self::render_module_with_package(module, &module.name)
+    }
+
+    pub fn render_module_with_package(module: &Module, package_name: &str) -> String {
         let mut sections = Vec::new();
 
-        sections.push(Self::render_preamble(module));
+        sections.push(Self::render_preamble_with_package(package_name));
 
-        module
-            .enums
-            .iter()
-            .for_each(|enumeration| sections.push(Self::render_enum(enumeration)));
+        module.enums.iter().for_each(|enumeration| {
+            sections.push(Self::render_enum(enumeration));
+            if enumeration.is_data_enum() {
+                sections.push(Self::render_data_enum_codec(enumeration));
+            }
+        });
 
-        module
-            .records
-            .iter()
-            .for_each(|record| sections.push(Self::render_record(record)));
+        let blittable_vec_return_records = Self::find_blittable_vec_return_records(module);
+        let blittable_vec_param_records = Self::find_blittable_vec_param_records(module);
+
+        module.records.iter().for_each(|record| {
+            sections.push(Self::render_record(record));
+            if blittable_vec_return_records.contains(&record.name.as_str()) {
+                sections.push(Self::render_record_reader(record));
+            }
+            if blittable_vec_param_records.contains(&record.name.as_str()) {
+                sections.push(Self::render_record_writer(record));
+            }
+        });
 
         module
             .functions
             .iter()
-            .for_each(|function| sections.push(Self::render_function(function)));
+            .filter(|func| Self::is_supported_function(func, module))
+            .for_each(|function| sections.push(Self::render_function(function, module)));
 
         module
             .classes
             .iter()
             .for_each(|class| sections.push(Self::render_class(class)));
-
-        module
-            .callback_traits
-            .iter()
-            .for_each(|cb| sections.push(Self::render_callback_trait(cb, module)));
 
         sections.push(Self::render_native(module));
 
@@ -66,6 +80,12 @@ impl Kotlin {
             .expect("preamble template failed")
     }
 
+    pub fn render_preamble_with_package(package_name: &str) -> String {
+        PreambleTemplate::with_package(package_name)
+            .render()
+            .expect("preamble template failed")
+    }
+
     pub fn render_enum(enumeration: &Enumeration) -> String {
         if enumeration.is_c_style() {
             CStyleEnumTemplate::from_enum(enumeration)
@@ -78,14 +98,32 @@ impl Kotlin {
         }
     }
 
+    pub fn render_data_enum_codec(enumeration: &Enumeration) -> String {
+        DataEnumCodecTemplate::from_enum(enumeration)
+            .render()
+            .expect("data enum codec template failed")
+    }
+
     pub fn render_record(record: &Record) -> String {
         RecordTemplate::from_record(record)
             .render()
             .expect("record template failed")
     }
 
-    pub fn render_function(function: &Function) -> String {
-        FunctionTemplate::from_function(function)
+    pub fn render_record_reader(record: &Record) -> String {
+        RecordReaderTemplate::from_record(record)
+            .render()
+            .expect("record reader template failed")
+    }
+
+    pub fn render_record_writer(record: &Record) -> String {
+        RecordWriterTemplate::from_record(record)
+            .render()
+            .expect("record writer template failed")
+    }
+
+    pub fn render_function(function: &Function, module: &Module) -> String {
+        FunctionTemplate::from_function(function, module)
             .render()
             .expect("function template failed")
     }
@@ -102,10 +140,109 @@ impl Kotlin {
             .expect("native template failed")
     }
 
-    pub fn render_callback_trait(callback_trait: &CallbackTrait, module: &Module) -> String {
-        CallbackTraitTemplate::from_trait(callback_trait, module)
-            .render()
-            .expect("callback trait template failed")
+    fn find_blittable_vec_return_records(module: &Module) -> std::collections::HashSet<&str> {
+        module
+            .functions
+            .iter()
+            .filter_map(|func| {
+                if let Some(Type::Vec(inner)) = &func.output {
+                    if let Type::Record(record_name) = inner.as_ref() {
+                        let is_blittable = module
+                            .records
+                            .iter()
+                            .find(|record| &record.name == record_name)
+                            .map(|record| record.is_blittable())
+                            .unwrap_or(false);
+                        if is_blittable {
+                            return Some(record_name.as_str());
+                        }
+                    }
+                }
+                None
+            })
+            .collect()
+    }
+
+    fn find_blittable_vec_param_records(module: &Module) -> std::collections::HashSet<&str> {
+        module
+            .functions
+            .iter()
+            .flat_map(|func| func.inputs.iter())
+            .filter_map(|param| match &param.param_type {
+                Type::Vec(inner) | Type::Slice(inner) => match inner.as_ref() {
+                    Type::Record(record_name) => {
+                        let is_blittable = module
+                            .records
+                            .iter()
+                            .find(|record| &record.name == record_name)
+                            .map(|record| record.is_blittable())
+                            .unwrap_or(false);
+                        if is_blittable {
+                            Some(record_name.as_str())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn is_supported_function(func: &Function, module: &Module) -> bool {
+        if func.is_async {
+            return false;
+        }
+
+        let supported_output = match &func.output {
+            None => true,
+            Some(Type::Primitive(_)) => true,
+            Some(Type::String) => true,
+            Some(Type::Enum(_)) => true,
+            Some(Type::Vec(inner)) => match inner.as_ref() {
+                Type::Primitive(_) => true,
+                Type::Record(record_name) => Self::is_record_blittable(record_name, module),
+                _ => false,
+            },
+            Some(Type::Option(inner)) => Self::is_supported_option_inner(inner, module),
+            _ => false,
+        };
+
+        let supported_inputs = func.inputs.iter().all(|param| match &param.param_type {
+            Type::Primitive(_) | Type::String | Type::Enum(_) => true,
+            Type::Vec(inner) | Type::Slice(inner) => match inner.as_ref() {
+                Type::Primitive(_) => true,
+                Type::Record(record_name) => Self::is_record_blittable(record_name, module),
+                _ => false,
+            },
+            _ => false,
+        });
+
+        supported_output && supported_inputs
+    }
+
+    fn is_supported_option_inner(inner: &Type, module: &Module) -> bool {
+        match inner {
+            Type::Primitive(_) | Type::String => true,
+            Type::Record(name) => Self::is_record_blittable(name, module),
+            Type::Enum(name) => module
+                .enums
+                .iter()
+                .find(|e| &e.name == name)
+                .map(|e| e.is_data_enum())
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
+    fn is_record_blittable(record_name: &str, module: &Module) -> bool {
+        module
+            .records
+            .iter()
+            .find(|record| record.name == record_name)
+            .map(|record| record.is_blittable())
+            .unwrap_or(false)
     }
 }
 
@@ -113,8 +250,7 @@ impl Kotlin {
 mod tests {
     use super::*;
     use crate::model::{
-        Constructor, Method, Module, Parameter, Primitive, Receiver, RecordField, TraitMethod,
-        TraitMethodParam, Type, Variant,
+        Constructor, Method, Module, Parameter, Primitive, Receiver, RecordField, Type, Variant,
     };
 
     #[test]
@@ -209,7 +345,8 @@ mod tests {
             .with_param(Parameter::new("sensor_id", Type::Primitive(Primitive::I32)))
             .with_output(Type::Primitive(Primitive::F64));
 
-        let output = Kotlin::render_function(&function);
+        let module = Module::new("test");
+        let output = Kotlin::render_function(&function, &module);
         assert!(output.contains("fun getSensorValue"));
         assert!(output.contains("sensorId: Int"));
         assert!(output.contains(": Double"));
@@ -232,35 +369,13 @@ mod tests {
     }
 
     #[test]
-    fn test_render_async_function() {
-        let function = Function::new("fetch_data")
-            .with_output(Type::String)
-            .make_async();
-
-        let output = Kotlin::render_function(&function);
-        assert!(output.contains("suspend fun fetchData"));
-        assert!(output.contains("suspendCancellableCoroutine"));
-        assert!(output.contains("FfiCallback"));
-    }
-
-    #[test]
-    fn test_render_callback_trait() {
-        let callback = CallbackTrait::new("data_handler")
-            .with_method(
-                TraitMethod::new("on_data")
-                    .with_param(TraitMethodParam::new("data", Type::Bytes)),
-            )
-            .with_method(TraitMethod::new("on_error").with_param(TraitMethodParam::new(
-                "code",
-                Type::Primitive(Primitive::I32),
-            )));
+    fn test_render_string_function() {
+        let function = Function::new("fetch_data").with_output(Type::String);
 
         let module = Module::new("test");
-        let output = Kotlin::render_callback_trait(&callback, &module);
-        assert!(output.contains("interface DataHandler"));
-        assert!(output.contains("fun onData(`data`: ByteArray)"));
-        assert!(output.contains("fun onError(code: Int)"));
-        assert!(output.contains("DataHandlerBridge"));
+        let output = Kotlin::render_function(&function, &module);
+        assert!(output.contains("fun fetchData(): String"));
+        assert!(output.contains("Native.riff_fetch_data"));
     }
 
     #[test]
@@ -276,11 +391,11 @@ mod tests {
             );
 
         let output = Kotlin::render_native(&module);
-        assert!(output.contains("interface NativeLib : Library"));
-        assert!(output.contains("riff_get_version"));
-        assert!(output.contains("riff_sensor_new"));
-        assert!(output.contains("riff_sensor_free"));
-        assert!(output.contains("riff_sensor_read"));
-        assert!(output.contains("riff_cancel_async"));
+        assert!(output.contains("private object Native"));
+        assert!(output.contains("System.loadLibrary"));
+        assert!(output.contains("@JvmStatic external fun riff_get_version"));
+        assert!(output.contains("@JvmStatic external fun riff_sensor_new"));
+        assert!(output.contains("@JvmStatic external fun riff_sensor_free"));
+        assert!(output.contains("@JvmStatic external fun riff_sensor_read"));
     }
 }

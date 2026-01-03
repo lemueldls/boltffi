@@ -1,58 +1,53 @@
-{%- if is_async %}
-suspend fun {{ func_name }}({% for param in params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% match return_type %}{% when Some with (ret) %}: {{ ret }}{% when None %}{% endmatch %} = suspendCancellableCoroutine { cont ->
-    val callback = object : FfiCallback {
-        override fun onSuccess(result: Long) {
-            pendingCallbacks.remove(this)
-{%- if return_kind.is_primitive() %}
-            cont.resume(result{% match return_type %}{% when Some with (ret) %}.to{{ ret }}(){% when None %}{% endmatch %})
-{%- else if return_kind.is_string() %}
-            val ffiString = FfiString().apply { ptr = Pointer(result) }
-            cont.resume(ffiString.toKotlinString().also { Native.{{ prefix }}_free_string(ffiString) })
-{%- else if return_kind.is_unit() %}
-            cont.resume(Unit)
-{%- else %}
-            cont.resume(result)
-{%- endif %}
-        }
-        override fun onError(code: Int) {
-            pendingCallbacks.remove(this)
-            cont.resumeWithException(FfiException(code, lastErrorMessage() ?: "Async error"))
-        }
-    }
-    pendingCallbacks.add(callback)
-    val handle = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}{% if !params.is_empty() %}, {% endif %}callback)
-    cont.invokeOnCancellation {
-        pendingCallbacks.remove(callback)
-        Native.{{ prefix }}_cancel_async(handle)
-    }
-}
-{%- else %}
 fun {{ func_name }}({% for param in params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% match return_type %}{% when Some with (ret) %}: {{ ret }}{% when None %}{% endmatch %} {
 {%- if return_kind.is_primitive() %}
     return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- else if return_kind.is_string() %}
-    val result = FfiString()
-    val status = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}{% if !params.is_empty() %}, {% endif %}result)
-    checkStatus(status)
-    return result.toKotlinString().also { Native.{{ prefix }}_free_string(result) }
+    return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}) ?: throw FfiException(-1, "Null string returned")
+{%- else if let Some(opt) = option %}
+{%- if opt.strategy.is_packed() %}
+    val packed = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+    return if ((packed shr 32) != 0L) packed.toInt() else null
+{%- else if opt.strategy.is_boxed() %}
+    return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- else if opt.strategy.is_nullable_string() %}
+    return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- else if opt.strategy.is_nullable_buffer() %}
+{%- if let Some(reader) = opt.reader_name %}
+    val buf = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}) ?: return null
+    return useNativeBuffer(buf) { buffer ->
+        buffer.order(ByteOrder.nativeOrder())
+        {{ reader }}.read(buffer, 0)
+    }
+{%- else if let Some(codec) = opt.codec_name %}
+    val buf = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}) ?: return null
+    return useNativeBuffer(buf) { buffer ->
+        buffer.order(ByteOrder.nativeOrder())
+        {{ codec }}.read(buffer)
+    }
+{%- endif %}
+{%- endif %}
+{%- else if return_kind.is_enum() %}
+{%- if enum_is_data %}
+    val buf = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+    return useNativeBuffer(buf) { buffer ->
+        buffer.order(ByteOrder.nativeOrder())
+        {{ enum_codec_name.as_ref().unwrap() }}.read(buffer)
+    }
+{%- else %}
+    return {{ enum_name.as_ref().unwrap() }}.fromValue(Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}))
+{%- endif %}
 {%- else if return_kind.is_vec() %}
-{%- match len_fn %}{% when Some with (len) %}
-    val len = Native.{{ len }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- when None %}{% endmatch %}
-{%- match inner_type %}{% when Some with (inner) %}
-    val buffer = {{ inner }}Array(len.toInt())
-{%- when None %}{% endmatch %}
-    val written = LongByReference()
-{%- match copy_fn %}{% when Some with (copy) %}
-    val status = Native.{{ copy }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}{% if !params.is_empty() %}, {% endif %}buffer, len, written)
-{%- when None %}{% endmatch %}
-    checkStatus(status)
-    return buffer.take(written.value.toInt())
+    return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}){{ return_kind.vec_list_suffix() }}
+{%- else if return_kind.is_vec_record() %}
+    val buf = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+    return useNativeBuffer(buf) { buffer ->
+        buffer.order(ByteOrder.nativeOrder())
+        {{ reader_name.as_ref().unwrap() }}.readAll(buffer, buffer.capacity() / {{ reader_name.as_ref().unwrap() }}.STRUCT_SIZE)
+    }
 {%- else if return_kind.is_unit() %}
     val status = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
     checkStatus(status)
 {%- else %}
-    TODO("return kind not implemented")
+    return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- endif %}
 }
-{%- endif %}

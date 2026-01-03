@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::layout::{CLayout, Size, StructLayout};
 use super::types::{Deprecation, Type};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +42,27 @@ impl Record {
 
     pub fn field_count(&self) -> usize {
         self.fields.len()
+    }
+
+    pub fn is_blittable(&self) -> bool {
+        self.fields
+            .iter()
+            .all(|field| field.field_type.is_primitive())
+    }
+
+    pub fn layout(&self) -> StructLayout {
+        StructLayout::from_layouts(self.fields.iter().map(|field| field.field_type.c_layout()))
+    }
+
+    pub fn struct_size(&self) -> Size {
+        self.layout().total_size()
+    }
+
+    pub fn field_offsets(&self) -> Vec<usize> {
+        self.layout()
+            .offsets()
+            .map(|offset| offset.as_usize())
+            .collect()
     }
 }
 
