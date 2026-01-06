@@ -5,7 +5,7 @@ use riff_ffi_rules::naming;
 use crate::model::{Class, DataEnumLayout, Enumeration, Function, Module, Record, Type};
 
 use super::layout::{KotlinBufferRead, KotlinBufferWrite};
-use super::marshal::{OptionAbiKotlin, OptionView, ParamConversion, ResultView, ReturnKind};
+use super::marshal::{OptionView, ParamConversion, ResultView, ReturnKind};
 use super::{NamingConvention, TypeMapper};
 
 #[derive(Template)]

@@ -302,6 +302,33 @@ public func {{ func_name }}({% for param in params %}{% if param.is_mut_slice %}
 {%- endif %}
     ensureOk(status)
     return Array(UnsafeBufferPointer(start: ptr, count: Int(written)))
+{%- else if return_kind.option_vec_is_string() %}
+    let ptr = UnsafeMutablePointer<FfiString>.allocate(capacity: Int(len))
+    defer { ptr.deallocate() }
+    var written: UInt = 0
+{%- if let Some(copy_fn) = return_kind.option_vec_copy_fn() %}
+    let status = {{ copy_fn }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}ptr, len, &written)
+{%- endif %}
+    ensureOk(status)
+    var result = [String]()
+    result.reserveCapacity(Int(written))
+    for i in 0..<Int(written) {
+        let ffiStr = ptr[i]
+        result.append(stringFromFfi(ffiStr))
+        {{ prefix }}_free_string(ffiStr)
+    }
+    return result
+{%- else if return_kind.option_vec_is_enum() %}
+{%- if let Some(inner) = return_kind.inner_type() %}
+    var rawArr = [Int32](repeating: 0, count: Int(len))
+    var written: UInt = 0
+{%- if let Some(copy_fn) = return_kind.option_vec_copy_fn() %}
+    let status = {{ copy_fn }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}&rawArr, len, &written)
+{%- endif %}
+    ensureOk(status)
+    let writtenCount = min(Int(written), rawArr.count)
+    return rawArr.prefix(writtenCount).map { {{ inner }}(fromC: $0) }
+{%- endif %}
 {%- else %}
 {%- if let Some(inner) = return_kind.inner_type() %}
     var arr = [{{ inner }}](repeating: 0, count: Int(len))
@@ -316,36 +343,29 @@ public func {{ func_name }}({% for param in params %}{% if param.is_mut_slice %}
     return arr
 {%- endif %}
 {%- else if return_kind.is_option_string() %}
-    var outValue = FfiString()
-    let isSome = {{ ffi_name }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}&outValue)
-    if isSome == 0 { return nil }
-    defer { {{ prefix }}_free_string(outValue) }
-    return stringFromFfi(outValue)
+    let result = {{ ffi_name }}({{ ffi_args }})
+    if !result.isSome { return nil }
+    defer { {{ prefix }}_free_string(result.value) }
+    return stringFromFfi(result.value)
 {%- else if return_kind.is_option_enum() %}
 {%- if let Some(inner) = return_kind.inner_type() %}
-    var outValue: Int32 = 0
-    let isSome = {{ ffi_name }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}&outValue)
-    return isSome != 0 ? {{ inner }}(fromC: outValue) : nil
+    let result = {{ ffi_name }}({{ ffi_args }})
+    return result.isSome ? {{ inner }}(fromC: result.value) : nil
 {%- endif %}
 {%- else if return_kind.is_option_data_enum() %}
 {%- if let Some(inner) = return_kind.inner_type() %}
-{%- if let Some(ffi_module) = ffi_module_name %}
-    var outValue = {{ ffi_module }}.{{ inner }}()
-    let isSome = {{ ffi_name }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}&outValue)
-    return isSome != 0 ? {{ inner }}(fromC: outValue) : nil
-{%- endif %}
+    let result = {{ ffi_name }}({{ ffi_args }})
+    return result.isSome ? {{ inner }}(fromC: result.value) : nil
 {%- endif %}
 {%- else if return_kind.is_option_record() %}
 {%- if let Some(inner) = return_kind.inner_type() %}
-    var outValue: {{ inner }} = .init()
-    let isSome = {{ ffi_name }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}&outValue)
-    return isSome != 0 ? outValue : nil
+    let result = {{ ffi_name }}({{ ffi_args }})
+    return result.isSome ? result.value : nil
 {%- endif %}
 {%- else if return_kind.is_option_scalar() %}
 {%- if let Some(inner) = return_kind.inner_type() %}
-    var outValue: {{ inner }} = .init()
-    let isSome = {{ ffi_name }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}&outValue)
-    return isSome != 0 ? outValue : nil
+    let result = {{ ffi_name }}({{ ffi_args }})
+    return result.isSome ? result.value : nil
 {%- endif %}
 {%- else if return_kind.is_enum() %}
 {%- if let Some(name) = return_kind.type_name() %}

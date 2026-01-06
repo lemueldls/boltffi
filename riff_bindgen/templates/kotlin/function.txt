@@ -47,9 +47,9 @@ fun {{ func_name }}({% for param in params %}{{ param.name }}: {{ param.kotlin_t
 {%- else if return_kind.is_string() %}
     return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}) ?: throw FfiException(-1, "Null string returned")
 {%- else if let Some(opt) = option %}
-{%- if opt.strategy.is_vec_primitive() %}
-    return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}){{ opt.strategy.optional_vec_list_suffix() }}
-{%- else if opt.strategy.is_vec_record() %}
+{%- if opt.is_vec_primitive() %}
+    return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}){{ opt.vec_list_suffix() }}
+{%- else if opt.is_vec_record() %}
 {%- if let Some(reader) = opt.reader_name %}
     val buf = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}) ?: return null
     return useNativeBuffer(buf) { buffer ->
@@ -57,14 +57,14 @@ fun {{ func_name }}({% for param in params %}{{ param.name }}: {{ param.kotlin_t
         {{ reader }}.readAll(buffer, buffer.capacity() / {{ reader }}.STRUCT_SIZE)
     }
 {%- endif %}
-{%- else if opt.strategy.is_packed() %}
+{%- else if opt.is_packed() %}
     val packed = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
     return if ((packed shr 32) != 0L) packed.toInt() else null
-{%- else if opt.strategy.is_large_primitive() %}
+{%- else if opt.is_large_primitive() %}
     return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- else if opt.strategy.is_string() %}
+{%- else if opt.is_string() %}
     return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- else if opt.strategy.is_record() || opt.strategy.is_data_enum() %}
+{%- else if opt.is_record() || opt.is_data_enum() %}
 {%- if let Some(reader) = opt.reader_name %}
     val buf = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}) ?: return null
     return useNativeBuffer(buf) { buffer ->
@@ -78,14 +78,14 @@ fun {{ func_name }}({% for param in params %}{{ param.name }}: {{ param.kotlin_t
         {{ codec }}.read(buffer)
     }
 {%- endif %}
-{%- else if opt.strategy.is_enum() %}
+{%- else if opt.is_enum() %}
 {%- if let Some(enum_name) = opt.reader_name %}
     val value = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
     return if (value >= 0) {{ enum_name }}.fromValue(value) else null
 {%- endif %}
-{%- else if opt.strategy.is_vec_string() %}
+{%- else if opt.is_vec_string() %}
     return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})?.toList()
-{%- else if opt.strategy.is_vec_enum() %}
+{%- else if opt.is_vec_enum() %}
 {%- if let Some(enum_name) = opt.reader_name %}
     return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})?.map { {{ enum_name }}.fromValue(it) }
 {%- endif %}

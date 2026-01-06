@@ -151,7 +151,7 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
     jbyte* _{{ param.name }}_ptr = (*env)->GetByteArrayElements(env, {{ param.name }}, NULL);
 {%- endif %}
 {%- endfor %}
-{%- if opt.strategy.is_vec_record() %}
+{%- if opt.is_vec_record() %}
     int32_t _is_some = {{ func.ffi_name }}_is_some({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
     if (!_is_some) {
 {%- for param in func.params %}
@@ -207,7 +207,7 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endif %}
 {%- endfor %}
     return (*env)->NewDirectByteBuffer(env, _buf, (jlong)_byte_size);
-{%- else if opt.strategy.is_vec_primitive() %}
+{%- else if opt.is_vec_primitive() %}
     int32_t _is_some = {{ func.ffi_name }}_is_some({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
     if (!_is_some) {
 {%- for param in func.params %}
@@ -264,7 +264,7 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endif %}
 {%- endfor %}
     return _result;
-{%- else if opt.strategy.is_vec_string() %}
+{%- else if opt.is_vec_string() %}
     int32_t _is_some = {{ func.ffi_name }}_is_some({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
     if (!_is_some) {
 {%- for param in func.params %}
@@ -333,7 +333,7 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
     }
     free(_strings);
     return _result;
-{%- else if opt.strategy.is_vec_enum() %}
+{%- else if opt.is_vec_enum() %}
     int32_t _is_some = {{ func.ffi_name }}_is_some({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
     if (!_is_some) {
 {%- for param in func.params %}
@@ -391,8 +391,7 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endfor %}
     return _result;
 {%- else %}
-    {{ opt.c_out_type }} _out_value = {0};
-    int32_t _is_some = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}, {% endfor %}&_out_value);
+    {{ opt.info.ffi_type }} _result = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
     (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -407,31 +406,32 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
     if ({{ param.name }}) (*env)->ReleaseStringUTFChars(env, {{ param.name }}, _{{ param.name }}_c);
 {%- endif %}
 {%- endfor %}
-{%- if opt.strategy.is_packed() %}
-    return ((jlong)_is_some << 32) | ((jlong)(uint32_t)*(int32_t*)&_out_value);
-{%- else if opt.strategy.is_large_primitive() %}
-    if (!_is_some) return NULL;
-    jclass _box_cls = (*env)->FindClass(env, "{{ opt.strategy.box_class() }}");
-    jmethodID _value_of = (*env)->GetStaticMethodID(env, _box_cls, "valueOf", "{{ opt.strategy.box_signature() }}");
-    return (*env)->CallStaticObjectMethod(env, _box_cls, _value_of, ({{ opt.strategy.box_jni_type() }})_out_value);
-{%- else if opt.strategy.is_string() %}
-    if (!_is_some) return NULL;
+{%- if opt.is_packed() %}
+    return ((jlong)_result.isSome << 32) | ((jlong)(uint32_t)*(int32_t*)&_result.value);
+{%- else if opt.is_large_primitive() %}
+    if (!_result.isSome) return NULL;
+    jclass _box_cls = (*env)->FindClass(env, "{{ opt.box_class() }}");
+    jmethodID _value_of = (*env)->GetStaticMethodID(env, _box_cls, "valueOf", "{{ opt.box_signature() }}");
+    return (*env)->CallStaticObjectMethod(env, _box_cls, _value_of, ({{ opt.box_jni_type() }})_result.value);
+{%- else if opt.is_string() %}
+    if (!_result.isSome) return NULL;
+    FfiString _out_value = _result.value;
     char* _tmp = (char*)malloc(_out_value.len + 1);
     if (!_tmp) { {{ prefix }}_free_string(_out_value); return NULL; }
     memcpy(_tmp, _out_value.ptr, _out_value.len);
     _tmp[_out_value.len] = '\0';
-    jstring _result = (*env)->NewStringUTF(env, _tmp);
+    jstring _str_result = (*env)->NewStringUTF(env, _tmp);
     free(_tmp);
     {{ prefix }}_free_string(_out_value);
-    return _result;
-{%- else if opt.strategy.is_record() || opt.strategy.is_data_enum() %}
-    if (!_is_some) return NULL;
-    void* _buf = malloc({{ opt.strategy.struct_size() }});
+    return _str_result;
+{%- else if opt.is_record() || opt.is_data_enum() %}
+    if (!_result.isSome) return NULL;
+    void* _buf = malloc({{ opt.struct_size }});
     if (!_buf) return NULL;
-    memcpy(_buf, &_out_value, {{ opt.strategy.struct_size() }});
-    return (*env)->NewDirectByteBuffer(env, _buf, (jlong){{ opt.strategy.struct_size() }});
-{%- else if opt.strategy.is_enum() %}
-    return _is_some ? (jint)_out_value : (jint)-1;
+    memcpy(_buf, &_result.value, {{ opt.struct_size }});
+    return (*env)->NewDirectByteBuffer(env, _buf, (jlong){{ opt.struct_size }});
+{%- else if opt.is_enum() %}
+    return _result.isSome ? (jint)_result.value : (jint)-1;
 {%- endif %}
 {%- endif %}
 }

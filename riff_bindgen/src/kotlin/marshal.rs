@@ -1,90 +1,11 @@
 use super::{NamingConvention, TypeMapper};
-use crate::model::{DataEnumLayout, Module, OptionAbi, Primitive, Type};
-
-pub trait OptionAbiKotlin {
-    fn optional_vec_list_suffix(&self) -> &'static str;
-    fn jni_return_type(&self) -> &'static str;
-    fn box_class(&self) -> &'static str;
-    fn box_signature(&self) -> &'static str;
-    fn box_jni_type(&self) -> &'static str;
-}
-
-impl OptionAbiKotlin for OptionAbi {
-    fn optional_vec_list_suffix(&self) -> &'static str {
-        match self {
-            Self::VecPrimitive {
-                primitive: Primitive::U8,
-            } => "?.map { it.toUByte() }",
-            Self::VecPrimitive {
-                primitive: Primitive::U16,
-            } => "?.map { it.toUShort() }",
-            Self::VecPrimitive {
-                primitive: Primitive::U32,
-            } => "?.map { it.toUInt() }",
-            Self::VecPrimitive {
-                primitive: Primitive::U64,
-            } => "?.map { it.toULong() }",
-            Self::VecPrimitive { .. } => "?.toList()",
-            _ => "",
-        }
-    }
-
-    fn jni_return_type(&self) -> &'static str {
-        match self {
-            Self::Packed { .. } => "jlong",
-            Self::Primitive { .. } => "jobject",
-            Self::String => "jstring",
-            Self::Record { .. }
-            | Self::DataEnum { .. }
-            | Self::VecRecord { .. }
-            | Self::VecDataEnum { .. } => "jobject",
-            Self::Enum => "jint",
-            Self::VecPrimitive { primitive } => primitive.jni_array_type(),
-            Self::VecString => "jobjectArray",
-            Self::VecEnum => "jintArray",
-        }
-    }
-
-    fn box_class(&self) -> &'static str {
-        match self {
-            Self::Primitive {
-                primitive: Primitive::I64 | Primitive::U64 | Primitive::Isize | Primitive::Usize,
-            } => "java/lang/Long",
-            Self::Primitive {
-                primitive: Primitive::F64,
-            } => "java/lang/Double",
-            _ => "",
-        }
-    }
-
-    fn box_signature(&self) -> &'static str {
-        match self {
-            Self::Primitive {
-                primitive: Primitive::I64 | Primitive::U64 | Primitive::Isize | Primitive::Usize,
-            } => "(J)Ljava/lang/Long;",
-            Self::Primitive {
-                primitive: Primitive::F64,
-            } => "(D)Ljava/lang/Double;",
-            _ => "",
-        }
-    }
-
-    fn box_jni_type(&self) -> &'static str {
-        match self {
-            Self::Primitive {
-                primitive: Primitive::I64 | Primitive::U64 | Primitive::Isize | Primitive::Usize,
-            } => "jlong",
-            Self::Primitive {
-                primitive: Primitive::F64,
-            } => "jdouble",
-            _ => "",
-        }
-    }
-}
+use crate::model::{DataEnumLayout, Module, OptionInfo, Primitive, Type};
 
 #[derive(Debug, Clone)]
 pub struct OptionView {
-    pub strategy: OptionAbi,
+    pub info: OptionInfo,
+    pub is_data_enum: bool,
+    pub struct_size: usize,
     pub c_out_type: String,
     pub kotlin_native_type: String,
     pub reader_name: Option<String>,
@@ -93,18 +14,19 @@ pub struct OptionView {
 
 impl OptionView {
     pub fn from_inner(inner: &Type, module: &Module) -> Self {
-        let strategy = OptionAbi::from_type(
-            inner,
-            |name| module.struct_size(name),
-            |name| module.is_data_enum(name),
-        );
+        let info = OptionInfo::from_type(inner);
+        let is_data_enum = info.is_data_enum(module);
+        let struct_size = info.struct_size(module);
+
         let c_out_type = Self::resolve_c_out_type(inner);
-        let kotlin_native_type = Self::resolve_kotlin_native_type(&strategy, inner);
-        let reader_name = Self::resolve_reader_name(inner, &strategy);
-        let codec_name = Self::resolve_codec_name(inner, &strategy);
+        let kotlin_native_type = Self::resolve_kotlin_native_type(inner, &info, is_data_enum);
+        let reader_name = Self::resolve_reader_name(inner, &info, is_data_enum);
+        let codec_name = Self::resolve_codec_name(inner, is_data_enum);
 
         Self {
-            strategy,
+            info,
+            is_data_enum,
+            struct_size,
             c_out_type,
             kotlin_native_type,
             reader_name,
@@ -122,41 +44,156 @@ impl OptionView {
         }
     }
 
-    fn resolve_kotlin_native_type(abi: &OptionAbi, inner: &Type) -> String {
-        match abi {
-            OptionAbi::Packed { .. } => "Long".to_string(),
-            OptionAbi::Primitive { .. } => format!("{}?", TypeMapper::map_type(inner)),
-            OptionAbi::String => "String?".to_string(),
-            OptionAbi::Record { .. } | OptionAbi::DataEnum { .. } => "ByteBuffer?".to_string(),
-            OptionAbi::Enum => "Int".to_string(),
-            OptionAbi::VecPrimitive { .. } => format!("{}?", TypeMapper::jni_type(inner)),
-            OptionAbi::VecRecord { .. } | OptionAbi::VecDataEnum { .. } => "ByteBuffer?".to_string(),
-            OptionAbi::VecString => "Array<String>?".to_string(),
-            OptionAbi::VecEnum => "IntArray?".to_string(),
+    fn resolve_kotlin_native_type(inner: &Type, info: &OptionInfo, is_data_enum: bool) -> String {
+        if info.is_vec {
+            let vec_inner = inner.vec_inner().unwrap();
+            match vec_inner {
+                Type::Primitive(p) if p.is_unsigned() => format!("{}?", TypeMapper::jni_type(inner)),
+                Type::Primitive(_) => format!("{}?", TypeMapper::jni_type(inner)),
+                Type::String => "Array<String>?".to_string(),
+                Type::Record(_) => "ByteBuffer?".to_string(),
+                Type::Enum(_) if is_data_enum => "ByteBuffer?".to_string(),
+                Type::Enum(_) => "IntArray?".to_string(),
+                _ => "Any?".to_string(),
+            }
+        } else {
+            match inner {
+                Type::Primitive(p) if p.fits_in_32_bits() => "Long".to_string(),
+                Type::Primitive(_) => format!("{}?", TypeMapper::map_type(inner)),
+                Type::String => "String?".to_string(),
+                Type::Record(_) => "ByteBuffer?".to_string(),
+                Type::Enum(_) if is_data_enum => "ByteBuffer?".to_string(),
+                Type::Enum(_) => "Int".to_string(),
+                _ => "Any?".to_string(),
+            }
         }
     }
 
-    fn resolve_reader_name(inner: &Type, strategy: &OptionAbi) -> Option<String> {
+    fn resolve_reader_name(inner: &Type, _info: &OptionInfo, is_data_enum: bool) -> Option<String> {
         match inner {
             Type::Record(name) => Some(format!("{}Reader", NamingConvention::class_name(name))),
-            Type::Enum(name) if strategy.is_enum() => Some(NamingConvention::class_name(name)),
+            Type::Enum(name) if !is_data_enum => Some(NamingConvention::class_name(name)),
             Type::Vec(vec_inner) => match vec_inner.as_ref() {
                 Type::Record(name) => Some(format!("{}Reader", NamingConvention::class_name(name))),
-                Type::Enum(name) if strategy.is_vec_enum() => {
-                    Some(NamingConvention::class_name(name))
-                }
+                Type::Enum(name) if !is_data_enum => Some(NamingConvention::class_name(name)),
                 _ => None,
             },
             _ => None,
         }
     }
 
-    fn resolve_codec_name(inner: &Type, strategy: &OptionAbi) -> Option<String> {
+    fn resolve_codec_name(inner: &Type, is_data_enum: bool) -> Option<String> {
         match inner {
-            Type::Enum(name) if strategy.is_data_enum() => {
+            Type::Enum(name) if is_data_enum => {
                 Some(format!("{}Codec", NamingConvention::class_name(name)))
             }
             _ => None,
+        }
+    }
+
+    pub fn is_packed(&self) -> bool {
+        !self.info.is_vec && self.info.inner.primitive().map(|p| p.fits_in_32_bits()).unwrap_or(false)
+    }
+
+    pub fn is_large_primitive(&self) -> bool {
+        !self.info.is_vec && self.info.inner.primitive().map(|p| !p.fits_in_32_bits()).unwrap_or(false)
+    }
+
+    pub fn is_string(&self) -> bool {
+        !self.info.is_vec && self.info.inner.is_string()
+    }
+
+    pub fn is_record(&self) -> bool {
+        !self.info.is_vec && self.info.inner.is_record()
+    }
+
+    pub fn is_enum(&self) -> bool {
+        !self.info.is_vec && self.info.inner.is_enum() && !self.is_data_enum
+    }
+
+    pub fn is_data_enum(&self) -> bool {
+        !self.info.is_vec && self.info.inner.is_enum() && self.is_data_enum
+    }
+
+    pub fn is_vec_primitive(&self) -> bool {
+        self.info.is_vec && self.info.inner.vec_inner().map(|t| t.is_primitive()).unwrap_or(false)
+    }
+
+    pub fn is_vec_record(&self) -> bool {
+        self.info.is_vec && self.info.inner.vec_inner().map(|t| t.is_record()).unwrap_or(false)
+    }
+
+    pub fn is_vec_string(&self) -> bool {
+        self.info.is_vec && self.info.inner.vec_inner().map(|t| t.is_string()).unwrap_or(false)
+    }
+
+    pub fn is_vec_enum(&self) -> bool {
+        self.info.is_vec && self.info.inner.vec_inner().map(|t| t.is_enum() && !self.is_data_enum).unwrap_or(false)
+    }
+
+    pub fn is_vec_data_enum(&self) -> bool {
+        self.info.is_vec && self.info.inner.vec_inner().map(|t| t.is_enum() && self.is_data_enum).unwrap_or(false)
+    }
+
+    pub fn jni_return_type(&self) -> &'static str {
+        if self.is_packed() {
+            "jlong"
+        } else if self.is_large_primitive() {
+            "jobject"
+        } else if self.is_string() {
+            "jstring"
+        } else if self.is_record() || self.is_data_enum() {
+            "jobject"
+        } else if self.is_enum() {
+            "jint"
+        } else if self.is_vec_primitive() {
+            self.info.inner.vec_inner().and_then(|t| t.primitive()).map(|p| p.jni_array_type()).unwrap_or("jobject")
+        } else if self.is_vec_string() {
+            "jobjectArray"
+        } else if self.is_vec_enum() {
+            "jintArray"
+        } else if self.is_vec_record() || self.is_vec_data_enum() {
+            "jobject"
+        } else {
+            "jobject"
+        }
+    }
+
+    pub fn box_class(&self) -> &'static str {
+        match self.info.inner.primitive() {
+            Some(Primitive::I64 | Primitive::U64 | Primitive::Isize | Primitive::Usize) => "java/lang/Long",
+            Some(Primitive::F64) => "java/lang/Double",
+            _ => "",
+        }
+    }
+
+    pub fn box_signature(&self) -> &'static str {
+        match self.info.inner.primitive() {
+            Some(Primitive::I64 | Primitive::U64 | Primitive::Isize | Primitive::Usize) => "(J)Ljava/lang/Long;",
+            Some(Primitive::F64) => "(D)Ljava/lang/Double;",
+            _ => "",
+        }
+    }
+
+    pub fn box_jni_type(&self) -> &'static str {
+        match self.info.inner.primitive() {
+            Some(Primitive::I64 | Primitive::U64 | Primitive::Isize | Primitive::Usize) => "jlong",
+            Some(Primitive::F64) => "jdouble",
+            _ => "",
+        }
+    }
+
+    pub fn vec_list_suffix(&self) -> &'static str {
+        if !self.info.is_vec {
+            return "";
+        }
+        match self.info.inner.vec_inner().and_then(|t| t.primitive()) {
+            Some(Primitive::U8) => "?.map { it.toUByte() }",
+            Some(Primitive::U16) => "?.map { it.toUShort() }",
+            Some(Primitive::U32) => "?.map { it.toUInt() }",
+            Some(Primitive::U64) => "?.map { it.toULong() }",
+            Some(_) => "?.toList()",
+            None => "",
         }
     }
 }
@@ -171,7 +208,7 @@ pub enum ResultOkKind {
     DataEnum { name: String, struct_size: usize },
     VecPrimitive { primitive: Primitive, len_fn: String, copy_fn: String },
     VecRecord { name: String, struct_size: usize, len_fn: String, copy_fn: String },
-    Option(Box<OptionAbi>),
+    Option(Box<OptionView>),
 }
 
 #[derive(Debug, Clone)]
@@ -292,12 +329,8 @@ impl ResultView {
                 _ => ResultOkKind::Void,
             },
             Type::Option(inner) => {
-                let abi = OptionAbi::from_type(
-                    inner,
-                    |name| module.struct_size(name),
-                    |name| module.is_data_enum(name),
-                );
-                ResultOkKind::Option(Box::new(abi))
+                let view = OptionView::from_inner(inner, module);
+                ResultOkKind::Option(Box::new(view))
             }
             _ => ResultOkKind::Void,
         }
@@ -419,9 +452,9 @@ impl ResultView {
         }
     }
 
-    pub fn option_abi(&self) -> Option<&OptionAbi> {
+    pub fn option_view(&self) -> Option<&OptionView> {
         match &self.ok_kind {
-            ResultOkKind::Option(abi) => Some(abi),
+            ResultOkKind::Option(view) => Some(view),
             _ => None,
         }
     }
@@ -802,7 +835,7 @@ impl JniReturnKind {
             Self::Vec { .. } => "jlong",
             Self::CStyleEnum => "jint",
             Self::DataEnum { .. } => "jobject",
-            Self::Option(view) => view.strategy.jni_return_type(),
+            Self::Option(view) => view.jni_return_type(),
             Self::Result(view) => view.jni_return_type(),
         }
     }

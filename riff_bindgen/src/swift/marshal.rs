@@ -1,13 +1,15 @@
-use crate::model::{Module, OptionAbi, Primitive, Type};
+use crate::model::{Module, OptionInfo, Primitive, Type};
 use riff_ffi_rules::naming;
 
 use super::names::NamingConvention;
 
 #[derive(Debug, Clone)]
 pub struct OptionView {
-    pub abi: OptionAbi,
+    pub info: OptionInfo,
     pub inner_type: String,
     pub is_struct: bool,
+    pub is_data_enum: bool,
+    pub struct_size: usize,
     pub is_some_fn: String,
     pub len_fn: String,
     pub copy_fn: String,
@@ -15,11 +17,10 @@ pub struct OptionView {
 
 impl OptionView {
     pub fn from_type(inner: &Type, func_name: &str, module: &Module) -> Self {
-        let abi = OptionAbi::from_type(
-            inner,
-            |name| module.struct_size(name),
-            |name| module.is_data_enum(name),
-        );
+        let info = OptionInfo::from_type(inner);
+        let is_data_enum = info.is_data_enum(module);
+        let struct_size = info.struct_size(module);
+
         let swift_inner = SwiftType::from_model(inner);
         let (inner_type, is_struct) = match &swift_inner {
             SwiftType::Vec(vec_inner) => (vec_inner.swift_type(), vec_inner.is_struct()),
@@ -27,9 +28,11 @@ impl OptionView {
         };
 
         Self {
-            abi,
+            info,
             inner_type,
             is_struct,
+            is_data_enum,
+            struct_size,
             is_some_fn: format!("{}_is_some", naming::function_ffi_name(func_name)),
             len_fn: naming::function_ffi_vec_len(func_name),
             copy_fn: naming::function_ffi_vec_copy_into(func_name),
@@ -37,35 +40,47 @@ impl OptionView {
     }
 
     pub fn is_vec(&self) -> bool {
-        self.abi.is_vec()
+        self.info.is_vec
     }
 
     pub fn is_scalar(&self) -> bool {
-        !self.abi.is_vec()
+        !self.info.is_vec
     }
 
     pub fn is_packed(&self) -> bool {
-        self.abi.is_packed()
+        !self.info.is_vec && self.info.inner.primitive().map(|p| p.fits_in_32_bits()).unwrap_or(false)
     }
 
     pub fn is_large_primitive(&self) -> bool {
-        self.abi.is_large_primitive()
+        !self.info.is_vec && self.info.inner.primitive().map(|p| !p.fits_in_32_bits()).unwrap_or(false)
     }
 
     pub fn is_string(&self) -> bool {
-        self.abi.is_string()
+        !self.info.is_vec && self.info.inner.is_string()
     }
 
     pub fn is_record(&self) -> bool {
-        self.abi.is_record()
+        !self.info.is_vec && self.info.inner.is_record()
     }
 
     pub fn is_enum(&self) -> bool {
-        self.abi.is_enum()
+        !self.info.is_vec && self.info.inner.is_enum() && !self.is_data_enum
     }
 
     pub fn is_data_enum(&self) -> bool {
-        self.abi.is_data_enum()
+        !self.info.is_vec && self.info.inner.is_enum() && self.is_data_enum
+    }
+
+    pub fn is_vec_string(&self) -> bool {
+        self.info.is_vec && self.info.inner.vec_inner().map(|t| t.is_string()).unwrap_or(false)
+    }
+
+    pub fn is_vec_enum(&self) -> bool {
+        self.info.is_vec && self.info.inner.vec_inner().map(|t| t.is_enum() && !self.is_data_enum).unwrap_or(false)
+    }
+
+    pub fn ffi_option_type(&self) -> &str {
+        &self.info.ffi_type
     }
 }
 
@@ -394,6 +409,14 @@ impl ReturnKind {
             Self::Option(opt) if opt.is_vec() => Some(&opt.copy_fn),
             _ => None,
         }
+    }
+
+    pub fn option_vec_is_string(&self) -> bool {
+        matches!(self, Self::Option(opt) if opt.is_vec_string())
+    }
+
+    pub fn option_vec_is_enum(&self) -> bool {
+        matches!(self, Self::Option(opt) if opt.is_vec_enum())
     }
 }
 

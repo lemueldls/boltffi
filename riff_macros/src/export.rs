@@ -562,29 +562,15 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
 
             match abi {
                 OptionReturnAbi::OutValue { inner } => {
-                    let body = quote! {
-                        match #call {
-                            Some(v) => {
-                                *out = v;
-                                1
-                            }
-                            None => 0,
-                        }
-                    };
-
                     if has_params {
                         quote! {
                             #input
 
                             #[unsafe(no_mangle)]
-                            #fn_vis unsafe extern "C" fn #export_ident(
-                                #(#ffi_params),*,
-                                out: *mut #inner
-                            ) -> i32 {
-                                if out.is_null() {
-                                    return 0;
-                                }
-                                #body
+                            #fn_vis extern "C" fn #export_ident(
+                                #(#ffi_params),*
+                            ) -> crate::FfiOption<#inner> {
+                                #call.into()
                             }
                         }
                     } else {
@@ -592,39 +578,22 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                             #input
 
                             #[unsafe(no_mangle)]
-                            #fn_vis unsafe extern "C" fn #export_ident(out: *mut #inner) -> i32 {
-                                if out.is_null() {
-                                    return 0;
-                                }
-                                #body
+                            #fn_vis extern "C" fn #export_ident() -> crate::FfiOption<#inner> {
+                                #call.into()
                             }
                         }
                     }
                 }
                 OptionReturnAbi::OutFfiString => {
-                    let body = quote! {
-                        match #call {
-                            Some(v) => {
-                                *out = crate::FfiString::from(v);
-                                1
-                            }
-                            None => 0,
-                        }
-                    };
-
                     if has_params {
                         quote! {
                             #input
 
                             #[unsafe(no_mangle)]
-                            #fn_vis unsafe extern "C" fn #export_ident(
-                                #(#ffi_params),*,
-                                out: *mut crate::FfiString
-                            ) -> i32 {
-                                if out.is_null() {
-                                    return 0;
-                                }
-                                #body
+                            #fn_vis extern "C" fn #export_ident(
+                                #(#ffi_params),*
+                            ) -> crate::FfiOption<crate::FfiString> {
+                                #call.map(crate::FfiString::from).into()
                             }
                         }
                     } else {
@@ -632,11 +601,8 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                             #input
 
                             #[unsafe(no_mangle)]
-                            #fn_vis unsafe extern "C" fn #export_ident(out: *mut crate::FfiString) -> i32 {
-                                if out.is_null() {
-                                    return 0;
-                                }
-                                #body
+                            #fn_vis extern "C" fn #export_ident() -> crate::FfiOption<crate::FfiString> {
+                                #call.map(crate::FfiString::from).into()
                             }
                         }
                     }

@@ -95,6 +95,17 @@ impl Primitive {
         )
     }
 
+    pub fn is_unsigned(self) -> bool {
+        matches!(self, Self::U8 | Self::U16 | Self::U32 | Self::U64 | Self::Usize)
+    }
+
+    pub fn fits_in_32_bits(self) -> bool {
+        matches!(
+            self,
+            Self::Bool | Self::I8 | Self::U8 | Self::I16 | Self::U16 | Self::I32 | Self::U32 | Self::F32
+        )
+    }
+
     pub fn jni_array_type(self) -> &'static str {
         match self {
             Self::Bool => "jbooleanArray",
@@ -188,6 +199,50 @@ impl Type {
         Self::Result {
             ok: Box::new(ok),
             err: Box::new(err),
+        }
+    }
+
+    pub fn is_string(&self) -> bool {
+        matches!(self, Self::String)
+    }
+
+    pub fn is_record(&self) -> bool {
+        matches!(self, Self::Record(_))
+    }
+
+    pub fn is_enum(&self) -> bool {
+        matches!(self, Self::Enum(_))
+    }
+
+    pub fn is_vec(&self) -> bool {
+        matches!(self, Self::Vec(_))
+    }
+
+    pub fn primitive(&self) -> Option<Primitive> {
+        match self {
+            Self::Primitive(p) => Some(*p),
+            _ => None,
+        }
+    }
+
+    pub fn record_name(&self) -> Option<&str> {
+        match self {
+            Self::Record(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    pub fn enum_name(&self) -> Option<&str> {
+        match self {
+            Self::Enum(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    pub fn vec_inner(&self) -> Option<&Type> {
+        match self {
+            Self::Vec(inner) => Some(inner),
+            _ => None,
         }
     }
 }

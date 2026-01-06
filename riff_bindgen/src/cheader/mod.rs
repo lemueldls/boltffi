@@ -15,9 +15,10 @@ impl CHeaderGenerator {
         out.push_str(&Self::generate_preamble(&prefix));
         out.push_str(&Self::generate_async_types_if_needed(module, &prefix));
         out.push_str(&Self::generate_stream_types_if_needed(module));
-        out.push_str(&Self::generate_ffi_generic_types(module));
+        out.push_str(&Self::generate_ffi_primitive_types(module));
         out.push_str(&Self::generate_enums(&module.enums));
         out.push_str(&Self::generate_records(&module.records));
+        out.push_str(&Self::generate_ffi_named_option_types(module));
         out.push_str(&Self::generate_traits(&module.callback_traits, &prefix));
         out.push_str(&Self::generate_functions(&module.functions));
         out.push_str(&Self::generate_classes(&module.classes, &prefix));
@@ -79,54 +80,97 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             .to_string()
     }
 
-    fn generate_ffi_generic_types(module: &Module) -> String {
+    fn collect_ffi_types(module: &Module) -> (Vec<String>, Vec<String>, Vec<String>) {
         use std::collections::HashSet;
         let mut buf_types: HashSet<String> = HashSet::new();
-        let mut option_types: HashSet<String> = HashSet::new();
+        let mut primitive_option_types: HashSet<String> = HashSet::new();
+        let mut named_option_types: HashSet<String> = HashSet::new();
 
-        let collect_from_type =
-            |ty: &Type, buf_types: &mut HashSet<String>, option_types: &mut HashSet<String>| {
-                match ty {
-                    Type::Vec(inner) if inner.is_primitive() => {
-                        buf_types.insert(Self::primitive_to_cbindgen_name(inner));
-                    }
-                    Type::Option(inner) if inner.is_primitive() => {
-                        option_types.insert(Self::primitive_to_cbindgen_name(inner));
-                    }
-                    Type::Result { ok, .. } => {
-                        if let Type::Vec(inner) = ok.as_ref() {
-                            if inner.is_primitive() {
-                                buf_types.insert(Self::primitive_to_cbindgen_name(inner));
-                            }
-                        }
-                        if let Type::Option(inner) = ok.as_ref() {
-                            if inner.is_primitive() {
-                                option_types.insert(Self::primitive_to_cbindgen_name(inner));
-                            }
-                        }
-                    }
-                    _ => {}
+        let collect_from_type = |ty: &Type,
+                                  buf_types: &mut HashSet<String>,
+                                  prim_opts: &mut HashSet<String>,
+                                  named_opts: &mut HashSet<String>| {
+            match ty {
+                Type::Vec(inner) if inner.is_primitive() => {
+                    buf_types.insert(Self::primitive_to_cbindgen_name(inner));
                 }
-            };
+                Type::Option(inner) if !matches!(inner.as_ref(), Type::Vec(_)) => {
+                    match inner.as_ref() {
+                        Type::Primitive(_) => {
+                            prim_opts.insert(Self::primitive_to_cbindgen_name(inner));
+                        }
+                        Type::String => {
+                            prim_opts.insert("FfiString".to_string());
+                        }
+                        Type::Record(name) | Type::Enum(name) => {
+                            named_opts.insert(name.clone());
+                        }
+                        _ => {}
+                    }
+                }
+                Type::Result { ok, .. } => {
+                    if let Type::Vec(inner) = ok.as_ref() {
+                        if inner.is_primitive() {
+                            buf_types.insert(Self::primitive_to_cbindgen_name(inner));
+                        }
+                    }
+                    if let Type::Option(inner) = ok.as_ref() {
+                        if !matches!(inner.as_ref(), Type::Vec(_)) {
+                            match inner.as_ref() {
+                                Type::Primitive(_) => {
+                                    prim_opts.insert(Self::primitive_to_cbindgen_name(inner));
+                                }
+                                Type::String => {
+                                    prim_opts.insert("FfiString".to_string());
+                                }
+                                Type::Record(name) | Type::Enum(name) => {
+                                    named_opts.insert(name.clone());
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        };
 
         for func in &module.functions {
-            if func.is_async {
-                if let Some(ref ty) = func.output {
-                    collect_from_type(ty, &mut buf_types, &mut option_types);
-                }
+            if let Some(ref ty) = func.output {
+                collect_from_type(
+                    ty,
+                    &mut buf_types,
+                    &mut primitive_option_types,
+                    &mut named_option_types,
+                );
             }
         }
 
         for class in &module.classes {
             for method in &class.methods {
-                if method.is_async {
-                    if let Some(ref ty) = method.output {
-                        collect_from_type(ty, &mut buf_types, &mut option_types);
-                    }
+                if let Some(ref ty) = method.output {
+                    collect_from_type(
+                        ty,
+                        &mut buf_types,
+                        &mut primitive_option_types,
+                        &mut named_option_types,
+                    );
                 }
             }
         }
 
+        let mut buf_vec: Vec<_> = buf_types.into_iter().collect();
+        let mut prim_vec: Vec<_> = primitive_option_types.into_iter().collect();
+        let mut named_vec: Vec<_> = named_option_types.into_iter().collect();
+        buf_vec.sort();
+        prim_vec.sort();
+        named_vec.sort();
+
+        (buf_vec, prim_vec, named_vec)
+    }
+
+    fn generate_ffi_primitive_types(module: &Module) -> String {
+        let (buf_types, primitive_option_types, _) = Self::collect_ffi_types(module);
         let mut out = String::new();
 
         for ty_name in &buf_types {
@@ -137,8 +181,8 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             ));
         }
 
-        for ty_name in &option_types {
-            let c_type = Self::cbindgen_name_to_c_type(ty_name);
+        for ty_name in &primitive_option_types {
+            let c_type = Self::option_type_to_c_type(ty_name);
             out.push_str(&format!(
                 "typedef struct FfiOption_{} {{ bool isSome; {} value; }} FfiOption_{};\n",
                 ty_name, c_type, ty_name
@@ -149,6 +193,24 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             out.push_str(&format!(
                 "void riff_free_buf_{}(FfiBuf_{} buf);\n",
                 ty_name, ty_name
+            ));
+        }
+
+        if !out.is_empty() {
+            out.push('\n');
+        }
+
+        out
+    }
+
+    fn generate_ffi_named_option_types(module: &Module) -> String {
+        let (_, _, named_option_types) = Self::collect_ffi_types(module);
+        let mut out = String::new();
+
+        for ty_name in &named_option_types {
+            out.push_str(&format!(
+                "typedef struct FfiOption_{} {{ bool isSome; {} value; }} FfiOption_{};\n",
+                ty_name, ty_name, ty_name
             ));
         }
 
@@ -175,6 +237,25 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             "usize" => "size_t",
             "isize" => "ptrdiff_t",
             _ => "void",
+        }
+    }
+
+    fn option_type_to_c_type(name: &str) -> String {
+        match name {
+            "i8" => "int8_t".to_string(),
+            "i16" => "int16_t".to_string(),
+            "i32" => "int32_t".to_string(),
+            "i64" => "int64_t".to_string(),
+            "u8" => "uint8_t".to_string(),
+            "u16" => "uint16_t".to_string(),
+            "u32" => "uint32_t".to_string(),
+            "u64" => "uint64_t".to_string(),
+            "f32" => "float".to_string(),
+            "f64" => "double".to_string(),
+            "bool" => "bool".to_string(),
+            "usize" => "size_t".to_string(),
+            "isize" => "ptrdiff_t".to_string(),
+            other => other.to_string(),
         }
     }
 
@@ -522,17 +603,23 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         params: &[(String, String)],
         inner: &Type,
     ) -> String {
-        let mut new_params = params.to_vec();
-        new_params.push(("out".to_string(), format!("{} *", Self::type_to_c(inner))));
-        let params_str = Self::format_params(&new_params);
-        format!("int32_t {}({});\n", ffi_name, params_str)
+        let option_type = Self::option_type_name(inner);
+        let params_str = Self::format_params(params);
+        format!("{} {}({});\n", option_type, ffi_name, params_str)
+    }
+
+    fn option_type_name(inner: &Type) -> String {
+        match inner {
+            Type::Primitive(p) => format!("FfiOption_{}", p.rust_name()),
+            Type::String => "FfiOption_FfiString".to_string(),
+            Type::Record(name) | Type::Enum(name) => format!("FfiOption_{}", name),
+            other => format!("FfiOption_{}", Self::type_to_c(other)),
+        }
     }
 
     fn generate_option_string_return_function(ffi_name: &str, params: &[(String, String)]) -> String {
-        let mut new_params = params.to_vec();
-        new_params.push(("out".to_string(), "FfiString *".to_string()));
-        let params_str = Self::format_params(&new_params);
-        format!("int32_t {}({});\n", ffi_name, params_str)
+        let params_str = Self::format_params(params);
+        format!("FfiOption_FfiString {}({});\n", ffi_name, params_str)
     }
 
     fn generate_option_vec_return_function(

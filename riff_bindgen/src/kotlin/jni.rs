@@ -1,7 +1,7 @@
 use askama::Template;
 use riff_ffi_rules::naming;
 
-use super::marshal::{JniParamInfo, JniReturnKind, OptionAbiKotlin, OptionView, ResultView};
+use super::marshal::{JniParamInfo, JniReturnKind, OptionView, ResultView};
 use crate::model::{Class, Function, Method, Module, Type};
 
 #[derive(Template)]
