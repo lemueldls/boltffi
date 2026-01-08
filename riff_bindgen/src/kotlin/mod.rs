@@ -198,7 +198,7 @@ impl Kotlin {
 
     fn is_supported_function(func: &Function, module: &Module) -> bool {
         if func.is_async {
-            return Self::is_supported_async_function(func);
+            return Self::is_supported_async_function(func, module);
         }
 
         let supported_output = match &func.output {
@@ -269,13 +269,14 @@ impl Kotlin {
             .unwrap_or(false)
     }
 
-    fn is_supported_async_function(func: &Function) -> bool {
+    fn is_supported_async_function(func: &Function, module: &Module) -> bool {
         let supported_output = match &func.output {
             None => true,
             Some(Type::Primitive(_)) => true,
             Some(Type::String) => true,
             Some(Type::Void) => true,
             Some(Type::Vec(inner)) => matches!(inner.as_ref(), Type::Primitive(_)),
+            Some(Type::Record(name)) => Self::is_record_blittable(name, module),
             _ => false,
         };
 

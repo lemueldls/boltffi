@@ -35,12 +35,15 @@ pub struct JniAsyncFunctionView {
     pub complete_is_void: bool,
     pub complete_is_string: bool,
     pub complete_is_vec: bool,
+    pub complete_is_record: bool,
     pub vec_buf_type: String,
     pub vec_free_fn: String,
     pub vec_jni_array_type: String,
     pub vec_new_array_fn: String,
     pub vec_set_array_fn: String,
     pub vec_jni_element_type: String,
+    pub record_c_type: String,
+    pub record_struct_size: usize,
     pub params: Vec<JniParamInfo>,
 }
 
@@ -277,8 +280,8 @@ impl JniGlueTemplate {
         let async_functions: Vec<JniAsyncFunctionView> = module
             .functions
             .iter()
-            .filter(|func| func.is_async && Self::is_supported_async_function(func))
-            .map(|func| Self::map_async_function(func, &jni_prefix))
+            .filter(|func| func.is_async && Self::is_supported_async_function(func, module))
+            .map(|func| Self::map_async_function(func, &jni_prefix, module))
             .collect();
 
         let has_async = !async_functions.is_empty();
@@ -304,13 +307,14 @@ impl JniGlueTemplate {
         }
     }
 
-    fn is_supported_async_function(func: &Function) -> bool {
+    fn is_supported_async_function(func: &Function, module: &Module) -> bool {
         let supported_output = match &func.output {
             None => true,
             Some(Type::Primitive(_)) => true,
             Some(Type::String) => true,
             Some(Type::Void) => true,
             Some(Type::Vec(inner)) => matches!(inner.as_ref(), Type::Primitive(_)),
+            Some(Type::Record(name)) => Self::is_record_blittable(name, module),
             _ => false,
         };
 
@@ -322,7 +326,7 @@ impl JniGlueTemplate {
         supported_output && supported_inputs
     }
 
-    fn map_async_function(func: &Function, jni_prefix: &str) -> JniAsyncFunctionView {
+    fn map_async_function(func: &Function, jni_prefix: &str, module: &Module) -> JniAsyncFunctionView {
         let ffi_name = naming::function_ffi_name(&func.name);
         let jni_func_name = ffi_name.replace('_', "_1");
 
@@ -374,6 +378,18 @@ impl JniGlueTemplate {
             })
             .unwrap_or_default();
 
+        let record_info = func.output.as_ref().and_then(|t| match t {
+            Type::Record(name) => module
+                .records
+                .iter()
+                .find(|r| &r.name == name)
+                .map(|r| (name.clone(), r.layout().total_size().as_usize())),
+            _ => None,
+        });
+
+        let complete_is_record = record_info.is_some();
+        let (record_c_type, record_struct_size) = record_info.unwrap_or_default();
+
         let (jni_complete_return, jni_complete_c_type, complete_is_void, complete_is_string) =
             match &func.output {
                 None | Some(Type::Void) => ("void".to_string(), "void".to_string(), true, false),
@@ -388,6 +404,7 @@ impl JniGlueTemplate {
                     Type::Primitive(p) => (p.jni_array_type().to_string(), p.ffi_buf_type().to_string(), false, false),
                     _ => ("jlong".to_string(), "int64_t".to_string(), false, false),
                 },
+                Some(Type::Record(_)) => ("jobject".to_string(), record_c_type.clone(), false, false),
                 _ => ("jlong".to_string(), "int64_t".to_string(), false, false),
             };
 
@@ -408,12 +425,15 @@ impl JniGlueTemplate {
             complete_is_void,
             complete_is_string,
             complete_is_vec,
+            complete_is_record,
             vec_buf_type,
             vec_free_fn,
             vec_jni_array_type,
             vec_new_array_fn,
             vec_set_array_fn,
             vec_jni_element_type,
+            record_c_type,
+            record_struct_size,
             params,
         }
     }

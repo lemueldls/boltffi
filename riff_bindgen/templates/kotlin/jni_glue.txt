@@ -1106,6 +1106,14 @@ JNIEXPORT {{ func.jni_complete_return }} JNICALL {{ func.jni_complete_name }}(JN
     }
     {{ func.vec_free_fn }}(_buf);
     return _result;
+{%- else if func.complete_is_record %}
+    FfiStatus _status;
+    {{ func.record_c_type }} _out = {{ func.ffi_complete }}((RustFutureHandle)future, &_status);
+    if (_status.code != 0) return NULL;
+    void* _buf = malloc({{ func.record_struct_size }});
+    if (!_buf) return NULL;
+    memcpy(_buf, &_out, {{ func.record_struct_size }});
+    return (*env)->NewDirectByteBuffer(env, _buf, (jlong){{ func.record_struct_size }});
 {%- else %}
     FfiStatus _status;
     {{ func.jni_complete_c_type }} _result = {{ func.ffi_complete }}((RustFutureHandle)future, &_status);
