@@ -571,6 +571,14 @@ impl AsyncFunctionTemplate {
                     _ => call,
                 }
             }
+            Some(Type::Record(name)) => {
+                let reader_name = format!("{}Reader", NamingConvention::class_name(name));
+                format!(
+                    "{}(Native.{}(future) ?: throw FfiException(-1, \"Null record\"))",
+                    reader_name,
+                    naming::function_ffi_complete(&function.name)
+                )
+            }
             Some(Type::Void) | None => format!(
                 "Native.{}(future)",
                 naming::function_ffi_complete(&function.name)
