@@ -579,6 +579,21 @@ impl AsyncFunctionTemplate {
                     naming::function_ffi_complete(&function.name)
                 )
             }
+            Some(Type::Result { ok, .. }) => {
+                let call = format!("Native.{}(future)", naming::function_ffi_complete(&function.name));
+                match ok.as_ref() {
+                    Type::Void => call,
+                    Type::String => format!("{} ?: throw FfiException(-1, \"Null string\")", call),
+                    Type::Primitive(p) => match p {
+                        crate::model::Primitive::U8 => format!("{}.toUByte()", call),
+                        crate::model::Primitive::U16 => format!("{}.toUShort()", call),
+                        crate::model::Primitive::U32 => format!("{}.toUInt()", call),
+                        crate::model::Primitive::U64 => format!("{}.toULong()", call),
+                        _ => call,
+                    },
+                    _ => call,
+                }
+            }
             Some(Type::Void) | None => format!(
                 "Native.{}(future)",
                 naming::function_ffi_complete(&function.name)

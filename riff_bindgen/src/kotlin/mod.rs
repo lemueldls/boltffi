@@ -277,6 +277,7 @@ impl Kotlin {
             Some(Type::Void) => true,
             Some(Type::Vec(inner)) => matches!(inner.as_ref(), Type::Primitive(_)),
             Some(Type::Record(name)) => Self::is_record_blittable(name, module),
+            Some(Type::Result { ok, .. }) => Self::is_supported_async_result_ok(ok),
             _ => false,
         };
 
@@ -286,6 +287,10 @@ impl Kotlin {
             .all(|param| matches!(&param.param_type, Type::Primitive(_) | Type::String));
 
         supported_output && supported_inputs
+    }
+
+    fn is_supported_async_result_ok(ok: &Type) -> bool {
+        matches!(ok, Type::Primitive(_) | Type::String | Type::Void)
     }
 }
 

@@ -2,7 +2,8 @@ use askama::Template;
 use riff_ffi_rules::naming;
 
 use super::marshal::{JniParamInfo, JniReturnKind, OptionView, ResultView};
-use crate::model::{Class, Function, Method, Module, Type};
+use super::{NamingConvention, TypeMapper};
+use crate::model::{Class, DataEnumLayout, Function, Method, Module, Type};
 
 #[derive(Template)]
 #[template(path = "kotlin/jni_glue.txt", escape = "none")]
@@ -36,6 +37,7 @@ pub struct JniAsyncFunctionView {
     pub complete_is_string: bool,
     pub complete_is_vec: bool,
     pub complete_is_record: bool,
+    pub complete_is_result: bool,
     pub vec_buf_type: String,
     pub vec_free_fn: String,
     pub vec_jni_array_type: String,
@@ -44,6 +46,12 @@ pub struct JniAsyncFunctionView {
     pub vec_jni_element_type: String,
     pub record_c_type: String,
     pub record_struct_size: usize,
+    pub result_ok_is_void: bool,
+    pub result_ok_is_string: bool,
+    pub result_ok_c_type: String,
+    pub result_ok_jni_type: String,
+    pub result_err_is_string: bool,
+    pub result_err_struct_size: usize,
     pub params: Vec<JniParamInfo>,
 }
 
@@ -292,7 +300,7 @@ impl JniGlueTemplate {
             .map(|c| Self::map_class(c, &prefix, &jni_prefix))
             .collect();
 
-        let class_name = super::NamingConvention::class_name(&module.name);
+        let class_name = NamingConvention::class_name(&module.name);
 
         Self {
             prefix,
@@ -315,6 +323,7 @@ impl JniGlueTemplate {
             Some(Type::Void) => true,
             Some(Type::Vec(inner)) => matches!(inner.as_ref(), Type::Primitive(_)),
             Some(Type::Record(name)) => Self::is_record_blittable(name, module),
+            Some(Type::Result { ok, .. }) => Self::is_supported_async_result_ok(ok),
             _ => false,
         };
 
@@ -324,6 +333,10 @@ impl JniGlueTemplate {
             .all(|param| matches!(&param.param_type, Type::Primitive(_) | Type::String));
 
         supported_output && supported_inputs
+    }
+
+    fn is_supported_async_result_ok(ok: &Type) -> bool {
+        matches!(ok, Type::Primitive(_) | Type::String | Type::Void)
     }
 
     fn map_async_function(func: &Function, jni_prefix: &str, module: &Module) -> JniAsyncFunctionView {
@@ -390,12 +403,50 @@ impl JniGlueTemplate {
         let complete_is_record = record_info.is_some();
         let (record_c_type, record_struct_size) = record_info.unwrap_or_default();
 
+        let result_info = func.output.as_ref().and_then(|t| match t {
+            Type::Result { ok, err } => Some((ok.as_ref().clone(), err.as_ref().clone())),
+            _ => None,
+        });
+
+        let complete_is_result = result_info.is_some();
+        let (result_ok_is_void, result_ok_is_string, result_ok_c_type, result_ok_jni_type) =
+            result_info
+                .as_ref()
+                .map(|(ok, _)| match ok {
+                    Type::Void => (true, false, "void".to_string(), "void".to_string()),
+                    Type::String => (false, true, "FfiString".to_string(), "jstring".to_string()),
+                    Type::Primitive(p) => (
+                        false,
+                        false,
+                        p.c_type_name().to_string(),
+                        TypeMapper::c_jni_type(&Type::Primitive(*p)),
+                    ),
+                    _ => (false, false, String::new(), String::new()),
+                })
+                .unwrap_or_default();
+
+        let (result_err_is_string, result_err_struct_size) = result_info
+            .as_ref()
+            .map(|(_, err)| match err {
+                Type::String => (true, 0usize),
+                Type::Enum(name) => {
+                    let enum_def = module.enums.iter().find(|e| &e.name == name);
+                    let struct_size = enum_def
+                        .and_then(DataEnumLayout::from_enum)
+                        .map(|l| l.struct_size().as_usize())
+                        .unwrap_or(4);
+                    (false, struct_size)
+                }
+                _ => (false, 0),
+            })
+            .unwrap_or_default();
+
         let (jni_complete_return, jni_complete_c_type, complete_is_void, complete_is_string) =
             match &func.output {
                 None | Some(Type::Void) => ("void".to_string(), "void".to_string(), true, false),
                 Some(Type::String) => ("jstring".to_string(), "FfiString".to_string(), false, true),
                 Some(Type::Primitive(p)) => (
-                    super::TypeMapper::c_jni_type(&Type::Primitive(*p)),
+                    TypeMapper::c_jni_type(&Type::Primitive(*p)),
                     p.c_type_name().to_string(),
                     false,
                     false,
@@ -405,6 +456,7 @@ impl JniGlueTemplate {
                     _ => ("jlong".to_string(), "int64_t".to_string(), false, false),
                 },
                 Some(Type::Record(_)) => ("jobject".to_string(), record_c_type.clone(), false, false),
+                Some(Type::Result { .. }) => (result_ok_jni_type.clone(), result_ok_c_type.clone(), result_ok_is_void, result_ok_is_string),
                 _ => ("jlong".to_string(), "int64_t".to_string(), false, false),
             };
 
@@ -426,6 +478,7 @@ impl JniGlueTemplate {
             complete_is_string,
             complete_is_vec,
             complete_is_record,
+            complete_is_result,
             vec_buf_type,
             vec_free_fn,
             vec_jni_array_type,
@@ -434,6 +487,12 @@ impl JniGlueTemplate {
             vec_jni_element_type,
             record_c_type,
             record_struct_size,
+            result_ok_is_void,
+            result_ok_is_string,
+            result_ok_c_type,
+            result_ok_jni_type,
+            result_err_is_string,
+            result_err_struct_size,
             params,
         }
     }
