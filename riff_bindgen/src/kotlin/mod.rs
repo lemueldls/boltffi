@@ -40,10 +40,13 @@ impl Kotlin {
 
         let blittable_vec_return_records = Self::find_blittable_vec_return_records(module);
         let blittable_vec_param_records = Self::find_blittable_vec_param_records(module);
+        let async_return_records = Self::find_async_return_records(module);
 
         module.records.iter().for_each(|record| {
             sections.push(Self::render_record(record));
-            if blittable_vec_return_records.contains(&record.name.as_str()) {
+            let needs_reader = blittable_vec_return_records.contains(&record.name.as_str())
+                || async_return_records.contains(&record.name.as_str());
+            if needs_reader {
                 sections.push(Self::render_record_reader(record));
             }
             if blittable_vec_param_records.contains(&record.name.as_str()) {
@@ -60,7 +63,7 @@ impl Kotlin {
         module
             .classes
             .iter()
-            .for_each(|class| sections.push(Self::render_class(class)));
+            .for_each(|class| sections.push(Self::render_class(class, module)));
 
         sections.push(Self::render_native(module));
 
@@ -134,8 +137,8 @@ impl Kotlin {
         }
     }
 
-    pub fn render_class(class: &Class) -> String {
-        ClassTemplate::from_class(class)
+    pub fn render_class(class: &Class, module: &Module) -> String {
+        ClassTemplate::from_class(class, module)
             .render()
             .expect("class template failed")
     }
@@ -196,9 +199,31 @@ impl Kotlin {
             .collect()
     }
 
+    fn find_async_return_records(module: &Module) -> std::collections::HashSet<&str> {
+        module
+            .functions
+            .iter()
+            .filter(|func| func.is_async)
+            .filter_map(|func| {
+                if let Some(Type::Record(record_name)) = &func.output {
+                    let is_blittable = module
+                        .records
+                        .iter()
+                        .find(|record| &record.name == record_name)
+                        .map(|record| record.is_blittable())
+                        .unwrap_or(false);
+                    if is_blittable {
+                        return Some(record_name.as_str());
+                    }
+                }
+                None
+            })
+            .collect()
+    }
+
     fn is_supported_function(func: &Function, module: &Module) -> bool {
         if func.is_async {
-            return Self::is_supported_async_function(func);
+            return Self::is_supported_async_function(func, module);
         }
 
         let supported_output = match &func.output {
@@ -269,14 +294,8 @@ impl Kotlin {
             .unwrap_or(false)
     }
 
-    fn is_supported_async_function(func: &Function) -> bool {
-        let supported_output = match &func.output {
-            None => true,
-            Some(Type::Primitive(_)) => true,
-            Some(Type::String) => true,
-            Some(Type::Void) => true,
-            _ => false,
-        };
+    fn is_supported_async_function(func: &Function, module: &Module) -> bool {
+        let supported_output = Self::is_supported_async_output(&func.output, module);
 
         let supported_inputs = func
             .inputs
@@ -284,6 +303,23 @@ impl Kotlin {
             .all(|param| matches!(&param.param_type, Type::Primitive(_) | Type::String));
 
         supported_output && supported_inputs
+    }
+
+    pub fn is_supported_async_output(output: &Option<Type>, module: &Module) -> bool {
+        match output {
+            None => true,
+            Some(Type::Primitive(_)) => true,
+            Some(Type::String) => true,
+            Some(Type::Void) => true,
+            Some(Type::Vec(inner)) => matches!(inner.as_ref(), Type::Primitive(_)),
+            Some(Type::Record(name)) => Self::is_record_blittable(name, module),
+            Some(Type::Result { ok, .. }) => Self::is_supported_async_result_ok(ok),
+            _ => false,
+        }
+    }
+
+    fn is_supported_async_result_ok(ok: &Type) -> bool {
+        matches!(ok, Type::Primitive(_) | Type::String | Type::Void)
     }
 }
 
@@ -402,7 +438,8 @@ mod tests {
                     .with_output(Type::Primitive(Primitive::F64)),
             );
 
-        let output = Kotlin::render_class(&sensor_class);
+        let module = Module::new("test");
+        let output = Kotlin::render_class(&sensor_class, &module);
         assert!(output.contains("class Sensor"));
         assert!(output.contains("private val handle: Long"));
         assert!(output.contains("override fun close()"));

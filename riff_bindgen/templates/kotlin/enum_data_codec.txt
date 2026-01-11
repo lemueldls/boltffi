@@ -33,8 +33,7 @@ object {{ codec_name }} {
 
     fun read(buf: ByteBuffer): {{ class_name }} {
         buf.order(ByteOrder.nativeOrder())
-        val tag = buf.getInt(TAG_OFFSET)
-        return when (tag) {
+        return when (val tag = buf.getInt(TAG_OFFSET)) {
 {%- for variant in variants %}
             TAG_{{ variant.const_name }} ->
 {%- if variant.fields.is_empty() %}
