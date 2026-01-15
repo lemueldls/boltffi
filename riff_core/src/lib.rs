@@ -1,3 +1,7 @@
+#[cfg(feature = "fast-alloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod handle;
 pub mod pending;
 pub mod ringbuffer;

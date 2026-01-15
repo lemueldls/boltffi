@@ -26,6 +26,30 @@ public enum {{ class_name }}{% if is_error %}: Error{% endif %} {
         }
     }
 
+    @inlinable static func decode(wireBuffer wire: WireBuffer, at offset: Int) -> (value: {{ class_name }}, size: Int) {
+        let tag = wire.readI32(at: offset)
+        var pos = offset + 4
+        switch tag {
+{%- for variant in variants %}
+        case {{ loop.index0 }}:
+{%- if variant.fields.is_empty() %}
+            return (.{{ variant.swift_name }}, pos - offset)
+{%- else if variant.is_single_tuple %}
+            let (v, s) = {{ variant.wire_decode }}
+            pos += s
+            return (.{{ variant.swift_name }}(v), pos - offset)
+{%- else %}
+{%- for field in variant.fields %}
+            {{ field.wire_decode }}
+{%- endfor %}
+            return (.{{ variant.swift_name }}({% for field in variant.fields %}{{ field.swift_name }}: {{ field.swift_name }}{% if !loop.last %}, {% endif %}{% endfor %}), pos - offset)
+{%- endif %}
+{%- endfor %}
+        default:
+            fatalError("Invalid {{ class_name }} tag: \(tag)")
+        }
+    }
+
     var cValue: {{ ffi_type }} {
         var c = {{ ffi_type }}()
         switch self {

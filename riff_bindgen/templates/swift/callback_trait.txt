@@ -24,7 +24,7 @@ private var {{ vtable_var }}: {{ vtable_type }} = {
             _ = wrapper.retain()
             return handle
         }{% for method in methods %},
-        {{ method.ffi_name }}: { handle{% for param in method.params %}, {{ param.ffi_name }}{% endfor %}{% if method.has_out_param %}, outPtr{% endif %}{% if !method.is_async %}, statusPtr{% endif %}{% if method.is_async %}, callback, callbackData{% endif %} in
+        {{ method.ffi_name }}: { handle{% for param in method.params %}, {{ param.ffi_name }}{% endfor %}{% if method.has_out_param %}{% if method.wire_encoded_return %}, outPtr, outLen{% else %}, outPtr{% endif %}{% endif %}{% if !method.is_async %}, statusPtr{% endif %}{% if method.is_async %}, callback, callbackData{% endif %} in
             guard handle != 0 else { {% if !method.is_async %}statusPtr?.pointee = FfiStatus(code: 1); {% endif %}return }
             let wrapper = Unmanaged<{{ wrapper_class }}>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(handle))!).takeUnretainedValue()
 {%- if method.is_async %}
@@ -35,7 +35,15 @@ private var {{ vtable_var }}: {{ vtable_type }} = {
 {%- else %}
             {% if method.has_return %}let result = {% endif %}wrapper.impl_.{{ method.swift_name }}({% for param in method.params %}{{ param.label }}: {{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- if method.has_out_param %}
+{%- if method.wire_encoded_return %}
+            let encoded = result.wireEncode()
+            encoded.withUnsafeBytes { bytes in
+                memcpy(outPtr!, bytes.baseAddress!, bytes.count)
+            }
+            outLen?.pointee = UInt(encoded.count)
+{%- else %}
             outPtr?.pointee = result
+{%- endif %}
 {%- endif %}
             statusPtr?.pointee = FfiStatus(code: 0)
 {%- endif %}

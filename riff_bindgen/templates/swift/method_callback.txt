@@ -4,8 +4,8 @@
         let {{ cb.box_name }} = {{ cb.box_type }}({{ cb.param_name }})
         let {{ cb.ptr_name }} = Unmanaged.passRetained({{ cb.box_name }}).toOpaque()
         defer { Unmanaged<{{ cb.box_type }}>.fromOpaque({{ cb.ptr_name }}).release() }
-        let {{ cb.trampoline_name }}: @convention(c) (UnsafeMutableRawPointer?, {{ cb.ffi_arg_type }}) -> Void = { ud, val in
-            Unmanaged<{{ cb.box_type }}>.fromOpaque(ud!).takeUnretainedValue().fn_(val)
+        let {{ cb.trampoline_name }}: @convention(c) (UnsafeMutableRawPointer?, {{ cb.ffi_arg_type }}) -> Void = { ud, {{ cb.trampoline_args }} in
+            Unmanaged<{{ cb.box_type }}>.fromOpaque(ud!).takeUnretainedValue().fn_({{ cb.trampoline_call_args }})
         }
 {%- endfor %}
 {%- if has_wrappers %}

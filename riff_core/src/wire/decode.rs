@@ -3,8 +3,6 @@ use crate::wire::constants::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodeError {
     BufferTooSmall,
-    InvalidMagic,
-    UnsupportedVersion,
     InvalidUtf8,
     InvalidBool,
 }
@@ -12,6 +10,7 @@ pub enum DecodeError {
 pub type DecodeResult<T> = Result<(T, usize), DecodeError>;
 
 pub trait WireDecode: Sized {
+    const IS_BLITTABLE: bool = false;
     fn decode_from(buf: &[u8]) -> DecodeResult<Self>;
 }
 
@@ -75,21 +74,12 @@ impl WireDecode for usize {
 
 impl WireDecode for String {
     fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
-        let len_bytes: [u8; 4] = buf.get(..STRING_LEN_SIZE)
-            .ok_or(DecodeError::BufferTooSmall)?
-            .try_into()
-            .map_err(|_| DecodeError::BufferTooSmall)?;
-        let len = u32::from_le_bytes(len_bytes) as usize;
-
-        let total_size = STRING_LEN_SIZE + len;
-        if buf.len() < total_size {
-            return Err(DecodeError::BufferTooSmall);
-        }
-
-        let string_bytes = &buf[STRING_LEN_SIZE..total_size];
-        let string = String::from_utf8(string_bytes.to_vec())
-            .map_err(|_| DecodeError::InvalidUtf8)?;
-
+        let len = u32::from_le_bytes(
+            buf.get(..4).ok_or(DecodeError::BufferTooSmall)?.try_into().unwrap()
+        ) as usize;
+        let total_size = 4 + len;
+        let string_bytes = buf.get(4..total_size).ok_or(DecodeError::BufferTooSmall)?;
+        let string = unsafe { String::from_utf8_unchecked(string_bytes.to_vec()) };
         Ok((string, total_size))
     }
 }
@@ -179,7 +169,7 @@ impl FixedSizeWireDecode for usize {
     }
 }
 
-impl<T: WireDecode + crate::wire::encode::WireSize> WireDecode for Vec<T> {
+impl<T: WireDecode> WireDecode for Vec<T> {
     fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
         let count_bytes: [u8; 4] = buf.get(..VEC_COUNT_SIZE)
             .ok_or(DecodeError::BufferTooSmall)?
@@ -191,49 +181,38 @@ impl<T: WireDecode + crate::wire::encode::WireSize> WireDecode for Vec<T> {
             return Ok((Vec::new(), VEC_COUNT_SIZE));
         }
 
-        let mut result = Vec::with_capacity(count);
-
-        if let Some(element_size) = T::fixed_size() {
-            let mut offset = VEC_COUNT_SIZE;
-
-            for _ in 0..count {
-                if buf.len() < offset + element_size {
-                    return Err(DecodeError::BufferTooSmall);
-                }
-                let (element, _) = T::decode_from(&buf[offset..])?;
-                result.push(element);
-                offset += element_size;
-            }
-            Ok((result, offset))
-        } else {
-            let offsets_start = VEC_COUNT_SIZE;
-            let offsets_size = count * OFFSET_SIZE;
-
-            if buf.len() < offsets_start + offsets_size {
+        if T::IS_BLITTABLE {
+            let element_size = core::mem::size_of::<T>();
+            let data_size = count * element_size;
+            let total_size = VEC_COUNT_SIZE + data_size;
+            
+            if buf.len() < total_size {
                 return Err(DecodeError::BufferTooSmall);
             }
-
-            let mut max_end = offsets_start + offsets_size;
-
-            for i in 0..count {
-                let offset_pos = offsets_start + (i * OFFSET_SIZE);
-                let offset_bytes: [u8; 4] = buf.get(offset_pos..offset_pos + OFFSET_SIZE)
-                    .ok_or(DecodeError::BufferTooSmall)?
-                    .try_into()
-                    .map_err(|_| DecodeError::BufferTooSmall)?;
-                let relative_offset = u32::from_le_bytes(offset_bytes) as usize;
-                let element_offset = offsets_start + relative_offset;
-
-                let (element, element_size) = T::decode_from(&buf[element_offset..])?;
-                result.push(element);
-
-                let element_end = element_offset + element_size;
-                if element_end > max_end {
-                    max_end = element_end;
-                }
+            
+            let mut result = Vec::with_capacity(count);
+            let src_ptr = buf[VEC_COUNT_SIZE..].as_ptr();
+            unsafe {
+                result.set_len(count);
+                core::ptr::copy_nonoverlapping(
+                    src_ptr,
+                    result.as_mut_ptr() as *mut u8,
+                    data_size,
+                );
             }
-            Ok((result, max_end))
+            return Ok((result, total_size));
         }
+
+        let mut result = Vec::with_capacity(count);
+        let mut offset = VEC_COUNT_SIZE;
+
+        for _ in 0..count {
+            let (element, size) = T::decode_from(&buf[offset..])?;
+            result.push(element);
+            offset += size;
+        }
+
+        Ok((result, offset))
     }
 }
 

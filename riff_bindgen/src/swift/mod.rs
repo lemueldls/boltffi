@@ -12,7 +12,7 @@ use crate::model::{CallbackTrait, Class, Enumeration, Function, Module, Record, 
 
 pub use body::BodyRenderer;
 pub use conversion::{CallbackInfo, ParamInfo, ParamsInfo, ReturnInfo};
-pub use marshal::{ParamConversion, ReturnKind, SwiftType, SyncCallBuilder};
+pub use marshal::{ParamConversion, SwiftType, SyncCallBuilder};
 pub use names::NamingConvention;
 pub use templates::{
     CStyleEnumTemplate, CallbackTraitTemplate, ClassTemplate, DataEnumTemplate, FunctionTemplate,

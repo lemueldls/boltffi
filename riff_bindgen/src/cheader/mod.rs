@@ -1,8 +1,8 @@
 use riff_ffi_rules::naming;
 
 use crate::model::{
-    CallbackTrait, Class, Enumeration, Function, Method, Module, Parameter, Primitive, Record,
-    ReturnType, StreamMethod, TraitMethod, Type,
+    CallbackTrait, Class, Enumeration, Function, Method, Module, Parameter, Primitive, ReturnType,
+    StreamMethod, TraitMethod, Type,
 };
 
 pub struct CHeaderGenerator;
@@ -26,15 +26,21 @@ impl CHeaderGenerator {
         out.push_str(&Self::generate_stream_types_if_needed(module));
         out.push_str(&Self::generate_ffi_primitive_types(module));
         out.push_str(&Self::generate_enums(&module.enums));
-        out.push_str(&Self::generate_records(&module.records));
         out.push_str(&Self::generate_ffi_named_buf_types(module));
         out.push_str(&Self::generate_ffi_named_option_types(module));
         out.push_str(&Self::generate_traits(&module.callback_traits, &prefix));
-        out.push_str(&Self::generate_functions(&module.functions));
-        out.push_str(&Self::generate_classes(&module.classes, &prefix));
-        out.push_str(&Self::generate_free_string(&prefix));
+        out.push_str(&Self::generate_functions(&module.functions, module));
+        out.push_str(&Self::generate_classes(&module.classes, &prefix, module));
+        out.push_str(&Self::generate_free_functions(&prefix));
 
         out
+    }
+
+    fn generate_free_functions(prefix: &str) -> String {
+        format!(
+            "\nvoid {}_free_string(FfiString s);\nvoid {}_free_buf_u8(FfiBuf_u8 buf);\n",
+            prefix, prefix
+        )
     }
 
     fn generate_preamble(prefix: &str) -> String {
@@ -48,6 +54,7 @@ impl CHeaderGenerator {
 
 typedef struct {{ int32_t code; }} FfiStatus;
 typedef struct {{ uint8_t* ptr; size_t len; size_t cap; }} FfiString;
+typedef struct {{ uint8_t* ptr; size_t len; size_t cap; }} FfiBuf_u8;
 typedef struct {{ FfiString message; }} FfiError;
 
 static inline bool {prefix}_atomic_u8_cas(uint8_t* state, uint8_t expected, uint8_t desired) {{
@@ -232,21 +239,6 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         let types = Self::collect_ffi_types(module);
         let mut out = String::new();
 
-        for ty_name in &types.primitive_buf_types {
-            let c_type = Self::cbindgen_name_to_c_type(ty_name);
-            out.push_str(&format!(
-                "typedef struct FfiBuf_{} {{ {}* ptr; size_t len; size_t cap; }} FfiBuf_{};\n",
-                ty_name, c_type, ty_name
-            ));
-        }
-
-        for ty_name in &types.option_primitive_buf_types {
-            out.push_str(&format!(
-                "typedef struct FfiOption_FfiBuf_{} {{ bool isSome; FfiBuf_{} value; }} FfiOption_FfiBuf_{};\n",
-                ty_name, ty_name, ty_name
-            ));
-        }
-
         for ty_name in &types.primitive_option_types {
             let c_type = Self::option_type_to_c_type(ty_name);
             out.push_str(&format!(
@@ -255,13 +247,6 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             ));
         }
 
-        for ty_name in &types.primitive_buf_types {
-            out.push_str(&format!(
-                "void riff_free_buf_{}(FfiBuf_{} buf);\n",
-                ty_name, ty_name
-            ));
-        }
-
         if !out.is_empty() {
             out.push('\n');
         }
@@ -269,54 +254,12 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         out
     }
 
-    fn generate_ffi_named_buf_types(module: &Module) -> String {
-        let types = Self::collect_ffi_types(module);
-        let mut out = String::new();
-
-        for ty_name in &types.named_buf_types {
-            out.push_str(&format!(
-                "typedef struct FfiBuf_{} {{ {}* ptr; size_t len; size_t cap; }} FfiBuf_{};\n",
-                ty_name, ty_name, ty_name
-            ));
-        }
-
-        for ty_name in &types.option_named_buf_types {
-            out.push_str(&format!(
-                "typedef struct FfiOption_FfiBuf_{} {{ bool isSome; FfiBuf_{} value; }} FfiOption_FfiBuf_{};\n",
-                ty_name, ty_name, ty_name
-            ));
-        }
-
-        for ty_name in &types.named_buf_types {
-            out.push_str(&format!(
-                "void riff_free_buf_{}(FfiBuf_{} buf);\n",
-                ty_name, ty_name
-            ));
-        }
-
-        if !out.is_empty() {
-            out.push('\n');
-        }
-
-        out
+    fn generate_ffi_named_buf_types(_module: &Module) -> String {
+        String::new()
     }
 
-    fn generate_ffi_named_option_types(module: &Module) -> String {
-        let types = Self::collect_ffi_types(module);
-        let mut out = String::new();
-
-        for ty_name in &types.named_option_types {
-            out.push_str(&format!(
-                "typedef struct FfiOption_{} {{ bool isSome; {} value; }} FfiOption_{};\n",
-                ty_name, ty_name, ty_name
-            ));
-        }
-
-        if !out.is_empty() {
-            out.push('\n');
-        }
-
-        out
+    fn generate_ffi_named_option_types(_module: &Module) -> String {
+        String::new()
     }
 
     fn cbindgen_name_to_c_type(name: &str) -> &'static str {
@@ -438,35 +381,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         }
     }
 
-    fn generate_records(records: &[Record]) -> String {
-        records
-            .iter()
-            .filter(|r| !Self::is_internal_type(&r.name))
-            .map(Self::generate_record)
-            .collect()
-    }
 
-    fn is_internal_type(name: &str) -> bool {
-        name.starts_with("Ffi")
-            || name.starts_with("Pending")
-            || name == "MaybeUninit"
-            || name == "PhantomData"
-    }
-
-    fn generate_record(r: &Record) -> String {
-        let fields: String = r
-            .fields
-            .iter()
-            .map(|f| {
-                format!(
-                    "  {} {};\n",
-                    Self::type_to_c(&f.field_type),
-                    naming::snake_to_camel(&f.name)
-                )
-            })
-            .collect();
-        format!("typedef struct {} {{\n{}}} {};\n\n", r.name, fields, r.name)
-    }
 
     fn generate_traits(traits: &[CallbackTrait], prefix: &str) -> String {
         traits
@@ -515,18 +430,17 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         let mut params = vec!["uint64_t handle".to_string()];
 
         for param in &method.inputs {
-            params.push(format!(
-                "{} {}",
-                Self::type_to_c(&param.param_type),
-                param.name
-            ));
+            let param_parts = Self::param_to_c(&param.name, &param.param_type);
+            for (name, ty) in param_parts {
+                params.push(format!("{} {}", ty, name));
+            }
         }
 
         if method.is_async {
             let callback_return = method
                 .returns
                 .ok_type()
-                .map(|t| format!(", {}", Self::type_to_c(t)))
+                .map(|t| Self::trait_callback_return_params(t))
                 .unwrap_or_default();
             params.push(format!(
                 "void (*callback)(uint64_t{}, FfiStatus)",
@@ -535,7 +449,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             params.push("uint64_t callback_data".to_string());
         } else {
             if let Some(ret_ty) = method.returns.ok_type() {
-                params.push(format!("{} *out", Self::type_to_c(ret_ty)));
+                Self::trait_method_out_params(ret_ty, &mut params);
             }
             params.push("FfiStatus *status".to_string());
         }
@@ -543,21 +457,43 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         format!("  void (*{})({});", method_snake, params.join(", "))
     }
 
-    fn generate_functions(functions: &[Function]) -> String {
+    fn trait_callback_return_params(ty: &Type) -> String {
+        match ty {
+            Type::Record(_) | Type::String | Type::Vec(_) | Type::Option(_) => {
+                ", const uint8_t*, uintptr_t".to_string()
+            }
+            Type::Primitive(_) => format!(", {}", Self::type_to_c(ty)),
+            _ => format!(", {}", Self::type_to_c(ty)),
+        }
+    }
+
+    fn trait_method_out_params(ty: &Type, params: &mut Vec<String>) {
+        match ty {
+            Type::Record(_) | Type::String | Type::Vec(_) | Type::Option(_) => {
+                params.push("uint8_t *out_ptr".to_string());
+                params.push("uintptr_t *out_len".to_string());
+            }
+            _ => {
+                params.push(format!("{} *out", Self::type_to_c(ty)));
+            }
+        }
+    }
+
+    fn generate_functions(functions: &[Function], module: &Module) -> String {
         functions
             .iter()
-            .map(|f| Self::generate_function(f))
+            .map(|f| Self::generate_function(f, module))
             .collect()
     }
 
-    fn generate_function(func: &Function) -> String {
+    fn generate_function(func: &Function, module: &Module) -> String {
         let ffi_name = naming::function_ffi_name(&func.name);
         let params = Self::build_params(&func.inputs);
 
         if func.is_async {
             Self::generate_async_function(&ffi_name, &params, &func.returns)
         } else {
-            Self::generate_sync_function(&ffi_name, &params, &func.returns)
+            Self::generate_sync_function(&ffi_name, &params, &func.returns, module)
         }
     }
 
@@ -565,35 +501,32 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         ffi_name: &str,
         params: &[(String, String)],
         returns: &ReturnType,
+        module: &Module,
     ) -> String {
+        let params_str = Self::format_params(params);
+
         match returns {
-            ReturnType::Fallible { ok, err } => {
-                Self::generate_result_return_function_with_err(ffi_name, params, ok, Some(err))
-            }
-            ReturnType::Value(ty) => match ty {
-                Type::Vec(inner) => {
-                    Self::generate_vec_return_function(ffi_name, params, inner)
-                }
-                Type::String => Self::generate_string_return_function(ffi_name, params),
-                Type::Option(inner) => match inner.as_ref() {
-                    Type::Vec(vec_inner) => {
-                        Self::generate_option_vec_return_function(ffi_name, params, vec_inner)
-                    }
-                    Type::String => {
-                        Self::generate_option_string_return_function(ffi_name, params)
-                    }
-                    _ => Self::generate_option_return_function(ffi_name, params, inner),
-                },
-                _ => {
+            ReturnType::Void => format!("FfiStatus {}({});\n", ffi_name, params_str),
+            ReturnType::Fallible { .. } => format!("FfiBuf_u8 {}({});\n", ffi_name, params_str),
+            ReturnType::Value(ty) => {
+                if Self::is_wire_encoded_type(ty, module) {
+                    format!("FfiBuf_u8 {}({});\n", ffi_name, params_str)
+                } else {
                     let ret_type = Self::type_to_c(ty);
-                    let params_str = Self::format_params(params);
                     format!("{} {}({});\n", ret_type, ffi_name, params_str)
                 }
-            },
-            ReturnType::Void => {
-                let params_str = Self::format_params(params);
-                format!("FfiStatus {}({});\n", ffi_name, params_str)
             }
+        }
+    }
+
+    fn is_wire_encoded_type(ty: &Type, module: &Module) -> bool {
+        match ty {
+            Type::String | Type::Vec(_) | Type::Option(_) | Type::Record(_) => true,
+            Type::Enum(name) => module.is_data_enum(name),
+            Type::Primitive(_) | Type::Void | Type::Object(_) => false,
+            Type::Bytes | Type::Slice(_) | Type::MutSlice(_) => false,
+            Type::Closure(_) | Type::BoxedTrait(_) => false,
+            Type::Result { .. } => true,
         }
     }
 
@@ -604,27 +537,15 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
     ) -> String {
         let params_str = Self::format_params(params);
         let result_type = Self::async_result_type(returns);
-        let err_out_param = Self::async_error_out_param(returns);
 
         format!(
             "RustFutureHandle {}({});\n\
              void {}_poll(RustFutureHandle handle, uint64_t callback_data, RustFutureContinuationCallback callback);\n\
-             {} {}_complete(RustFutureHandle handle, FfiStatus* out_status{});\n\
+             {} {}_complete(RustFutureHandle handle, FfiStatus* out_status);\n\
              void {}_cancel(RustFutureHandle handle);\n\
              void {}_free(RustFutureHandle handle);\n",
-            ffi_name, params_str, ffi_name, result_type, ffi_name, err_out_param, ffi_name, ffi_name
+            ffi_name, params_str, ffi_name, result_type, ffi_name, ffi_name, ffi_name
         )
-    }
-
-    fn async_error_out_param(returns: &ReturnType) -> String {
-        let ReturnType::Fallible { err, .. } = returns else {
-            return String::new();
-        };
-        match err {
-            Type::Enum(name) | Type::Record(name) => format!(", {}* out_err", name),
-            Type::String => ", FfiError* out_err".to_string(),
-            _ => String::new(),
-        }
     }
 
     fn generate_vec_return_function(
@@ -726,14 +647,14 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         format!("FfiOption_{} {}({});\n", buf_type, ffi_name, params_str)
     }
 
-    fn generate_classes(classes: &[Class], prefix: &str) -> String {
+    fn generate_classes(classes: &[Class], prefix: &str, module: &Module) -> String {
         classes
             .iter()
-            .map(|c| Self::generate_class(c, prefix))
+            .map(|c| Self::generate_class(c, prefix, module))
             .collect()
     }
 
-    fn generate_class(class: &Class, prefix: &str) -> String {
+    fn generate_class(class: &Class, prefix: &str, module: &Module) -> String {
         let mut out = String::new();
         let snake_name = naming::to_snake_case(&class.name);
         let class_prefix = format!("{}_{}", prefix, snake_name);
@@ -767,7 +688,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         ));
 
         for method in &class.methods {
-            out.push_str(&Self::generate_method(method, &class.name, &class_prefix));
+            out.push_str(&Self::generate_method(method, &class.name, &class_prefix, module));
         }
 
         for stream in &class.streams {
@@ -777,7 +698,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         out
     }
 
-    fn generate_method(method: &Method, class_name: &str, class_prefix: &str) -> String {
+    fn generate_method(method: &Method, class_name: &str, class_prefix: &str, module: &Module) -> String {
         let ffi_name = format!("{}_{}", class_prefix, method.name);
 
         let mut params: Vec<(String, String)> =
@@ -790,27 +711,22 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         if method.is_async {
             Self::generate_async_function(&ffi_name, &params, &method.returns)
         } else {
-            Self::generate_sync_function(&ffi_name, &params, &method.returns)
+            Self::generate_sync_function(&ffi_name, &params, &method.returns, module)
         }
     }
 
     fn generate_stream(stream: &StreamMethod, class_name: &str, class_prefix: &str) -> String {
         let base_name = format!("{}_{}", class_prefix, stream.name);
-        let item_type = Self::type_to_c(&stream.item_type);
 
         format!(
             "SubscriptionHandle {}(const struct {} *handle);\n\
-             uintptr_t {}_pop_batch(SubscriptionHandle subscription_handle, {} *output_ptr, uintptr_t output_capacity);\n\
+             FfiBuf_u8 {}_pop_batch(SubscriptionHandle subscription_handle, uintptr_t max_count);\n\
              int32_t {}_wait(SubscriptionHandle subscription_handle, uint32_t timeout_milliseconds);\n\
              void {}_poll(SubscriptionHandle subscription_handle, uint64_t callback_data, StreamContinuationCallback callback);\n\
              void {}_unsubscribe(SubscriptionHandle subscription_handle);\n\
              void {}_free(SubscriptionHandle subscription_handle);\n",
-            base_name, class_name, base_name, item_type, base_name, base_name, base_name, base_name,
+            base_name, class_name, base_name, base_name, base_name, base_name, base_name,
         )
-    }
-
-    fn generate_free_string(prefix: &str) -> String {
-        format!("\nvoid {}_free_string(FfiString s);\n", prefix)
     }
 
     fn build_params(inputs: &[Parameter]) -> Vec<(String, String)> {
@@ -826,50 +742,80 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                 (format!("{}_ptr", name), "const uint8_t*".to_string()),
                 (format!("{}_len", name), "uintptr_t".to_string()),
             ],
-            Type::Slice(inner) => vec![
-                (
-                    format!("{}_ptr", name),
-                    format!("const {}*", Self::type_to_c(inner)),
-                ),
-                (format!("{}_len", name), "uintptr_t".to_string()),
-            ],
-            Type::MutSlice(inner) => vec![
-                (
-                    format!("{}_ptr", name),
-                    format!("{}*", Self::type_to_c(inner)),
-                ),
-                (format!("{}_len", name), "uintptr_t".to_string()),
-            ],
-            Type::Vec(inner) => vec![
-                (
-                    format!("{}_ptr", name),
-                    format!("const {}*", Self::type_to_c(inner)),
-                ),
-                (format!("{}_len", name), "uintptr_t".to_string()),
-            ],
+            Type::Slice(inner) => {
+                if matches!(inner.as_ref(), Type::Record(_)) {
+                    vec![
+                        (format!("{}_ptr", name), "const uint8_t*".to_string()),
+                        (format!("{}_len", name), "uintptr_t".to_string()),
+                    ]
+                } else {
+                    vec![
+                        (format!("{}_ptr", name), format!("const {}*", Self::type_to_c(inner))),
+                        (format!("{}_len", name), "uintptr_t".to_string()),
+                    ]
+                }
+            }
+            Type::MutSlice(inner) => {
+                if matches!(inner.as_ref(), Type::Record(_)) {
+                    vec![
+                        (format!("{}_ptr", name), "uint8_t*".to_string()),
+                        (format!("{}_len", name), "uintptr_t".to_string()),
+                    ]
+                } else {
+                    vec![
+                        (format!("{}_ptr", name), format!("{}*", Self::type_to_c(inner))),
+                        (format!("{}_len", name), "uintptr_t".to_string()),
+                    ]
+                }
+            }
+            Type::Vec(inner) => {
+                if matches!(inner.as_ref(), Type::Record(_)) {
+                    vec![
+                        (format!("{}_ptr", name), "const uint8_t*".to_string()),
+                        (format!("{}_len", name), "uintptr_t".to_string()),
+                    ]
+                } else {
+                    vec![
+                        (format!("{}_ptr", name), format!("const {}*", Self::type_to_c(inner))),
+                        (format!("{}_len", name), "uintptr_t".to_string()),
+                    ]
+                }
+            }
             Type::Closure(sig) => {
-                let params_c = sig
+                let params_c: Vec<String> = sig
                     .params
                     .iter()
-                    .map(|p| Self::type_to_c(p))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                    .flat_map(|p| Self::closure_param_to_c(p))
+                    .collect();
+                let params_str = params_c.join(", ");
                 let ret_c = if sig.returns.is_void() {
                     "void".to_string()
                 } else {
                     Self::type_to_c(&sig.returns)
                 };
-                let callback_type = if params_c.is_empty() {
+                let callback_type = if params_str.is_empty() {
                     format!("{} (*)(void*)", ret_c)
                 } else {
-                    format!("{} (*)(void*, {})", ret_c, params_c)
+                    format!("{} (*)(void*, {})", ret_c, params_str)
                 };
                 vec![
                     (format!("{}_cb", name), callback_type),
                     (format!("{}_ud", name), "void*".to_string()),
                 ]
             }
+            Type::Record(_) => vec![
+                (format!("{}_ptr", name), "const uint8_t*".to_string()),
+                (format!("{}_len", name), "uintptr_t".to_string()),
+            ],
             _ => vec![(name.to_string(), Self::type_to_c(ty))],
+        }
+    }
+
+    fn closure_param_to_c(ty: &Type) -> Vec<String> {
+        match ty {
+            Type::Record(_) => vec!["const uint8_t*".to_string(), "uintptr_t".to_string()],
+            Type::String => vec!["const uint8_t*".to_string(), "uintptr_t".to_string()],
+            _ => vec![Self::type_to_c(ty)],
         }
     }
 
@@ -895,23 +841,15 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         match returns {
             ReturnType::Void => "void".to_string(),
             ReturnType::Value(ty) => Self::async_result_type_from_type(ty),
-            ReturnType::Fallible { ok, .. } => Self::async_result_type_from_type(ok),
+            ReturnType::Fallible { .. } => "FfiBuf_u8".to_string(),
         }
     }
 
     fn async_result_type_from_type(ty: &Type) -> String {
         match ty {
             Type::Void => "void".to_string(),
-            Type::String => "FfiString".to_string(),
-            Type::Vec(inner) => {
-                let inner_c = Self::primitive_to_cbindgen_name(inner);
-                format!("FfiBuf_{}", inner_c)
-            }
-            Type::Option(inner) => {
-                let inner_c = Self::primitive_to_cbindgen_name(inner);
-                format!("FfiOption_{}", inner_c)
-            }
-            _ => Self::type_to_c(ty),
+            Type::Primitive(_) => Self::type_to_c(ty),
+            _ => "FfiBuf_u8".to_string(),
         }
     }
 

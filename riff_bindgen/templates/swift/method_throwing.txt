@@ -1,13 +1,13 @@
 {%- if has_wrappers %}
-        return {{ wrappers_open }}
-            var status = FfiStatus()
-            let result = {{ ffi_name }}({{ ffi_args }}, &status)
-            try checkStatus(status)
-            result as {{ return_type }}
+        {{ wrappers_open }}
+            let buf = {{ ffi_name }}({{ ffi_args }})
+            defer { {{ prefix }}_free_buf_u8(buf) }
+            let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
+            return {{ decode_expr }}
         {{ wrappers_close }}
 {%- else %}
-        var status = FfiStatus()
-        let result = {{ ffi_name }}({{ ffi_args }}, &status)
-        try checkStatus(status)
-        return result as {{ return_type }}
+        let buf = {{ ffi_name }}({{ ffi_args }})
+        defer { {{ prefix }}_free_buf_u8(buf) }
+        let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
+        return {{ decode_expr }}
 {%- endif %}

@@ -4,7 +4,10 @@ use riff_ffi_rules::naming;
 use syn::{FnArg, ReturnType, Type};
 
 use crate::params::{transform_method_params, transform_method_params_async, FfiParams};
-use crate::returns::{classify_async_return, get_complete_conversion, get_default_ffi_value, get_ffi_return_type, get_rust_return_type};
+use crate::returns::{
+    classify_async_return_abi, get_async_complete_conversion, get_async_default_ffi_value,
+    get_async_ffi_return_type, get_async_rust_return_type,
+};
 
 pub fn ffi_class_impl(item: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(item as syn::ItemImpl);
@@ -272,12 +275,12 @@ fn generate_async_method_export(
     let params = transform_method_params_async(other_inputs);
 
     let fn_output = &method.sig.output;
-    let return_kind = classify_async_return(fn_output);
+    let return_abi = classify_async_return_abi(fn_output);
 
-    let ffi_return_type = get_ffi_return_type(&return_kind);
-    let rust_return_type = get_rust_return_type(&return_kind);
-    let complete_conversion = get_complete_conversion(&return_kind);
-    let default_value = get_default_ffi_value(&return_kind);
+    let ffi_return_type = get_async_ffi_return_type(&return_abi);
+    let rust_return_type = get_async_rust_return_type(&return_abi);
+    let complete_conversion = get_async_complete_conversion(&return_abi);
+    let default_value = get_async_default_ffi_value(&return_abi);
 
     let ffi_params = &params.ffi_params;
     let pre_spawn = &params.pre_spawn;
@@ -319,45 +322,17 @@ fn generate_async_method_export(
         }
     };
 
-    use crate::returns::{AsyncErrorKind, AsyncReturnKind};
-
-    let complete_fn = match &return_kind {
-        AsyncReturnKind::Result(info) => {
-            let out_err_type = match &info.err_kind {
-                AsyncErrorKind::StringLike(_) => quote! { crate::FfiError },
-                AsyncErrorKind::Typed(err) => quote! { #err },
-            };
-            quote! {
-                #[unsafe(no_mangle)]
-                pub unsafe extern "C" fn #complete_ident(
-                    handle: crate::RustFutureHandle,
-                    out_status: *mut crate::FfiStatus,
-                    out_err: *mut #out_err_type,
-                ) -> #ffi_return_type {
-                    match crate::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
-                        Some(result) => { #complete_conversion }
-                        None => {
-                            if !out_status.is_null() { *out_status = crate::FfiStatus::CANCELLED; }
-                            #default_value
-                        }
-                    }
-                }
-            }
-        }
-        _ => {
-            quote! {
-                #[unsafe(no_mangle)]
-                pub unsafe extern "C" fn #complete_ident(
-                    handle: crate::RustFutureHandle,
-                    out_status: *mut crate::FfiStatus,
-                ) -> #ffi_return_type {
-                    match crate::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
-                        Some(result) => { #complete_conversion }
-                        None => {
-                            if !out_status.is_null() { *out_status = crate::FfiStatus::CANCELLED; }
-                            #default_value
-                        }
-                    }
+    let complete_fn = quote! {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn #complete_ident(
+            handle: crate::RustFutureHandle,
+            out_status: *mut crate::FfiStatus,
+        ) -> #ffi_return_type {
+            match crate::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                Some(result) => { #complete_conversion }
+                None => {
+                    if !out_status.is_null() { *out_status = crate::FfiStatus::CANCELLED; }
+                    #default_value
                 }
             }
         }

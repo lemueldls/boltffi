@@ -8,9 +8,14 @@ use crate::model::{
 
 use super::body::BodyRenderer;
 use super::conversion::ParamInfo;
-use super::marshal::{ReturnAbi, ReturnKind, SyncCallBuilder};
+use super::marshal::{ReturnAbi, SyncCallBuilder};
 use super::names::NamingConvention;
 use super::types::TypeMapper;
+
+enum WireSize {
+    Fixed(usize),
+    Variable(String),
+}
 
 #[derive(Template)]
 #[template(path = "swift/preamble.txt", escape = "none")]
@@ -18,6 +23,7 @@ pub struct PreambleTemplate {
     pub prefix: String,
     pub ffi_module_name: Option<String>,
     pub has_async: bool,
+    pub has_streams: bool,
 }
 
 impl PreambleTemplate {
@@ -27,10 +33,12 @@ impl PreambleTemplate {
                 .classes
                 .iter()
                 .any(|class_item| class_item.methods.iter().any(|method| method.is_async));
+        let has_streams = module.classes.iter().any(|c| !c.streams.is_empty());
         Self {
             prefix: naming::ffi_prefix().to_string(),
             ffi_module_name: None,
             has_async,
+            has_streams,
         }
     }
 
@@ -41,10 +49,12 @@ impl PreambleTemplate {
                 .classes
                 .iter()
                 .any(|class_item| class_item.methods.iter().any(|method| method.is_async));
+        let has_streams = module.classes.iter().any(|c| !c.streams.is_empty());
         Self {
             prefix: naming::ffi_prefix().to_string(),
             ffi_module_name: Some(ffi_module_name),
             has_async,
+            has_streams,
         }
     }
 }
@@ -55,6 +65,8 @@ pub struct RecordTemplate {
     pub class_name: String,
     pub fields: Vec<FieldView>,
     pub is_fixed_size: bool,
+    pub is_blittable: bool,
+    pub wire_size: String,
 }
 
 impl RecordTemplate {
@@ -66,10 +78,72 @@ impl RecordTemplate {
             .map(|(idx, field)| Self::make_field(field, idx))
             .collect();
         let is_fixed_size = fields.iter().all(|f| f.is_fixed);
+        let is_blittable = record.fields.iter().all(|f| Self::is_type_blittable(&f.field_type));
+        let wire_size = Self::compute_wire_size(&record.fields);
         Self {
             class_name: NamingConvention::class_name(&record.name),
             fields,
             is_fixed_size,
+            is_blittable,
+            wire_size,
+        }
+    }
+
+    fn is_type_blittable(ty: &Type) -> bool {
+        match ty {
+            Type::Primitive(_) => true,
+            _ => false,
+        }
+    }
+
+    fn compute_wire_size(fields: &[crate::model::RecordField]) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        let mut fixed_sum: usize = 0;
+
+        for field in fields {
+            match Self::type_wire_size(&field.field_type) {
+                WireSize::Fixed(size) => fixed_sum += size,
+                WireSize::Variable(expr) => parts.push(expr),
+            }
+        }
+
+        if fixed_sum > 0 {
+            parts.insert(0, fixed_sum.to_string());
+        }
+
+        if parts.is_empty() {
+            "0".to_string()
+        } else {
+            parts.join(" + ")
+        }
+    }
+
+    fn type_wire_size(ty: &Type) -> WireSize {
+        match ty {
+            Type::Primitive(p) => WireSize::Fixed(Self::primitive_size(*p)),
+            Type::String => WireSize::Variable("0".to_string()),
+            Type::Record(name) => {
+                let class_name = NamingConvention::class_name(name);
+                WireSize::Variable(format!("{}.wireSize", class_name))
+            }
+            Type::Vec(_) => WireSize::Variable("0".to_string()),
+            Type::Option(inner) => {
+                match Self::type_wire_size(inner) {
+                    WireSize::Fixed(size) => WireSize::Fixed(1 + size),
+                    WireSize::Variable(_) => WireSize::Variable("0".to_string()),
+                }
+            }
+            _ => WireSize::Fixed(0),
+        }
+    }
+
+    fn primitive_size(p: Primitive) -> usize {
+        match p {
+            Primitive::Bool => 1,
+            Primitive::I8 | Primitive::U8 => 1,
+            Primitive::I16 | Primitive::U16 => 2,
+            Primitive::I32 | Primitive::U32 | Primitive::F32 => 4,
+            Primitive::I64 | Primitive::U64 | Primitive::F64 | Primitive::Isize | Primitive::Usize => 8,
         }
     }
 
@@ -77,13 +151,134 @@ impl RecordTemplate {
         let swift_name = NamingConvention::property_name(&field.name);
         let swift_type = TypeMapper::map_type(&field.field_type);
         let (wire_size, is_fixed, wire_read, wire_decode) = Self::wire_info(&field.field_type, &swift_name, idx);
+        let wire_size_expr = Self::wire_size_expr(&field.field_type, &swift_name);
+        let wire_decode_inline = Self::wire_decode_inline_expr(&field.field_type);
+        let wire_encode = Self::wire_encode_expr(&field.field_type, &swift_name);
+        let wire_encode_bytes = wire_encode.replace("data.", "bytes.");
         FieldView {
             swift_name,
             swift_type,
             wire_size,
+            wire_size_expr,
             wire_read,
             wire_decode,
+            wire_decode_inline,
+            wire_encode,
+            wire_encode_bytes,
             is_fixed,
+        }
+    }
+    
+    fn wire_size_expr(ty: &Type, name: &str) -> String {
+        match ty {
+            Type::Primitive(p) => Self::primitive_size(*p).to_string(),
+            Type::String => format!("(4 + {}.utf8.count)", name),
+            Type::Vec(inner) => {
+                match inner.as_ref() {
+                    Type::Primitive(p) => format!("(4 + {}.count * {})", name, Self::primitive_size(*p)),
+                    Type::String => format!("(4 + {}.reduce(0) {{ $0 + 4 + $1.utf8.count }})", name),
+                    _ => format!("(4 + {}.reduce(0) {{ $0 + $1.wireEncodedSize() }})", name),
+                }
+            }
+            Type::Option(inner) => {
+                let inner_expr = Self::wire_size_expr(inner, "v");
+                format!("({}.map {{ v in 1 + {} }} ?? 1)", name, inner_expr)
+            }
+            Type::Record(_) => format!("{}.wireEncodedSize()", name),
+            Type::Enum(_) => "4".into(),
+            _ => "0".into(),
+        }
+    }
+
+    fn wire_decode_inline_expr(ty: &Type) -> String {
+        match ty {
+            Type::Primitive(p) => {
+                let (size, read_fn) = Self::primitive_wire_info(*p);
+                format!("{{ let v = wire.{}(at: pos); pos += {}; return v }}()", read_fn, size)
+            }
+            Type::String => "{ let (v, s) = wire.readString(at: pos); pos += s; return v }()".into(),
+            Type::Record(name) => {
+                let class_name = NamingConvention::class_name(name);
+                format!("{{ let (v, s) = {}.decode(wireBuffer: wire, at: pos); pos += s; return v }}()", class_name)
+            }
+            Type::Vec(inner) => {
+                let inner_reader = Self::vec_inner_reader(inner);
+                format!("{{ let (v, s) = wire.readArray(at: pos, reader: {{ {} }}); pos += s; return v }}()", inner_reader)
+            }
+            Type::Option(inner) => {
+                let inner_reader = Self::option_inner_reader(inner);
+                format!("{{ let (v, s) = wire.readOptional(at: pos, reader: {{ {} }}); pos += s; return v }}()", inner_reader)
+            }
+            _ => "/* TODO */".into(),
+        }
+    }
+
+    fn vec_inner_reader(inner: &Type) -> String {
+        match inner {
+            Type::Primitive(p) => {
+                let (size, read_fn) = Self::primitive_wire_info(*p);
+                format!("(wire.{}(at: $0), {})", read_fn, size)
+            }
+            Type::String => "wire.readString(at: $0)".into(),
+            Type::Record(name) => format!("{}.decode(wireBuffer: wire, at: $0)", NamingConvention::class_name(name)),
+            _ => "(/* TODO */, 0)".into(),
+        }
+    }
+
+    fn option_inner_reader(inner: &Type) -> String {
+        match inner {
+            Type::Primitive(p) => {
+                let (size, read_fn) = Self::primitive_wire_info(*p);
+                format!("(wire.{}(at: $0), {})", read_fn, size)
+            }
+            Type::String => "(wire.readString(at: $0).value, wire.readString(at: $0).size)".into(),
+            Type::Record(name) => format!("{}.decode(wireBuffer: wire, at: $0)", NamingConvention::class_name(name)),
+            _ => "(/* TODO */, 0)".into(),
+        }
+    }
+
+    fn wire_encode_expr(ty: &Type, name: &str) -> String {
+        match ty {
+            Type::Primitive(p) => {
+                let encode_fn = match p {
+                    Primitive::Bool => "appendBool",
+                    Primitive::U8 => "appendU8",
+                    Primitive::U16 => "appendU16",
+                    Primitive::U32 => "appendU32",
+                    Primitive::U64 => "appendU64",
+                    Primitive::I8 => "appendI8",
+                    Primitive::I16 => "appendI16",
+                    Primitive::I32 => "appendI32",
+                    Primitive::I64 => "appendI64",
+                    Primitive::F32 => "appendF32",
+                    Primitive::F64 => "appendF64",
+                    Primitive::Usize => "appendU64",
+                    Primitive::Isize => "appendI64",
+                };
+                format!("data.{}({})", encode_fn, name)
+            }
+            Type::String => format!("data.appendString({})", name),
+            Type::Vec(inner) => {
+                match inner.as_ref() {
+                    Type::Primitive(_) => format!("data.appendArray({})", name),
+                    Type::String => format!("data.appendStringArray({})", name),
+                    Type::Record(_) => format!("data.appendU32(UInt32({}.count)); for item in {} {{ data.append(item.wireEncode()) }}", name, name),
+                    Type::Enum(_) => format!("data.appendU32(UInt32({}.count)); for item in {} {{ data.appendI32(item.rawValue) }}", name, name),
+                    _ => {
+                        let inner_encode = Self::wire_encode_expr(inner, "item");
+                        format!("data.appendU32(UInt32({}.count)); for item in {} {{ {} }}", name, name, inner_encode)
+                    }
+                }
+            }
+            Type::Option(inner) => {
+                let inner_encode = Self::wire_encode_expr(inner, "v");
+                format!(
+                    "if let v = {} {{ data.appendU8(1); {} }} else {{ data.appendU8(0) }}",
+                    name, inner_encode
+                )
+            }
+            Type::Record(_) => format!("data.append({}.wireEncode())", name),
+            _ => format!("/* TODO: encode {} */", name),
         }
     }
 
@@ -205,7 +400,6 @@ pub struct FunctionTemplate {
     pub return_type: Option<String>,
     pub return_abi: ReturnAbi,
     pub direct_call: String,
-    pub return_kind: ReturnKind,
     pub structured_error: Option<StructuredError>,
     pub result_ok_ffi_type: Option<String>,
     pub is_async: bool,
@@ -269,7 +463,6 @@ impl FunctionTemplate {
             })
             .unwrap_or_default();
 
-        let return_kind = ReturnKind::from_returns(&function.returns, &function.name, module);
         let return_abi = ReturnAbi::from_return_type(&function.returns, module);
         let direct_call = return_abi.direct_call_expr(&format!("{}({})", ffi_name, call_builder.build_ffi_args()));
 
@@ -287,7 +480,6 @@ impl FunctionTemplate {
             return_type,
             return_abi,
             direct_call,
-            return_kind,
             structured_error,
             result_ok_ffi_type,
             is_async: function.is_async,
@@ -417,28 +609,109 @@ impl DataEnumTemplate {
                 .map(|variant| {
                     let is_single_tuple =
                         variant.fields.len() == 1 && variant.fields[0].name.starts_with('_');
+                    let fields: Vec<EnumFieldView> = variant
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, field)| {
+                            let swift_name = NamingConvention::param_name(&field.name);
+                            let c_name = field.name.clone();
+                            let wire_decode = Self::enum_field_wire_decode(&field.field_type, &swift_name, idx);
+                            EnumFieldView {
+                                needs_alias: swift_name != c_name,
+                                swift_name,
+                                c_name,
+                                swift_type: TypeMapper::map_type(&field.field_type),
+                                wire_decode,
+                            }
+                        })
+                        .collect();
+                    let single_wire_decode = if is_single_tuple && !variant.fields.is_empty() {
+                        Self::single_tuple_wire_decode(&variant.fields[0].field_type)
+                    } else {
+                        String::new()
+                    };
                     DataVariantView {
                         swift_name: NamingConvention::enum_case_name(&variant.name),
                         c_name: variant.name.clone(),
                         tag_constant: format!("{}_TAG_{}", enumeration.name, variant.name),
                         is_single_tuple,
-                        fields: variant
-                            .fields
-                            .iter()
-                            .map(|field| {
-                                let swift_name = NamingConvention::param_name(&field.name);
-                                let c_name = field.name.clone();
-                                EnumFieldView {
-                                    needs_alias: swift_name != c_name,
-                                    swift_name,
-                                    c_name,
-                                    swift_type: TypeMapper::map_type(&field.field_type),
-                                }
-                            })
-                            .collect(),
+                        wire_decode: single_wire_decode,
+                        fields,
                     }
                 })
                 .collect(),
+        }
+    }
+
+    fn single_tuple_wire_decode(ty: &Type) -> String {
+        match ty {
+            Type::Primitive(p) => {
+                let (read_fn, size) = match p {
+                    Primitive::Bool => ("readBool", 1),
+                    Primitive::U8 => ("readU8", 1),
+                    Primitive::I8 => ("readI8", 1),
+                    Primitive::U16 => ("readU16", 2),
+                    Primitive::I16 => ("readI16", 2),
+                    Primitive::U32 => ("readU32", 4),
+                    Primitive::I32 => ("readI32", 4),
+                    Primitive::U64 => ("readU64", 8),
+                    Primitive::I64 => ("readI64", 8),
+                    Primitive::F32 => ("readF32", 4),
+                    Primitive::F64 => ("readF64", 8),
+                    Primitive::Usize => return "(UInt(wire.readU64(at: pos)), 8)".into(),
+                    Primitive::Isize => return "(Int(wire.readI64(at: pos)), 8)".into(),
+                };
+                format!("(wire.{}(at: pos), {})", read_fn, size)
+            }
+            Type::String => "wire.readString(at: pos)".into(),
+            Type::Record(name) => format!(
+                "{}.decode(wireBuffer: wire, at: pos)",
+                NamingConvention::class_name(name)
+            ),
+            _ => "(/* unsupported */, 0)".into(),
+        }
+    }
+
+    fn enum_field_wire_decode(ty: &Type, name: &str, _idx: usize) -> String {
+        match ty {
+            Type::Primitive(p) => {
+                let (read_fn, size) = match p {
+                    Primitive::Bool => ("readBool", 1),
+                    Primitive::U8 => ("readU8", 1),
+                    Primitive::I8 => ("readI8", 1),
+                    Primitive::U16 => ("readU16", 2),
+                    Primitive::I16 => ("readI16", 2),
+                    Primitive::U32 => ("readU32", 4),
+                    Primitive::I32 => ("readI32", 4),
+                    Primitive::U64 => ("readU64", 8),
+                    Primitive::I64 => ("readI64", 8),
+                    Primitive::F32 => ("readF32", 4),
+                    Primitive::F64 => ("readF64", 8),
+                    Primitive::Usize => return format!(
+                        "let {} = UInt(wire.readU64(at: pos)); pos += 8",
+                        name
+                    ),
+                    Primitive::Isize => return format!(
+                        "let {} = Int(wire.readI64(at: pos)); pos += 8",
+                        name
+                    ),
+                };
+                format!("let {} = wire.{}(at: pos); pos += {}", name, read_fn, size)
+            }
+            Type::String => {
+                format!("let ({}, {}Size) = wire.readString(at: pos); pos += {}Size", name, name, name)
+            }
+            Type::Record(rec_name) => {
+                format!(
+                    "let ({}, {}Size) = {}.decode(wireBuffer: wire, at: pos); pos += {}Size",
+                    name,
+                    name,
+                    NamingConvention::class_name(rec_name),
+                    name
+                )
+            }
+            _ => format!("/* unsupported field type for {} */", name),
         }
     }
 }
@@ -548,8 +821,12 @@ pub struct FieldView {
     pub swift_name: String,
     pub swift_type: String,
     pub wire_size: String,
+    pub wire_size_expr: String,
     pub wire_read: String,
     pub wire_decode: String,
+    pub wire_decode_inline: String,
+    pub wire_encode: String,
+    pub wire_encode_bytes: String,
     pub is_fixed: bool,
 }
 
@@ -563,6 +840,7 @@ pub struct EnumFieldView {
     pub c_name: String,
     pub swift_type: String,
     pub needs_alias: bool,
+    pub wire_decode: String,
 }
 
 pub struct DataVariantView {
@@ -570,6 +848,7 @@ pub struct DataVariantView {
     pub c_name: String,
     pub tag_constant: String,
     pub is_single_tuple: bool,
+    pub wire_decode: String,
     pub fields: Vec<EnumFieldView>,
 }
 
@@ -618,24 +897,58 @@ pub enum StreamModeView {
 #[template(path = "swift/stream_async.txt", escape = "none")]
 pub struct StreamAsyncBodyTemplate {
     pub item_type: String,
+    pub item_decode_expr: String,
     pub subscribe_fn: String,
     pub pop_batch_fn: String,
     pub poll_fn: String,
     pub unsubscribe_fn: String,
     pub free_fn: String,
+    pub prefix: String,
     pub atomic_cas_fn: String,
 }
 
 impl StreamAsyncBodyTemplate {
     pub fn from_stream(stream: &StreamMethod, class: &Class, _module: &Module) -> Self {
+        let item_decode_expr = Self::item_decode(&stream.item_type);
         Self {
             item_type: TypeMapper::map_type(&stream.item_type),
+            item_decode_expr,
             subscribe_fn: naming::stream_ffi_subscribe(&class.name, &stream.name),
             pop_batch_fn: naming::stream_ffi_pop_batch(&class.name, &stream.name),
             poll_fn: naming::stream_ffi_poll(&class.name, &stream.name),
             unsubscribe_fn: naming::stream_ffi_unsubscribe(&class.name, &stream.name),
             free_fn: naming::stream_ffi_free(&class.name, &stream.name),
+            prefix: naming::ffi_prefix().to_string(),
             atomic_cas_fn: format!("{}_atomic_u8_cas", naming::ffi_prefix()),
+        }
+    }
+
+    fn item_decode(ty: &Type) -> String {
+        match ty {
+            Type::Primitive(p) => {
+                let (read_fn, size) = match p {
+                    Primitive::Bool => ("readBool", 1),
+                    Primitive::U8 => ("readU8", 1),
+                    Primitive::I8 => ("readI8", 1),
+                    Primitive::U16 => ("readU16", 2),
+                    Primitive::I16 => ("readI16", 2),
+                    Primitive::U32 => ("readU32", 4),
+                    Primitive::I32 => ("readI32", 4),
+                    Primitive::U64 => ("readU64", 8),
+                    Primitive::I64 => ("readI64", 8),
+                    Primitive::F32 => ("readF32", 4),
+                    Primitive::F64 => ("readF64", 8),
+                    Primitive::Usize => return "{ let v = UInt(wire.readU64(at: offset)); offset += 8; return v }()".into(),
+                    Primitive::Isize => return "{ let v = Int(wire.readI64(at: offset)); offset += 8; return v }()".into(),
+                };
+                format!("{{ let v = wire.{}(at: offset); offset += {}; return v }}()", read_fn, size)
+            }
+            Type::String => "{ let (v, s) = wire.readString(at: offset); offset += s; return v }()".into(),
+            Type::Record(name) => format!(
+                "{{ let (v, s) = {}.decode(wireBuffer: wire, at: offset); offset += s; return v }}()",
+                NamingConvention::class_name(name)
+            ),
+            _ => "/* unsupported stream item type */".into(),
         }
     }
 }
@@ -773,25 +1086,29 @@ impl CallbackMethodBodyTemplate {
 #[template(path = "swift/method_throwing.txt", escape = "none")]
 pub struct ThrowingMethodBodyTemplate {
     pub ffi_name: String,
+    pub prefix: String,
     pub return_type: String,
     pub has_wrappers: bool,
     pub wrappers_open: String,
     pub wrappers_close: String,
     pub ffi_args: String,
+    pub decode_expr: String,
 }
 
 impl ThrowingMethodBodyTemplate {
-    pub fn from_method(method: &Method, class: &Class, _module: &Module) -> Self {
+    pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
         let ffi_name = naming::method_ffi_name(&class.name, &method.name);
-        let call_builder = SyncCallBuilder::new(&ffi_name, true).with_params(
+        let call_builder = SyncCallBuilder::new(&ffi_name, false).with_params(
             method
                 .inputs
                 .iter()
                 .map(|p| (p.name.as_str(), &p.param_type)),
         );
+        let return_abi = ReturnAbi::from_return_type(&method.returns, module);
 
         Self {
             ffi_name,
+            prefix: naming::ffi_prefix().to_string(),
             return_type: method
                 .returns
                 .ok_type()
@@ -801,6 +1118,7 @@ impl ThrowingMethodBodyTemplate {
             wrappers_open: call_builder.build_wrappers_open(),
             wrappers_close: call_builder.build_wrappers_close(),
             ffi_args: call_builder.build_ffi_args(),
+            decode_expr: return_abi.decode_expr().to_string(),
         }
     }
 }
@@ -813,18 +1131,22 @@ pub struct AsyncMethodBodyTemplate {
     pub ffi_complete: String,
     pub ffi_cancel: String,
     pub ffi_free: String,
+    pub prefix: String,
     pub args: Vec<String>,
     pub return_type: String,
+    pub decode_expr: String,
 }
 
 impl AsyncMethodBodyTemplate {
-    pub fn from_method(method: &Method, class: &Class, _module: &Module) -> Self {
+    pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
+        let return_abi = ReturnAbi::from_return_type(&method.returns, module);
         Self {
             ffi_name: naming::method_ffi_name(&class.name, &method.name),
             ffi_poll: naming::method_ffi_poll(&class.name, &method.name),
             ffi_complete: naming::method_ffi_complete(&class.name, &method.name),
             ffi_cancel: naming::method_ffi_cancel(&class.name, &method.name),
             ffi_free: naming::method_ffi_free(&class.name, &method.name),
+            prefix: naming::ffi_prefix().to_string(),
             args: method
                 .inputs
                 .iter()
@@ -835,6 +1157,7 @@ impl AsyncMethodBodyTemplate {
                 .ok_type()
                 .map(TypeMapper::map_type)
                 .unwrap_or_else(|| "Void".into()),
+            decode_expr: return_abi.decode_expr().to_string(),
         }
     }
 }
@@ -847,20 +1170,22 @@ pub struct AsyncThrowingMethodBodyTemplate {
     pub ffi_complete: String,
     pub ffi_cancel: String,
     pub ffi_free: String,
-    pub ffi_module: String,
+    pub prefix: String,
     pub args: Vec<String>,
     pub return_type: String,
+    pub decode_expr: String,
 }
 
 impl AsyncThrowingMethodBodyTemplate {
     pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
+        let return_abi = ReturnAbi::from_return_type(&method.returns, module);
         Self {
             ffi_name: naming::method_ffi_name(&class.name, &method.name),
             ffi_poll: naming::method_ffi_poll(&class.name, &method.name),
             ffi_complete: naming::method_ffi_complete(&class.name, &method.name),
             ffi_cancel: naming::method_ffi_cancel(&class.name, &method.name),
             ffi_free: naming::method_ffi_free(&class.name, &method.name),
-            ffi_module: NamingConvention::ffi_module_name(&module.name),
+            prefix: naming::ffi_prefix().to_string(),
             args: method
                 .inputs
                 .iter()
@@ -871,6 +1196,7 @@ impl AsyncThrowingMethodBodyTemplate {
                 .ok_type()
                 .map(TypeMapper::map_type)
                 .unwrap_or_else(|| "Void".into()),
+            decode_expr: return_abi.decode_expr().to_string(),
         }
     }
 }
@@ -941,6 +1267,7 @@ pub struct TraitMethodView {
     pub throws: bool,
     pub has_return: bool,
     pub has_out_param: bool,
+    pub wire_encoded_return: bool,
 }
 
 pub struct TraitParamView {
@@ -990,6 +1317,11 @@ impl CallbackTraitTemplate {
                         throws: method.throws(),
                         has_return,
                         has_out_param: has_return && !method.is_async,
+                        wire_encoded_return: method
+                            .returns
+                            .ok_type()
+                            .map(|ty| matches!(ty, Type::Record(_) | Type::String | Type::Vec(_)))
+                            .unwrap_or(false),
                     }
                 })
                 .collect(),

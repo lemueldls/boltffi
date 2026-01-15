@@ -1,97 +1,7 @@
-use crate::model::{Module, OptionInfo, Primitive, ReturnType, Type};
-use riff_ffi_rules::naming;
+use crate::model::{Module, Primitive, ReturnType, Type};
 
 use super::names::NamingConvention;
 use super::primitives;
-
-#[derive(Debug, Clone)]
-pub struct OptionView {
-    pub info: OptionInfo,
-    pub inner_type: String,
-    pub is_struct: bool,
-    pub is_data_enum: bool,
-    pub struct_size: usize,
-    pub buf_type: String,
-    pub free_fn: String,
-}
-
-impl OptionView {
-    pub fn from_type(inner: &Type, _func_name: &str, module: &Module) -> Self {
-        let info = OptionInfo::from_type(inner);
-        let is_data_enum = info.is_data_enum(module);
-        let struct_size = info.struct_size(module);
-
-        let swift_inner = SwiftType::from_model(inner);
-        let (inner_type, is_struct) = match &swift_inner {
-            SwiftType::Vec(vec_inner) => (vec_inner.swift_type(), vec_inner.is_struct()),
-            other => (other.swift_type(), other.is_struct()),
-        };
-
-        let (buf_type, free_fn) = if let SwiftType::Vec(vec_inner) = &swift_inner {
-            let cbindgen_name = vec_inner.cbindgen_name();
-            (
-                format!("FfiBuf_{}", cbindgen_name),
-                format!("{}_free_buf_{}", naming::ffi_prefix(), cbindgen_name),
-            )
-        } else {
-            (String::new(), String::new())
-        };
-
-        Self {
-            info,
-            inner_type,
-            is_struct,
-            is_data_enum,
-            struct_size,
-            buf_type,
-            free_fn,
-        }
-    }
-
-    pub fn is_vec(&self) -> bool {
-        self.info.is_vec
-    }
-
-    pub fn is_scalar(&self) -> bool {
-        !self.info.is_vec
-    }
-
-    pub fn is_packed(&self) -> bool {
-        !self.info.is_vec && self.info.inner.primitive().map(|p| p.fits_in_32_bits()).unwrap_or(false)
-    }
-
-    pub fn is_large_primitive(&self) -> bool {
-        !self.info.is_vec && self.info.inner.primitive().map(|p| !p.fits_in_32_bits()).unwrap_or(false)
-    }
-
-    pub fn is_string(&self) -> bool {
-        !self.info.is_vec && self.info.inner.is_string()
-    }
-
-    pub fn is_record(&self) -> bool {
-        !self.info.is_vec && self.info.inner.is_record()
-    }
-
-    pub fn is_enum(&self) -> bool {
-        !self.info.is_vec && self.info.inner.is_enum() && !self.is_data_enum
-    }
-
-    pub fn is_data_enum(&self) -> bool {
-        !self.info.is_vec && self.info.inner.is_enum() && self.is_data_enum
-    }
-
-    pub fn is_vec_string(&self) -> bool {
-        self.info.is_vec && self.info.inner.vec_inner().map(|t| t.is_string()).unwrap_or(false)
-    }
-
-    pub fn is_vec_enum(&self) -> bool {
-        self.info.is_vec && self.info.inner.vec_inner().map(|t| t.is_enum() && !self.is_data_enum).unwrap_or(false)
-    }
-
-    pub fn ffi_option_type(&self) -> &str {
-        &self.info.ffi_type
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SwiftType {
@@ -238,241 +148,9 @@ impl SwiftType {
             _ => None,
         }
     }
-}
 
-#[derive(Debug, Clone)]
-pub enum ReturnKind {
-    Void,
-    Direct,
-    String,
-    Enum {
-        type_name: String,
-    },
-    Record {
-        type_name: String,
-    },
-    Vec {
-        inner_type: String,
-        is_struct: bool,
-        buf_type: String,
-        free_fn: String,
-    },
-    Option(OptionView),
-    Result {
-        ok_type: String,
-        ok_is_vec: bool,
-    },
-}
-
-impl ReturnKind {
-    pub fn from_returns(returns: &ReturnType, func_name: &str, module: &Module) -> Self {
-        match returns {
-            ReturnType::Void => Self::Void,
-            ReturnType::Value(ty) => match ty {
-                Type::Void => Self::Void,
-                Type::Option(inner) => Self::Option(OptionView::from_type(inner, func_name, module)),
-                _ => Self::from_type(ty, func_name),
-            },
-            ReturnType::Fallible { ok, .. } => match ok {
-                Type::Void => Self::Result {
-                    ok_type: "Void".to_string(),
-                    ok_is_vec: false,
-                },
-                Type::Option(inner) => {
-                    let opt_view = OptionView::from_type(inner, func_name, module);
-                    Self::Result {
-                        ok_type: opt_view.inner_type.clone(),
-                        ok_is_vec: opt_view.is_vec(),
-                    }
-                }
-                _ => {
-                    let swift_ty = SwiftType::from_model(ok);
-                    Self::Result {
-                        ok_type: swift_ty.swift_type(),
-                        ok_is_vec: matches!(swift_ty, SwiftType::Vec(_)),
-                    }
-                }
-            },
-        }
-    }
-
-    fn from_type(ty: &Type, _func_name: &str) -> Self {
-        let swift_ty = SwiftType::from_model(ty);
-        match swift_ty {
-            SwiftType::Void => Self::Void,
-            SwiftType::String => Self::String,
-            SwiftType::Enum(name) => Self::Enum {
-                type_name: NamingConvention::class_name(&name),
-            },
-            SwiftType::Record(name) => Self::Record {
-                type_name: NamingConvention::class_name(&name),
-            },
-            SwiftType::Vec(inner) => {
-                let cbindgen_name = inner.cbindgen_name();
-                Self::Vec {
-                    inner_type: inner.swift_type(),
-                    is_struct: inner.is_struct(),
-                    buf_type: format!("FfiBuf_{}", cbindgen_name),
-                    free_fn: format!("{}_free_buf_{}", naming::ffi_prefix(), cbindgen_name),
-                }
-            }
-            SwiftType::Result { ok } => Self::Result {
-                ok_type: ok.swift_type(),
-                ok_is_vec: matches!(ok.as_ref(), SwiftType::Vec(_)),
-            },
-            _ => Self::Direct,
-        }
-    }
-
-    pub fn is_void(&self) -> bool {
-        matches!(self, Self::Void)
-    }
-
-    pub fn is_direct(&self) -> bool {
-        matches!(self, Self::Direct)
-    }
-
-    pub fn is_string(&self) -> bool {
-        matches!(self, Self::String)
-    }
-
-    pub fn is_enum(&self) -> bool {
-        matches!(self, Self::Enum { .. })
-    }
-
-    pub fn is_record(&self) -> bool {
-        matches!(self, Self::Record { .. })
-    }
-
-    pub fn is_vec(&self) -> bool {
-        matches!(self, Self::Vec { .. })
-    }
-
-    pub fn is_option_vec(&self) -> bool {
-        matches!(self, Self::Option(opt) if opt.is_vec())
-    }
-
-    pub fn is_option(&self) -> bool {
-        matches!(self, Self::Option(_))
-    }
-
-    pub fn is_option_scalar(&self) -> bool {
-        matches!(self, Self::Option(opt) if opt.is_scalar())
-    }
-
-    pub fn is_option_packed(&self) -> bool {
-        matches!(self, Self::Option(opt) if opt.is_packed())
-    }
-
-    pub fn is_option_large_primitive(&self) -> bool {
-        matches!(self, Self::Option(opt) if opt.is_large_primitive())
-    }
-
-    pub fn is_option_string(&self) -> bool {
-        matches!(self, Self::Option(opt) if opt.is_string())
-    }
-
-    pub fn is_option_record(&self) -> bool {
-        matches!(self, Self::Option(opt) if opt.is_record())
-    }
-
-    pub fn is_option_enum(&self) -> bool {
-        matches!(self, Self::Option(opt) if opt.is_enum())
-    }
-
-    pub fn is_option_data_enum(&self) -> bool {
-        matches!(self, Self::Option(opt) if opt.is_data_enum())
-    }
-
-    pub fn option_view(&self) -> Option<&OptionView> {
-        match self {
-            Self::Option(view) => Some(view),
-            _ => None,
-        }
-    }
-
-    pub fn is_result(&self) -> bool {
-        matches!(self, Self::Result { .. })
-    }
-
-    pub fn result_ok_is_vec(&self) -> bool {
-        matches!(
-            self,
-            Self::Result {
-                ok_is_vec: true,
-                ..
-            }
-        )
-    }
-
-    pub fn throws(&self) -> bool {
-        matches!(self, Self::Result { .. })
-    }
-
-    pub fn type_name(&self) -> Option<&str> {
-        match self {
-            Self::Enum { type_name } | Self::Record { type_name } => Some(type_name),
-            _ => None,
-        }
-    }
-
-    pub fn inner_type(&self) -> Option<&str> {
-        match self {
-            Self::Vec { inner_type, .. } => Some(inner_type),
-            Self::Option(opt) => Some(&opt.inner_type),
-            Self::Result { ok_type, .. } => Some(ok_type),
-            _ => None,
-        }
-    }
-
-    pub fn vec_is_struct(&self) -> bool {
-        matches!(
-            self,
-            Self::Vec {
-                is_struct: true,
-                ..
-            }
-        )
-    }
-
-    pub fn vec_buf_type(&self) -> Option<&str> {
-        match self {
-            Self::Vec { buf_type, .. } => Some(buf_type),
-            _ => None,
-        }
-    }
-
-    pub fn vec_free_fn(&self) -> Option<&str> {
-        match self {
-            Self::Vec { free_fn, .. } => Some(free_fn),
-            _ => None,
-        }
-    }
-
-    pub fn option_vec_is_struct(&self) -> bool {
-        matches!(self, Self::Option(opt) if opt.is_vec() && opt.is_struct)
-    }
-
-    pub fn option_vec_buf_type(&self) -> Option<&str> {
-        match self {
-            Self::Option(opt) if opt.is_vec() => Some(&opt.buf_type),
-            _ => None,
-        }
-    }
-
-    pub fn option_vec_free_fn(&self) -> Option<&str> {
-        match self {
-            Self::Option(opt) if opt.is_vec() => Some(&opt.free_fn),
-            _ => None,
-        }
-    }
-
-    pub fn option_vec_is_string(&self) -> bool {
-        matches!(self, Self::Option(opt) if opt.is_vec_string())
-    }
-
-    pub fn option_vec_is_enum(&self) -> bool {
-        matches!(self, Self::Option(opt) if opt.is_vec_enum())
+    pub fn is_primitive(&self) -> bool {
+        matches!(self, Self::Primitive(_))
     }
 }
 
@@ -523,13 +201,40 @@ impl ParamConversion {
                 Some("}".into()),
                 false,
             ),
-            SwiftType::Slice { mutable: false, .. } | SwiftType::Vec(_) => (
+            SwiftType::Slice { mutable: false, .. } => (
                 Some(format!(
                     "{}.withUnsafeBufferPointer {{ {}Ptr in",
                     swift_name, swift_name
                 )),
                 vec![
                     format!("{}Ptr.baseAddress", swift_name),
+                    format!("UInt({}Ptr.count)", swift_name),
+                ],
+                Some("}".into()),
+                false,
+            ),
+            SwiftType::Vec(inner) if inner.is_primitive() => (
+                Some(format!(
+                    "{}.withUnsafeBufferPointer {{ {}Ptr in",
+                    swift_name, swift_name
+                )),
+                vec![
+                    format!("{}Ptr.baseAddress", swift_name),
+                    format!("UInt({}Ptr.count)", swift_name),
+                ],
+                Some("}".into()),
+                false,
+            ),
+            SwiftType::Vec(_) => (
+                Some(format!(
+                    "withWireEncodedArray({}) {{ {}Ptr in",
+                    swift_name, swift_name
+                )),
+                vec![
+                    format!(
+                        "{}Ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)",
+                        swift_name
+                    ),
                     format!("UInt({}Ptr.count)", swift_name),
                 ],
                 Some("}".into()),
@@ -556,6 +261,21 @@ impl ParamConversion {
                     swift_name
                 )],
                 None,
+                false,
+            ),
+            SwiftType::Record(_) => (
+                Some(format!(
+                    "let {}Encoded = {}.wireEncode(); {}Encoded.withUnsafeBytes {{ {}Ptr in",
+                    swift_name, swift_name, swift_name, swift_name
+                )),
+                vec![
+                    format!(
+                        "{}Ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)",
+                        swift_name
+                    ),
+                    format!("UInt({}Encoded.count)", swift_name),
+                ],
+                Some("}".into()),
                 false,
             ),
             _ => (None, vec![swift_name.clone()], None, false),
@@ -663,7 +383,7 @@ impl ReturnAbi {
                 if is_data {
                     Self::WireEncoded {
                         swift_type: NamingConvention::class_name(name),
-                        decode_expr: format!("{}(wireBuffer: wire, at: 0)", NamingConvention::class_name(name)),
+                        decode_expr: format!("{}.decode(wireBuffer: wire, at: 0).value", NamingConvention::class_name(name)),
                         throws: false,
                     }
                 } else {
@@ -673,21 +393,11 @@ impl ReturnAbi {
                     }
                 }
             }
-            Type::Record(name) => {
-                let is_blittable = module.records.iter().any(|r| &r.name == name && r.is_blittable());
-                if is_blittable {
-                    Self::Direct {
-                        swift_type: NamingConvention::class_name(name),
-                        conversion: None,
-                    }
-                } else {
-                    Self::WireEncoded {
-                        swift_type: NamingConvention::class_name(name),
-                        decode_expr: format!("{}(wireBuffer: wire, at: 0)", NamingConvention::class_name(name)),
-                        throws: false,
-                    }
-                }
-            }
+            Type::Record(name) => Self::WireEncoded {
+                swift_type: NamingConvention::class_name(name),
+                decode_expr: format!("{}.decode(wireBuffer: wire, at: 0).value", NamingConvention::class_name(name)),
+                throws: false,
+            },
             Type::String => Self::WireEncoded {
                 swift_type: "String".into(),
                 decode_expr: "wire.readString(at: 0).value".into(),
@@ -729,17 +439,19 @@ impl ReturnAbi {
     fn ok_decode_expr(ty: &Type, module: &Module) -> String {
         match ty {
             Type::Void => "()".into(),
+            Type::Primitive(Primitive::Usize) => "UInt(wire.readU64(at: $0))".into(),
+            Type::Primitive(Primitive::Isize) => "Int(wire.readI64(at: $0))".into(),
             Type::Primitive(p) => format!("wire.{}(at: $0)", Self::primitive_read_fn(*p)),
             Type::String => "wire.readString(at: $0).value".into(),
             Type::Enum(name) => {
                 let is_data = module.enums.iter().any(|e| &e.name == name && e.is_data_enum());
                 if is_data {
-                    format!("{}(wireBuffer: wire, at: $0)", NamingConvention::class_name(name))
+                    format!("{}.decode(wireBuffer: wire, at: $0).value", NamingConvention::class_name(name))
                 } else {
                     format!("{}(fromC: wire.readI32(at: $0))", NamingConvention::class_name(name))
                 }
             }
-            Type::Record(name) => format!("{}(wireBuffer: wire, at: $0)", NamingConvention::class_name(name)),
+            Type::Record(name) => format!("{}.decode(wireBuffer: wire, at: $0).value", NamingConvention::class_name(name)),
             Type::Vec(inner) => Self::vec_decode_expr_inner(inner, module),
             Type::Option(inner) => Self::option_decode_expr_inner(inner, module),
             _ => "/* unsupported */".into(),
@@ -763,31 +475,41 @@ impl ReturnAbi {
     fn error_decode_expr(err: &Type, err_swift: &str) -> String {
         match err {
             Type::String => "FfiError(message: wire.readString(at: $0).value)".into(),
-            Type::Enum(_) => format!("{}(wireBuffer: wire, at: $0)", err_swift),
+            Type::Enum(_) => format!("{}.decode(wireBuffer: wire, at: $0).value", err_swift),
             _ => "FfiError(message: \"unknown error\")".into(),
         }
     }
 
     fn vec_decode_expr(inner: &Type, module: &Module) -> String {
-        format!("wire.readArray(at: 0, reader: {{ {} }}).value", Self::vec_element_decode(inner, module))
+        Self::vec_decode_expr_at(inner, module, "0")
     }
 
     fn vec_decode_expr_inner(inner: &Type, module: &Module) -> String {
-        format!("wire.readArray(at: $0, reader: {{ {} }}).value", Self::vec_element_decode(inner, module))
+        Self::vec_decode_expr_at(inner, module, "$0")
     }
 
-    fn vec_element_decode(inner: &Type, module: &Module) -> String {
+    fn vec_decode_expr_at(inner: &Type, module: &Module, offset: &str) -> String {
         match inner {
-            Type::Primitive(p) => format!("wire.{}(at: $0)", Self::primitive_read_fn(*p)),
-            Type::String => "wire.readString(at: $0).value".into(),
-            Type::Record(name) => format!("{}(wireBuffer: wire, at: $0)", NamingConvention::class_name(name)),
+            Type::Primitive(Primitive::U8) => {
+                format!("wire.readBytes(at: {})", offset)
+            }
+            Type::Primitive(p) => {
+                let size = p.size_bytes();
+                format!("wire.readArray(at: {}, reader: {{ (wire.{}(at: $0), {}) }}).value", offset, Self::primitive_read_fn(*p), size)
+            }
             Type::Enum(name) => {
                 let is_data = module.enums.iter().any(|e| &e.name == name && e.is_data_enum());
                 if is_data {
-                    format!("{}(wireBuffer: wire, at: $0)", NamingConvention::class_name(name))
+                    format!("wire.readArray(at: {}, reader: {{ {}.decode(wireBuffer: wire, at: $0) }}).value", offset, NamingConvention::class_name(name))
                 } else {
-                    format!("{}(fromC: wire.readI32(at: $0))", NamingConvention::class_name(name))
+                    format!("wire.readArray(at: {}, reader: {{ ({}(fromC: wire.readI32(at: $0)), 4) }}).value", offset, NamingConvention::class_name(name))
                 }
+            }
+            Type::String => {
+                format!("wire.readArray(at: {}, reader: {{ wire.readString(at: $0) }}).value", offset)
+            }
+            Type::Record(name) => {
+                format!("wire.readArray(at: {}, reader: {{ {}.decode(wireBuffer: wire, at: $0) }}).value", offset, NamingConvention::class_name(name))
             }
             _ => "/* unsupported */".into(),
         }
@@ -803,13 +525,31 @@ impl ReturnAbi {
 
     fn option_inner_decode(inner: &Type, module: &Module) -> String {
         match inner {
-            Type::Primitive(p) => format!("(wire.{}(at: $0), {})", Self::primitive_read_fn(*p), p.fits_in_32_bits().then_some(4).unwrap_or(8)),
-            Type::String => "(wire.readString(at: $0).value, 0)".into(),
-            Type::Record(name) => format!("({}(wireBuffer: wire, at: $0), 0)", NamingConvention::class_name(name)),
+            Type::Primitive(p) => format!("(wire.{}(at: $0), {})", Self::primitive_read_fn(*p), p.size_bytes()),
+            Type::String => "wire.readString(at: $0)".into(),
+            Type::Record(name) => format!("{}.decode(wireBuffer: wire, at: $0)", NamingConvention::class_name(name)),
             Type::Enum(name) => {
                 let is_data = module.enums.iter().any(|e| &e.name == name && e.is_data_enum());
                 if is_data {
-                    format!("({}(wireBuffer: wire, at: $0), 0)", NamingConvention::class_name(name))
+                    format!("{}.decode(wireBuffer: wire, at: $0)", NamingConvention::class_name(name))
+                } else {
+                    format!("({}(fromC: wire.readI32(at: $0)), 4)", NamingConvention::class_name(name))
+                }
+            }
+            Type::Vec(elem) => format!("wire.readArray(at: $0, reader: {{ {} }})", Self::vec_inner_reader(elem, module)),
+            _ => "(/* unsupported */, 0)".into(),
+        }
+    }
+
+    fn vec_inner_reader(inner: &Type, module: &Module) -> String {
+        match inner {
+            Type::Primitive(p) => format!("(wire.{}(at: $0), {})", Self::primitive_read_fn(*p), p.size_bytes()),
+            Type::String => "wire.readString(at: $0)".into(),
+            Type::Record(name) => format!("{}.decode(wireBuffer: wire, at: $0)", NamingConvention::class_name(name)),
+            Type::Enum(name) => {
+                let is_data = module.enums.iter().any(|e| &e.name == name && e.is_data_enum());
+                if is_data {
+                    format!("{}.decode(wireBuffer: wire, at: $0)", NamingConvention::class_name(name))
                 } else {
                     format!("({}(fromC: wire.readI32(at: $0)), 4)", NamingConvention::class_name(name))
                 }

@@ -56,6 +56,7 @@ pub struct ParamInfo {
     pub is_slice: bool,
     pub is_mut_slice: bool,
     pub is_vec: bool,
+    pub is_vec_wire_encoded: bool,
     pub is_callback: bool,
     pub is_enum: bool,
     pub is_boxed_trait: bool,
@@ -74,6 +75,7 @@ impl ParamInfo {
         let is_slice = matches!(ty, Type::Slice(_));
         let is_mut_slice = matches!(ty, Type::MutSlice(_));
         let is_vec = matches!(ty, Type::Vec(_));
+        let is_vec_wire_encoded = matches!(ty, Type::Vec(inner) if !matches!(inner.as_ref(), Type::Primitive(_)));
         let is_callback = matches!(ty, Type::Closure(_));
         let is_enum = matches!(ty, Type::Enum(_));
         let is_boxed_trait = matches!(ty, Type::BoxedTrait(_));
@@ -109,6 +111,7 @@ impl ParamInfo {
             is_slice,
             is_mut_slice,
             is_vec,
+            is_vec_wire_encoded,
             is_callback,
             is_enum,
             is_boxed_trait,
@@ -134,6 +137,8 @@ pub struct CallbackInfo {
     pub box_name: String,
     pub ptr_name: String,
     pub trampoline_name: String,
+    pub trampoline_args: String,
+    pub trampoline_call_args: String,
 }
 
 impl CallbackInfo {
@@ -163,6 +168,36 @@ impl CallbackInfo {
             .collect::<Vec<_>>()
             .join(", ");
 
+        let mut arg_names = Vec::new();
+        let mut call_conversions = Vec::new();
+        let mut arg_idx = 0;
+
+        for param_ty in &sig.params {
+            if matches!(param_ty, Type::Record(_)) {
+                let ptr_name = format!("ptr{}", arg_idx);
+                let len_name = format!("len{}", arg_idx);
+                arg_names.push(ptr_name.clone());
+                arg_names.push(len_name.clone());
+                let record_name = if let Type::Record(n) = param_ty {
+                    NamingConvention::class_name(n)
+                } else {
+                    "Unknown".to_string()
+                };
+                call_conversions.push(format!(
+                    "{}.decode(wireBuffer: WireBuffer(ptr: {}!, len: Int({})), at: 0).value",
+                    record_name, ptr_name, len_name
+                ));
+            } else {
+                let val_name = format!("val{}", arg_idx);
+                arg_names.push(val_name.clone());
+                call_conversions.push(val_name);
+            }
+            arg_idx += 1;
+        }
+
+        let trampoline_args = arg_names.join(", ");
+        let trampoline_call_args = call_conversions.join(", ");
+
         Some(Self {
             param_name: param_name.clone(),
             swift_type: params_swift,
@@ -172,6 +207,8 @@ impl CallbackInfo {
             box_name: format!("{}Box{}", param_name, suffix),
             ptr_name: format!("{}Ptr{}", param_name, suffix),
             trampoline_name: format!("{}Trampoline{}", param_name, suffix),
+            trampoline_args,
+            trampoline_call_args,
         })
     }
 }

@@ -1,7 +1,7 @@
 use quote::quote;
 use syn::{FnArg, Pat};
 
-use crate::util::{ParamTransform, classify_param_transform, len_ident, ptr_ident};
+use crate::util::{ParamTransform, classify_param_transform, is_primitive_vec_inner, len_ident, ptr_ident};
 
 pub struct FfiParams {
     pub ffi_params: Vec<proc_macro2::TokenStream>,
@@ -33,13 +33,8 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                         let #name: &str = if #ptr_name.is_null() {
                             ""
                         } else {
-                            match core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name)) {
-                                Ok(s) => s,
-                                Err(_) => return crate::fail_with_error(
-                                    crate::FfiStatus::INVALID_ARG,
-                                    concat!(stringify!(#name), " is not valid UTF-8")
-                                ),
-                            }
+                            core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name))
+                                .expect(concat!(stringify!(#name), ": invalid UTF-8"))
                         };
                     });
 
@@ -56,13 +51,9 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                         let #name: String = if #ptr_name.is_null() {
                             String::new()
                         } else {
-                            match core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name)) {
-                                Ok(s) => s.to_string(),
-                                Err(_) => return crate::fail_with_error(
-                                    crate::FfiStatus::INVALID_ARG,
-                                    concat!(stringify!(#name), " is not valid UTF-8")
-                                ),
-                            }
+                            core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name))
+                                .expect(concat!(stringify!(#name), ": invalid UTF-8"))
+                                .to_string()
                         };
                     });
 
@@ -72,20 +63,40 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                     let cb_name = syn::Ident::new(&format!("{}_cb", name), name.span());
                     let ud_name = syn::Ident::new(&format!("{}_ud", name), name.span());
 
+                    let mut ffi_cb_args = Vec::new();
+                    let mut arg_names = Vec::new();
+                    let mut cb_call_args = Vec::new();
+                    let mut wire_vars = Vec::new();
+
+                    for (i, arg_ty) in arg_types.iter().enumerate() {
+                        let arg_name = syn::Ident::new(&format!("__arg{}", i), name.span());
+                        let arg_ty_str = quote!(#arg_ty).to_string().replace(' ', "");
+
+                        if is_primitive_vec_inner(&arg_ty_str) {
+                            ffi_cb_args.push(quote! { #arg_ty });
+                            cb_call_args.push(quote! { #arg_name });
+                        } else {
+                            let wire_name = syn::Ident::new(&format!("__wire{}", i), name.span());
+                            ffi_cb_args.push(quote! { *const u8 });
+                            ffi_cb_args.push(quote! { usize });
+                            wire_vars.push(quote! {
+                                let #wire_name = crate::wire::encode(&#arg_name);
+                            });
+                            cb_call_args.push(quote! { #wire_name.as_ptr() });
+                            cb_call_args.push(quote! { #wire_name.len() });
+                        }
+                        arg_names.push(arg_name);
+                    }
+
                     ffi_params.push(
-                        quote! { #cb_name: extern "C" fn(*mut core::ffi::c_void, #(#arg_types),*) },
+                        quote! { #cb_name: extern "C" fn(*mut core::ffi::c_void, #(#ffi_cb_args),*) },
                     );
                     ffi_params.push(quote! { #ud_name: *mut core::ffi::c_void });
 
-                    let arg_names: Vec<syn::Ident> = arg_types
-                        .iter()
-                        .enumerate()
-                        .map(|(i, _)| syn::Ident::new(&format!("__arg{}", i), name.span()))
-                        .collect();
-
                     conversions.push(quote! {
                         let #name = |#(#arg_names: #arg_types),*| {
-                            #cb_name(#ud_name, #(#arg_names),*)
+                            #(#wire_vars)*
+                            #cb_name(#ud_name, #(#cb_call_args),*)
                         };
                     });
 
@@ -132,19 +143,13 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                     ffi_params.push(quote! { #name: *mut #foreign_type });
 
                     conversions.push(quote! {
-                        let #name: Box<dyn #trait_name> = if #name.is_null() {
-                            return crate::fail_with_error(
-                                crate::FfiStatus::NULL_POINTER,
-                                concat!(stringify!(#name), " is null")
-                            );
-                        } else {
-                            Box::from_raw(#name)
-                        };
+                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null pointer"));
+                        let #name: Box<dyn #trait_name> = Box::from_raw(#name);
                     });
 
                     call_args.push(quote! { #name });
                 }
-                ParamTransform::VecParam(inner_ty) => {
+                ParamTransform::VecPrimitive(inner_ty) => {
                     let ptr_name = ptr_ident(&name);
                     let len_name = len_ident(&name);
 
@@ -156,6 +161,24 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                             Vec::new()
                         } else {
                             core::slice::from_raw_parts(#ptr_name, #len_name).to_vec()
+                        };
+                    });
+
+                    call_args.push(quote! { #name });
+                }
+                ParamTransform::VecWireEncoded(inner_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    conversions.push(quote! {
+                        let #name: Vec<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
+                            Vec::new()
+                        } else {
+                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -285,7 +308,7 @@ pub fn transform_params_async(
                 ParamTransform::BoxedTrait(_) => {
                     panic!("Box<dyn Trait> parameters are not yet supported in async functions");
                 }
-                ParamTransform::VecParam(inner_ty) => {
+                ParamTransform::VecPrimitive(inner_ty) => {
                     let ptr_name = ptr_ident(&name);
                     let len_name = len_ident(&name);
 
@@ -297,6 +320,25 @@ pub fn transform_params_async(
                             Vec::new()
                         } else {
                             unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) }.to_vec()
+                        };
+                    });
+
+                    move_vars.push(name.clone());
+                    call_args.push(quote! { #name });
+                }
+                ParamTransform::VecWireEncoded(inner_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    pre_spawn.push(quote! {
+                        let #name: Vec<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
+                            Vec::new()
+                        } else {
+                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -346,13 +388,8 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                         let #name: &str = if #ptr_name.is_null() {
                             ""
                         } else {
-                            match core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name)) {
-                                Ok(s) => s,
-                                Err(_) => return crate::fail_with_error(
-                                    crate::FfiStatus::INVALID_ARG,
-                                    concat!(stringify!(#name), " is not valid UTF-8")
-                                ),
-                            }
+                            core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name))
+                                .expect(concat!(stringify!(#name), ": invalid UTF-8"))
                         };
                     });
 
@@ -369,13 +406,9 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                         let #name: String = if #ptr_name.is_null() {
                             String::new()
                         } else {
-                            match core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name)) {
-                                Ok(s) => s.to_string(),
-                                Err(_) => return crate::fail_with_error(
-                                    crate::FfiStatus::INVALID_ARG,
-                                    concat!(stringify!(#name), " is not valid UTF-8")
-                                ),
-                            }
+                            core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name))
+                                .expect(concat!(stringify!(#name), ": invalid UTF-8"))
+                                .to_string()
                         };
                     });
 
@@ -385,20 +418,40 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                     let cb_name = syn::Ident::new(&format!("{}_cb", name), name.span());
                     let ud_name = syn::Ident::new(&format!("{}_ud", name), name.span());
 
+                    let mut ffi_cb_args = Vec::new();
+                    let mut arg_names = Vec::new();
+                    let mut cb_call_args = Vec::new();
+                    let mut wire_vars = Vec::new();
+
+                    for (i, arg_ty) in arg_types.iter().enumerate() {
+                        let arg_name = syn::Ident::new(&format!("__arg{}", i), name.span());
+                        let arg_ty_str = quote!(#arg_ty).to_string().replace(' ', "");
+
+                        if is_primitive_vec_inner(&arg_ty_str) {
+                            ffi_cb_args.push(quote! { #arg_ty });
+                            cb_call_args.push(quote! { #arg_name });
+                        } else {
+                            let wire_name = syn::Ident::new(&format!("__wire{}", i), name.span());
+                            ffi_cb_args.push(quote! { *const u8 });
+                            ffi_cb_args.push(quote! { usize });
+                            wire_vars.push(quote! {
+                                let #wire_name = crate::wire::encode(&#arg_name);
+                            });
+                            cb_call_args.push(quote! { #wire_name.as_ptr() });
+                            cb_call_args.push(quote! { #wire_name.len() });
+                        }
+                        arg_names.push(arg_name);
+                    }
+
                     ffi_params.push(
-                        quote! { #cb_name: extern "C" fn(*mut core::ffi::c_void, #(#arg_types),*) },
+                        quote! { #cb_name: extern "C" fn(*mut core::ffi::c_void, #(#ffi_cb_args),*) },
                     );
                     ffi_params.push(quote! { #ud_name: *mut core::ffi::c_void });
 
-                    let arg_names: Vec<syn::Ident> = arg_types
-                        .iter()
-                        .enumerate()
-                        .map(|(i, _)| syn::Ident::new(&format!("__arg{}", i), name.span()))
-                        .collect();
-
                     conversions.push(quote! {
                         let #name = |#(#arg_names: #arg_types),*| {
-                            #cb_name(#ud_name, #(#arg_names),*)
+                            #(#wire_vars)*
+                            #cb_name(#ud_name, #(#cb_call_args),*)
                         };
                     });
 
@@ -445,19 +498,13 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                     ffi_params.push(quote! { #name: *mut #foreign_type });
 
                     conversions.push(quote! {
-                        let #name: Box<dyn #trait_name> = if #name.is_null() {
-                            return crate::fail_with_error(
-                                crate::FfiStatus::NULL_POINTER,
-                                concat!(stringify!(#name), " is null")
-                            );
-                        } else {
-                            Box::from_raw(#name)
-                        };
+                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null pointer"));
+                        let #name: Box<dyn #trait_name> = Box::from_raw(#name);
                     });
 
                     call_args.push(quote! { #name });
                 }
-                ParamTransform::VecParam(inner_ty) => {
+                ParamTransform::VecPrimitive(inner_ty) => {
                     let ptr_name = ptr_ident(&name);
                     let len_name = len_ident(&name);
 
@@ -469,6 +516,24 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                             Vec::new()
                         } else {
                             core::slice::from_raw_parts(#ptr_name, #len_name).to_vec()
+                        };
+                    });
+
+                    call_args.push(quote! { #name });
+                }
+                ParamTransform::VecWireEncoded(inner_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    conversions.push(quote! {
+                        let #name: Vec<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
+                            Vec::new()
+                        } else {
+                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -561,7 +626,7 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                 ParamTransform::BoxedTrait(_) => {
                     panic!("Box<dyn Trait> is not supported in async methods");
                 }
-                ParamTransform::VecParam(inner_ty) => {
+                ParamTransform::VecPrimitive(inner_ty) => {
                     let ptr_name = ptr_ident(&name);
                     let len_name = len_ident(&name);
 
@@ -573,6 +638,25 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                             Vec::new()
                         } else {
                             unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) }.to_vec()
+                        };
+                    });
+
+                    move_vars.push(name.clone());
+                    call_args.push(quote! { #name });
+                }
+                ParamTransform::VecWireEncoded(inner_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    pre_spawn.push(quote! {
+                        let #name: Vec<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
+                            Vec::new()
+                        } else {
+                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 

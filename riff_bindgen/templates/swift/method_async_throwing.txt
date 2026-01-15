@@ -1,57 +1,67 @@
-let futureHandle = {{ ffi_name }}(handle{% for arg in args %}, {{ arg }}{% endfor %})
+        let futureHandle = {{ ffi_name }}(handle{% for arg in args %}, {{ arg }}{% endfor %})
 
-typealias FutureContext = FfiFutureState<{{ return_type }}>
-let state = FutureContext(handle: futureHandle)
+        typealias FutureContext = FfiFutureState<{{ return_type }}>
+        let state = FutureContext(handle: futureHandle)
 
-return try await withTaskCancellationHandler {
-    try await withCheckedThrowingContinuation { continuation in
-        guard state.installContinuation(continuation) else {
-            continuation.resume(throwing: CancellationError())
-            return
-        }
-        
-        func poll(ctx: FutureContext) {
-            guard ctx.canPoll() else { return }
-            {{ ffi_poll }}(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
-                let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
-                if pollResult == 0 {
-                    let decision = ctx.decideFinish()
-                    if case .alreadyFinished = decision { return }
-                    var status = FfiStatus()
-                    var outErr = {{ ffi_module }}.FfiError()
-                    let result = {{ ffi_complete }}(ctx.handle, &status, &outErr)
-                    {{ ffi_free }}(ctx.handle)
-                    switch decision {
-                    case .finishWithContinuation(let continuation):
-                        if status.code != 0 {
-                            let msg = stringFromFfi(outErr.message)
-                            continuation.resume(throwing: FfiError(message: msg))
-                        } else {
-                            continuation.resume(returning: result)
-                        }
-                    case .finishWithoutContinuation:
-                        break
-                    case .alreadyFinished:
-                        break
-                    }
-                } else {
-                    poll(ctx: ctx)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard state.installContinuation(continuation) else {
+                    continuation.resume(throwing: CancellationError())
+                    return
                 }
+                
+                func poll(ctx: FutureContext) {
+                    guard ctx.canPoll() else { return }
+                    {{ ffi_poll }}(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
+                        let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
+                        if pollResult == 0 {
+                            let decision = ctx.decideFinish()
+                            if case .alreadyFinished = decision { return }
+                            var status = FfiStatus()
+                            let buf = {{ ffi_complete }}(ctx.handle, &status)
+                            {{ ffi_free }}(ctx.handle)
+                            switch decision {
+                            case .finishWithContinuation(let continuation):
+                                if status.code != 0 {
+                                    {{ prefix }}_free_buf_u8(buf)
+                                    continuation.resume(throwing: FfiError(message: "ffi call failed"))
+                                } else {
+                                    let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
+                                    {{ prefix }}_free_buf_u8(buf)
+                                    do {
+                                        let value = {{ decode_expr }}
+                                        continuation.resume(returning: value)
+                                    } catch {
+                                        continuation.resume(throwing: error)
+                                    }
+                                }
+                            case .finishWithoutContinuation:
+                                {{ prefix }}_free_buf_u8(buf)
+                            case .alreadyFinished:
+                                break
+                            }
+                        } else {
+                            guard ctx.canPoll() else { return }
+                            Task { [ctx] in
+                                await Task.yield()
+                                poll(ctx: ctx)
+                            }
+                        }
+                    }
+                }
+                poll(ctx: state)
+            }
+        } onCancel: {
+            let decision = state.decideFinish()
+            switch decision {
+            case .alreadyFinished:
+                break
+            case .finishWithoutContinuation:
+                {{ ffi_cancel }}(state.handle)
+                {{ ffi_free }}(state.handle)
+            case .finishWithContinuation(let continuation):
+                {{ ffi_cancel }}(state.handle)
+                {{ ffi_free }}(state.handle)
+                continuation.resume(throwing: CancellationError())
             }
         }
-        poll(ctx: state)
-    }
-} onCancel: {
-    let decision = state.decideFinish()
-    switch decision {
-    case .alreadyFinished:
-        break
-    case .finishWithoutContinuation:
-        {{ ffi_cancel }}(state.handle)
-        {{ ffi_free }}(state.handle)
-    case .finishWithContinuation(let continuation):
-        {{ ffi_cancel }}(state.handle)
-        {{ ffi_free }}(state.handle)
-        continuation.resume(throwing: CancellationError())
-    }
-}

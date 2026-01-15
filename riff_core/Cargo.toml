@@ -7,8 +7,13 @@ authors = ["Ali A. Hilal <me@alihilal.com>"]
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+[features]
+default = []
+fast-alloc = ["mimalloc"]
+
 [dependencies]
 riff_macros = { path = "../riff_macros" }
+mimalloc = { version = "0.1", default-features = false, optional = true }
 
 [lints]
 workspace = true

@@ -139,7 +139,7 @@ mod tests {
         assert!(output.contains("public struct Point: Hashable, Equatable, Sendable"));
         assert!(output.contains("public let x: Double"));
         assert!(output.contains("public let y: Double"));
-        assert!(output.contains("init(wireBuffer: WireBuffer, at offset: Int)"));
+        assert!(output.contains("static func decode(wireBuffer wire: WireBuffer, at offset: Int)"));
 
         let sensor_record = Record::new("SensorData")
             .with_field(RecordField::new("sensor_id", Type::Primitive(Primitive::I32)))

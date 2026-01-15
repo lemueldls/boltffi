@@ -8,24 +8,41 @@ public struct {{ class_name }}: Hashable, Equatable, Sendable {
         self.{{ field.swift_name }} = {{ field.swift_name }}
 {%- endfor %}
     }
-{%- if is_fixed_size %}
-
-    init(wireBuffer: WireBuffer, at offset: Int) {
+    @inlinable static func decode(wireBuffer wire: WireBuffer, at offset: Int) -> (value: {{ class_name }}, size: Int) {
         var pos = offset
 {%- for field in fields %}
-        self.{{ field.swift_name }} = {{ field.wire_read }}
-        pos += {{ field.wire_size }}
+        let {{ field.swift_name }}_v = {{ field.wire_decode_inline }}
 {%- endfor %}
+        return ({{ class_name }}({% for field in fields %}{{ field.swift_name }}: {{ field.swift_name }}_v{% if !loop.last %}, {% endif %}{% endfor %}), pos - offset)
+    }
+
+}
+
+extension {{ class_name }}: WireEncodable {
+{%- if is_blittable %}
+    @usableFromInline static var isBlittable: Bool { true }
+    @inlinable func wireEncodedSize() -> Int { MemoryLayout<Self>.stride }
+    @inlinable func wireEncodeTo(_ data: inout Data) {
+        withUnsafeBytes(of: self) { data.append(contentsOf: $0) }
+    }
+    @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) {
+        withUnsafeBytes(of: self) { bytes.append(contentsOf: $0) }
     }
 {%- else %}
-
-    init(wireBuffer: WireBuffer, at offset: Int) {
-        let offsetsStart = offset + 2
+    @usableFromInline static var isBlittable: Bool { false }
+    @inlinable func wireEncodedSize() -> Int {
 {%- for field in fields %}
-        let offset{{ loop.index0 }} = offsetsStart + Int(wireBuffer.readU32(at: offsetsStart + {{ loop.index0 }} * 4))
+        {{ field.wire_size_expr }}{% if !loop.last %} +{% endif %}
 {%- endfor %}
+    }
+    @inlinable func wireEncodeTo(_ data: inout Data) {
 {%- for field in fields %}
-        {{ field.wire_decode }}
+        {{ field.wire_encode }}
+{%- endfor %}
+    }
+    @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) {
+{%- for field in fields %}
+        {{ field.wire_encode_bytes }}
 {%- endfor %}
     }
 {%- endif %}

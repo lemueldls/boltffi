@@ -2,6 +2,28 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Fields, ItemEnum, ItemStruct, Type};
 
+fn is_primitive_type(ty: &Type) -> bool {
+    match ty {
+        Type::Path(type_path) => {
+            if let Some(ident) = type_path.path.get_ident() {
+                let name = ident.to_string();
+                matches!(
+                    name.as_str(),
+                    "bool" | "i8" | "u8" | "i16" | "u16" | "i32" | "u32" 
+                    | "i64" | "u64" | "f32" | "f64" | "isize" | "usize"
+                )
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+fn is_struct_blittable(field_types: &[&Type]) -> bool {
+    field_types.iter().all(|ty| is_primitive_type(ty))
+}
+
 pub fn generate_wire_impls(item_struct: &ItemStruct) -> TokenStream {
     let struct_name = &item_struct.ident;
     let (impl_generics, ty_generics, where_clause) = item_struct.generics.split_for_impl();
@@ -25,8 +47,7 @@ pub fn generate_wire_impls(item_struct: &ItemStruct) -> TokenStream {
         .map(|f| &f.ty)
         .collect();
     
-    let field_count = field_names.len();
-    let field_indices: Vec<_> = (0..field_count).collect();
+    let is_blittable = is_struct_blittable(&field_types);
     
     let wire_size_impl = generate_wire_size_impl(
         struct_name,
@@ -35,7 +56,6 @@ pub fn generate_wire_impls(item_struct: &ItemStruct) -> TokenStream {
         where_clause,
         &field_names,
         &field_types,
-        field_count,
     );
     
     let wire_encode_impl = generate_wire_encode_impl(
@@ -44,9 +64,6 @@ pub fn generate_wire_impls(item_struct: &ItemStruct) -> TokenStream {
         &ty_generics,
         where_clause,
         &field_names,
-        &field_types,
-        field_count,
-        &field_indices,
     );
     
     let wire_decode_impl = generate_wire_decode_impl(
@@ -56,8 +73,7 @@ pub fn generate_wire_impls(item_struct: &ItemStruct) -> TokenStream {
         where_clause,
         &field_names,
         &field_types,
-        field_count,
-        &field_indices,
+        is_blittable,
     );
     
     quote! {
@@ -100,7 +116,6 @@ fn generate_wire_size_impl(
     where_clause: Option<&syn::WhereClause>,
     field_names: &[&syn::Ident],
     field_types: &[&Type],
-    field_count: usize,
 ) -> TokenStream {
     let all_fixed_check = field_types.iter().map(|ty| {
         quote! { <#ty as riff_core::wire::WireSize>::is_fixed_size() }
@@ -113,8 +128,6 @@ fn generate_wire_size_impl(
     let field_wire_sizes = field_names.iter().map(|name| {
         quote! { riff_core::wire::WireSize::wire_size(&self.#name) }
     });
-    
-    let field_count_u16 = field_count as u16;
     
     quote! {
         impl #impl_generics riff_core::wire::WireSize for #struct_name #ty_generics #where_clause {
@@ -132,10 +145,7 @@ fn generate_wire_size_impl(
             
             fn wire_size(&self) -> usize {
                 <Self as riff_core::wire::WireSize>::fixed_size().unwrap_or_else(|| {
-                    let header_size = riff_core::wire::FIELD_COUNT_SIZE 
-                        + (#field_count_u16 as usize * riff_core::wire::OFFSET_SIZE);
-                    let fields_size = #(#field_wire_sizes)+*;
-                    header_size + fields_size
+                    #(#field_wire_sizes)+*
                 })
             }
         }
@@ -148,47 +158,19 @@ fn generate_wire_encode_impl(
     ty_generics: &syn::TypeGenerics,
     where_clause: Option<&syn::WhereClause>,
     field_names: &[&syn::Ident],
-    _field_types: &[&Type],
-    field_count: usize,
-    field_indices: &[usize],
 ) -> TokenStream {
-    let field_count_u16 = field_count as u16;
-    
-    let fixed_encode_fields = field_names.iter().map(|name| {
+    let encode_fields = field_names.iter().map(|name| {
         quote! {
             written += riff_core::wire::WireEncode::encode_to(&self.#name, &mut buf[written..]);
-        }
-    });
-    
-    let variable_encode_setup = quote! {
-        buf[0..2].copy_from_slice(&(#field_count_u16 as u16).to_le_bytes());
-        let offsets_start = riff_core::wire::FIELD_COUNT_SIZE;
-        let offsets_size = #field_count * riff_core::wire::OFFSET_SIZE;
-        let mut data_position = offsets_start + offsets_size;
-    };
-    
-    let variable_encode_fields = field_names.iter().zip(field_indices.iter()).map(|(name, idx)| {
-        let offset_position = quote! { offsets_start + #idx * riff_core::wire::OFFSET_SIZE };
-        quote! {
-            let field_offset = data_position as u32;
-            buf[#offset_position..#offset_position + 4].copy_from_slice(&field_offset.to_le_bytes());
-            let field_size = riff_core::wire::WireEncode::encode_to(&self.#name, &mut buf[data_position..]);
-            data_position += field_size;
         }
     });
     
     quote! {
         impl #impl_generics riff_core::wire::WireEncode for #struct_name #ty_generics #where_clause {
             fn encode_to(&self, buf: &mut [u8]) -> usize {
-                if <Self as riff_core::wire::WireSize>::is_fixed_size() {
-                    let mut written = 0usize;
-                    #(#fixed_encode_fields)*
-                    written
-                } else {
-                    #variable_encode_setup
-                    #(#variable_encode_fields)*
-                    data_position
-                }
+                let mut written = 0usize;
+                #(#encode_fields)*
+                written
             }
         }
     }
@@ -201,59 +183,42 @@ fn generate_wire_decode_impl(
     where_clause: Option<&syn::WhereClause>,
     field_names: &[&syn::Ident],
     field_types: &[&Type],
-    field_count: usize,
-    field_indices: &[usize],
+    is_blittable: bool,
 ) -> TokenStream {
+    let field_names_for_struct: Vec<_> = field_names.iter().map(|n| quote! { #n }).collect();
     
-    let fixed_decode_fields = field_names.iter().zip(field_types.iter()).map(|(name, ty)| {
+    if is_blittable {
+        return quote! {
+            impl #impl_generics riff_core::wire::WireDecode for #struct_name #ty_generics #where_clause {
+                const IS_BLITTABLE: bool = true;
+                
+                fn decode_from(buf: &[u8]) -> riff_core::wire::DecodeResult<Self> {
+                    let size = core::mem::size_of::<Self>();
+                    if buf.len() < size {
+                        return Err(riff_core::wire::DecodeError::BufferTooSmall);
+                    }
+                    let value = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
+                    Ok((value, size))
+                }
+            }
+        };
+    }
+    
+    let decode_fields = field_names.iter().zip(field_types.iter()).map(|(name, ty)| {
         quote! {
             let (#name, size) = <#ty as riff_core::wire::WireDecode>::decode_from(&buf[position..])?;
             position += size;
         }
     });
     
-    let variable_decode_fields = field_names.iter().zip(field_types.iter()).zip(field_indices.iter())
-        .map(|((name, ty), idx)| {
-            let offset_position = quote! { offsets_start + #idx * riff_core::wire::OFFSET_SIZE };
-            quote! {
-                let offset_bytes: [u8; 4] = buf.get(#offset_position..#offset_position + 4)
-                    .ok_or(riff_core::wire::DecodeError::BufferTooSmall)?
-                    .try_into()
-                    .map_err(|_| riff_core::wire::DecodeError::BufferTooSmall)?;
-                let field_offset = u32::from_le_bytes(offset_bytes) as usize;
-                let (#name, field_size) = <#ty as riff_core::wire::WireDecode>::decode_from(&buf[field_offset..])?;
-                if field_offset + field_size > max_position {
-                    max_position = field_offset + field_size;
-                }
-            }
-        });
-    
-    let field_names_for_struct: Vec<_> = field_names.iter().map(|n| quote! { #n }).collect();
-    
     quote! {
         impl #impl_generics riff_core::wire::WireDecode for #struct_name #ty_generics #where_clause {
+            const IS_BLITTABLE: bool = false;
+            
             fn decode_from(buf: &[u8]) -> riff_core::wire::DecodeResult<Self> {
-                if <Self as riff_core::wire::WireSize>::is_fixed_size() {
-                    let mut position = 0usize;
-                    #(#fixed_decode_fields)*
-                    Ok((Self { #(#field_names_for_struct),* }, position))
-                } else {
-                    let count_bytes: [u8; 2] = buf.get(0..2)
-                        .ok_or(riff_core::wire::DecodeError::BufferTooSmall)?
-                        .try_into()
-                        .map_err(|_| riff_core::wire::DecodeError::BufferTooSmall)?;
-                    let field_count = u16::from_le_bytes(count_bytes) as usize;
-                    if field_count != #field_count {
-                        return Err(riff_core::wire::DecodeError::BufferTooSmall);
-                    }
-                    let offsets_start = riff_core::wire::FIELD_COUNT_SIZE;
-                    let offsets_size = field_count * riff_core::wire::OFFSET_SIZE;
-                    let mut max_position = offsets_start + offsets_size;
-                    
-                    #(#variable_decode_fields)*
-                    
-                    Ok((Self { #(#field_names_for_struct),* }, max_position))
-                }
+                let mut position = 0usize;
+                #(#decode_fields)*
+                Ok((Self { #(#field_names_for_struct),* }, position))
             }
         }
     }

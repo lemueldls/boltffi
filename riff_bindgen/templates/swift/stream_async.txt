@@ -3,108 +3,24 @@ AsyncStream<{{ item_type }}> { continuation in
         continuation.finish()
         return
     }
-
-    final class StreamContext: @unchecked Sendable {
-        let subscription: SubscriptionHandle
-        let bufferCapacity: UInt
-        let buffer: UnsafeMutablePointer<{{ item_type }}>
-        private var lifecycleTag: UInt8 = 0
-        private var callbackTag: UInt8 = 0
-        private var continuation: AsyncStream<{{ item_type }}>.Continuation?
-
-        init(
-            subscription: SubscriptionHandle,
-            bufferCapacity: UInt,
-            continuation: AsyncStream<{{ item_type }}>.Continuation
-        ) {
-            self.subscription = subscription
-            self.bufferCapacity = bufferCapacity
-            self.buffer = UnsafeMutablePointer<{{ item_type }}>.allocate(capacity: Int(bufferCapacity))
-            self.continuation = continuation
-        }
-
-        func start() {
-            registerPoll()
-        }
-
-        func requestTermination() {
-            let terminationStarted = withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 0, 1) }
-            if terminationStarted {
-                {{ unsubscribe_fn }}(subscription)
-                _ = withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 1, 2) }
+    let context = WireStreamContextBase(
+        subscription: subscription, batchSize: 16,
+        popBatch: {{ pop_batch_fn }},
+        poll: {{ poll_fn }},
+        unsubscribe: {{ unsubscribe_fn }},
+        freeFn: {{ free_fn }},
+        freeBuf: {{ prefix }}_free_buf_u8,
+        atomicCas: {{ atomic_cas_fn }},
+        processItems: { wire in
+            let count = Int(wire.readU32(at: 0))
+            var offset = 4
+            for _ in 0..<count {
+                let item = {{ item_decode_expr }}
+                _ = continuation.yield(item)
             }
-            attemptFinalize()
-        }
-
-        private func attemptFinalize() {
-            guard (withUnsafeMutablePointer(to: &callbackTag) { {{ atomic_cas_fn }}($0, 0, 0) }) else { return }
-            guard (withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 2, 3) }) else { return }
-            {{ free_fn }}(subscription)
-            buffer.deallocate()
-            continuation?.finish()
-            continuation = nil
-        }
-
-        private func schedulePoll() {
-            Task { [self] in
-                await Task.yield()
-                registerPoll()
-            }
-        }
-
-        private func registerPoll() {
-            guard (withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 0, 0) }) else {
-                attemptFinalize()
-                return
-            }
-
-            let callbackData = UInt64(UInt(bitPattern: Unmanaged.passRetained(self).toOpaque()))
-            {{ poll_fn }}(subscription, callbackData) { callbackData, pollResult in
-                let context = Unmanaged<StreamContext>
-                    .fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!)
-                    .takeRetainedValue()
-                context.handlePoll(pollResult: pollResult)
-            }
-        }
-
-        private func handlePoll(pollResult: Int8) {
-            let isClosed = pollResult == StreamPollResult.closed.rawValue
-
-            let entered = withUnsafeMutablePointer(to: &callbackTag) { {{ atomic_cas_fn }}($0, 0, 1) }
-            guard entered else {
-                attemptFinalize()
-                return
-            }
-
-            defer {
-                _ = withUnsafeMutablePointer(to: &callbackTag) { {{ atomic_cas_fn }}($0, 1, 0) }
-                attemptFinalize()
-            }
-
-            guard (withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 0, 0) }) else { return }
-            guard let continuation = continuation else { return }
-
-            while true {
-                let count = {{ pop_batch_fn }}(subscription, buffer, bufferCapacity)
-                guard count > 0 else { break }
-                UnsafeBufferPointer(start: buffer, count: Int(count)).forEach { element in
-                    _ = continuation.yield(element)
-                }
-            }
-
-            if isClosed {
-                requestTermination()
-                return
-            }
-
-            guard (withUnsafeMutablePointer(to: &lifecycleTag) { {{ atomic_cas_fn }}($0, 0, 0) }) else { return }
-            schedulePoll()
-        }
-    }
-
-    let context = StreamContext(subscription: subscription, bufferCapacity: 16, continuation: continuation)
-    continuation.onTermination = { @Sendable _ in
-        context.requestTermination()
-    }
+        },
+        finish: { continuation.finish() }
+    )
+    continuation.onTermination = { @Sendable _ in context.requestTermination() }
     context.start()
 }
