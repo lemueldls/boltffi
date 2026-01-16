@@ -1,0 +1,17 @@
+{%- if throws %}
+@Throws({{ err_type }}::class)
+{%- endif %}
+fun {{ func_name }}({% for param in params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% if let Some(ret) = return_type %}: {{ ret }}{% endif %} {
+{%- if return_abi_kind == "unit" %}
+    Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- else if return_abi_kind == "direct" %}
+    return Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- else if return_abi_kind == "wire_encoded" %}
+    val buf = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+        ?: throw FfiException(-1, "Null buffer returned")
+    return useNativeBuffer(buf) { buffer ->
+        val wire = WireBuffer.fromByteBuffer(buffer)
+        {{ decode_expr }}
+    }
+{%- endif %}
+}

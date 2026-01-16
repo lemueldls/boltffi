@@ -81,3 +81,150 @@ internal suspend inline fun <T> riffCallAsync(
         free(rustFuture)
     }
 }
+
+class WireBuffer(private val data: ByteArray) {
+    private val buffer: ByteBuffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+
+    companion object {
+        fun fromByteBuffer(buf: ByteBuffer): WireBuffer {
+            val arr = ByteArray(buf.remaining())
+            buf.get(arr)
+            return WireBuffer(arr)
+        }
+    }
+
+    fun readBool(offset: Int): Boolean = data[offset] != 0.toByte()
+    fun readI8(offset: Int): Byte = data[offset]
+    fun readU8(offset: Int): UByte = data[offset].toUByte()
+    fun readI16(offset: Int): Short = buffer.getShort(offset)
+    fun readU16(offset: Int): UShort = buffer.getShort(offset).toUShort()
+    fun readI32(offset: Int): Int = buffer.getInt(offset)
+    fun readU32(offset: Int): UInt = buffer.getInt(offset).toUInt()
+    fun readI64(offset: Int): Long = buffer.getLong(offset)
+    fun readU64(offset: Int): ULong = buffer.getLong(offset).toULong()
+    fun readF32(offset: Int): Float = buffer.getFloat(offset)
+    fun readF64(offset: Int): Double = buffer.getDouble(offset)
+
+    fun readString(offset: Int): Pair<String, Int> {
+        val len = readU32(offset).toInt()
+        val str = String(data, offset + 4, len, Charsets.UTF_8)
+        return str to (4 + len)
+    }
+
+    fun readBytes(offset: Int): Pair<ByteArray, Int> {
+        val len = readU32(offset).toInt()
+        val bytes = data.copyOfRange(offset + 4, offset + 4 + len)
+        return bytes to (4 + len)
+    }
+
+    inline fun <T> readNullable(offset: Int, reader: (Int) -> Pair<T, Int>): Pair<T?, Int> {
+        return if (readU8(offset).toInt() == 0) {
+            null to 1
+        } else {
+            val (value, size) = reader(offset + 1)
+            value to (1 + size)
+        }
+    }
+
+    inline fun <T> readList(offset: Int, reader: (Int) -> Pair<T, Int>): Pair<List<T>, Int> {
+        val count = readU32(offset).toInt()
+        var pos = offset + 4
+        val result = ArrayList<T>(count)
+        repeat(count) {
+            val (item, size) = reader(pos)
+            result.add(item)
+            pos += size
+        }
+        return result to (pos - offset)
+    }
+
+    inline fun <T, E : Throwable> readResult(
+        offset: Int,
+        okReader: (Int) -> Pair<T, Int>,
+        errReader: (Int) -> Pair<E, Int>
+    ): Pair<Result<T>, Int> {
+        val tag = readU8(offset).toInt()
+        return if (tag == 0) {
+            val (ok, size) = okReader(offset + 1)
+            Result.success(ok) to (1 + size)
+        } else {
+            val (err, size) = errReader(offset + 1)
+            Result.failure(err) to (1 + size)
+        }
+    }
+
+    inline fun <reified T> readBlittable(offset: Int, structSize: Int): T {
+        TODO("Blittable read requires inline reified - use generated reader")
+    }
+
+    inline fun <reified T> readBlittableList(offset: Int, structSize: Int): Pair<List<T>, Int> {
+        TODO("Blittable list read requires inline reified - use generated reader")
+    }
+}
+
+class WireWriter(initialCapacity: Int = 256) {
+    private var data = ByteArray(initialCapacity)
+    private var pos = 0
+
+    private fun ensureCapacity(needed: Int) {
+        if (pos + needed > data.size) {
+            data = data.copyOf(maxOf(data.size * 2, pos + needed))
+        }
+    }
+
+    fun writeBool(v: Boolean) { ensureCapacity(1); data[pos++] = if (v) 1 else 0 }
+    fun writeI8(v: Byte) { ensureCapacity(1); data[pos++] = v }
+    fun writeU8(v: UByte) { ensureCapacity(1); data[pos++] = v.toByte() }
+
+    fun writeI16(v: Short) {
+        ensureCapacity(2)
+        data[pos++] = v.toByte()
+        data[pos++] = (v.toInt() shr 8).toByte()
+    }
+
+    fun writeU16(v: UShort) = writeI16(v.toShort())
+
+    fun writeI32(v: Int) {
+        ensureCapacity(4)
+        data[pos++] = v.toByte()
+        data[pos++] = (v shr 8).toByte()
+        data[pos++] = (v shr 16).toByte()
+        data[pos++] = (v shr 24).toByte()
+    }
+
+    fun writeU32(v: UInt) = writeI32(v.toInt())
+
+    fun writeI64(v: Long) {
+        ensureCapacity(8)
+        data[pos++] = v.toByte()
+        data[pos++] = (v shr 8).toByte()
+        data[pos++] = (v shr 16).toByte()
+        data[pos++] = (v shr 24).toByte()
+        data[pos++] = (v shr 32).toByte()
+        data[pos++] = (v shr 40).toByte()
+        data[pos++] = (v shr 48).toByte()
+        data[pos++] = (v shr 56).toByte()
+    }
+
+    fun writeU64(v: ULong) = writeI64(v.toLong())
+
+    fun writeF32(v: Float) = writeI32(java.lang.Float.floatToRawIntBits(v))
+    fun writeF64(v: Double) = writeI64(java.lang.Double.doubleToRawLongBits(v))
+
+    fun writeString(v: String) {
+        val bytes = v.toByteArray(Charsets.UTF_8)
+        writeU32(bytes.size.toUInt())
+        ensureCapacity(bytes.size)
+        System.arraycopy(bytes, 0, data, pos, bytes.size)
+        pos += bytes.size
+    }
+
+    fun writeBytes(v: ByteArray) {
+        writeU32(v.size.toUInt())
+        ensureCapacity(v.size)
+        System.arraycopy(v, 0, data, pos, v.size)
+        pos += v.size
+    }
+
+    fun toByteArray(): ByteArray = data.copyOf(pos)
+}

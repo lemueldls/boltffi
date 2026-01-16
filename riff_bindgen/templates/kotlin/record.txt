@@ -2,4 +2,27 @@ data class {{ class_name }}(
 {%- for field in fields %}
     val {{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %},{% endif %}
 {%- endfor %}
-)
+) {
+    companion object {
+        fun decode(wire: WireBuffer, offset: Int): Pair<{{ class_name }}, Int> {
+            var pos = offset
+{%- for field in fields %}
+            val {{ field.name }}V = {{ field.wire_decode_inline }}
+{%- endfor %}
+            return {{ class_name }}({% for field in fields %}{{ field.name }}V{% if !loop.last %}, {% endif %}{% endfor %}) to (pos - offset)
+        }
+    }
+{%- if !is_blittable %}
+
+    fun wireEncodedSize(): Int =
+{%- for field in fields %}
+        {{ field.wire_size_expr }}{% if !loop.last %} +{% endif %}
+{%- endfor %}
+
+    fun wireEncodeTo(wire: WireWriter) {
+{%- for field in fields %}
+        {{ field.wire_encode }}
+{%- endfor %}
+    }
+{%- endif %}
+}

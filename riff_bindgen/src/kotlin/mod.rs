@@ -3,8 +3,12 @@ mod layout;
 mod marshal;
 mod names;
 mod primitives;
+mod return_abi;
 mod templates;
 mod types;
+mod wire;
+
+pub use return_abi::ReturnAbi;
 
 use std::collections::HashSet;
 
@@ -69,7 +73,7 @@ impl Kotlin {
         let async_return_records = Self::find_async_return_records(module);
 
         module.records.iter().for_each(|record| {
-            sections.push(Self::render_record(record));
+            sections.push(Self::render_record_with_module(record, module));
             let needs_reader = blittable_vec_return_records.contains(&record.name.as_str())
                 || async_return_records.contains(&record.name.as_str());
             if needs_reader {
@@ -143,7 +147,11 @@ impl Kotlin {
     }
 
     pub fn render_record(record: &Record) -> String {
-        RecordTemplate::from_record(record)
+        Self::render_record_with_module(record, &Module::new(""))
+    }
+
+    pub fn render_record_with_module(record: &Record, module: &Module) -> String {
+        RecordTemplate::from_record_with_module(record, module)
             .render()
             .expect("record template failed")
     }
@@ -557,5 +565,41 @@ mod tests {
         assert!(output.contains("@JvmStatic external fun riff_sensor_new"));
         assert!(output.contains("@JvmStatic external fun riff_sensor_free"));
         assert!(output.contains("@JvmStatic external fun riff_sensor_read"));
+    }
+
+    #[test]
+    fn test_blittable_record_wire_encoding() {
+        let point = Record::new("point")
+            .with_field(RecordField::new("x", Type::Primitive(Primitive::I32)))
+            .with_field(RecordField::new("y", Type::Primitive(Primitive::I32)));
+
+        let module = Module::new("test");
+        let output = Kotlin::render_record_with_module(&point, &module);
+
+        assert!(output.contains("data class Point"));
+        assert!(output.contains("companion object"));
+        assert!(output.contains("fun decode(wire: WireBuffer, offset: Int)"));
+        assert!(output.contains("wire.readI32(pos)"));
+        assert!(!output.contains("wireEncodedSize"), "blittable should not have wireEncodedSize");
+    }
+
+    #[test]
+    fn test_non_blittable_record_wire_encoding() {
+        let profile = Record::new("user_profile")
+            .with_field(RecordField::new("id", Type::Primitive(Primitive::I64)))
+            .with_field(RecordField::new("name", Type::String))
+            .with_field(RecordField::new("email", Type::Option(Box::new(Type::String))));
+
+        let module = Module::new("test");
+        let output = Kotlin::render_record_with_module(&profile, &module);
+
+        assert!(output.contains("data class UserProfile"));
+        assert!(output.contains("companion object"));
+        assert!(output.contains("fun decode(wire: WireBuffer, offset: Int)"));
+        assert!(output.contains("wire.readI64(pos)"));
+        assert!(output.contains("wire.readString(pos)"));
+        assert!(output.contains("wire.readNullable(pos)"));
+        assert!(output.contains("fun wireEncodedSize(): Int"));
+        assert!(output.contains("fun wireEncodeTo(wire: WireWriter)"));
     }
 }

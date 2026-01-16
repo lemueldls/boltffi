@@ -337,27 +337,60 @@ impl SealedEnumTemplate {
 pub struct RecordTemplate {
     pub class_name: String,
     pub fields: Vec<FieldView>,
+    pub is_blittable: bool,
 }
 
 pub struct FieldView {
     pub name: String,
     pub kotlin_type: String,
+    pub wire_decode_inline: String,
+    pub wire_size_expr: String,
+    pub wire_encode: String,
 }
 
 impl RecordTemplate {
     pub fn from_record(record: &Record) -> Self {
+        Self::from_record_with_module(record, &Module::new(""))
+    }
+
+    pub fn from_record_with_module(record: &Record, module: &Module) -> Self {
+        let is_blittable = record.is_blittable();
         let fields = record
             .fields
             .iter()
-            .map(|field| FieldView {
-                name: NamingConvention::property_name(&field.name),
-                kotlin_type: TypeMapper::map_type(&field.field_type),
-            })
+            .map(|field| Self::make_field(field, module))
             .collect();
 
         Self {
             class_name: NamingConvention::class_name(&record.name),
             fields,
+            is_blittable,
+        }
+    }
+
+    fn make_field(field: &crate::model::RecordField, module: &Module) -> FieldView {
+        let name = NamingConvention::property_name(&field.name);
+        let encoder = super::wire::encode_type(&field.field_type, &name, module);
+        
+        FieldView {
+            name: name.clone(),
+            kotlin_type: TypeMapper::map_type(&field.field_type),
+            wire_decode_inline: Self::make_decode_inline(&field.field_type, module),
+            wire_size_expr: encoder.size_expr,
+            wire_encode: encoder.encode_expr,
+        }
+    }
+
+    fn make_decode_inline(ty: &Type, module: &Module) -> String {
+        let codec = super::wire::decode_type(ty, module);
+        let reader = codec.reader_expr.replace("OFFSET", "pos");
+        match &codec.size_kind {
+            super::wire::SizeKind::Fixed(size) => {
+                format!("run {{ val v = {}; pos += {}; v }}", reader, size)
+            }
+            super::wire::SizeKind::Variable => {
+                format!("run {{ val (v, s) = {}; pos += s; v }}", reader)
+            }
         }
     }
 }
