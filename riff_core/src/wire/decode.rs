@@ -102,6 +102,26 @@ impl<T: WireDecode> WireDecode for Option<T> {
     }
 }
 
+impl<T: WireDecode, E: WireDecode> WireDecode for Result<T, E> {
+    fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
+        if buf.is_empty() {
+            return Err(DecodeError::BufferTooSmall);
+        }
+
+        match buf[0] {
+            0 => {
+                let (value, value_size) = T::decode_from(&buf[RESULT_TAG_SIZE..])?;
+                Ok((Ok(value), RESULT_TAG_SIZE + value_size))
+            }
+            1 => {
+                let (err, err_size) = E::decode_from(&buf[RESULT_TAG_SIZE..])?;
+                Ok((Err(err), RESULT_TAG_SIZE + err_size))
+            }
+            _ => Err(DecodeError::InvalidBool),
+        }
+    }
+}
+
 pub trait FixedSizeWireDecode: Sized {
     const WIRE_SIZE: usize;
     fn decode_fixed(buf: &[u8]) -> Result<Self, DecodeError>;

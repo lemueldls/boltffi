@@ -15,7 +15,7 @@ impl TypeMapper {
             Type::MutSlice(inner) => format!("[{}]", Self::map_type(inner)),
             Type::Vec(inner) => format!("[{}]", Self::map_type(inner)),
             Type::Option(inner) => format!("{}?", Self::map_type(inner)),
-            Type::Result { ok, .. } => Self::map_type(ok),
+            Type::Result { ok, err } => format!("Result<{}, {}>", Self::map_type(ok), Self::map_type(err)),
             Type::Closure(sig) => {
                 let params = sig
                     .params

@@ -96,6 +96,7 @@ pub fn decode_type(ty: &Type, module: &Module) -> TypeCodec {
         Type::Enum(name) => decode_enum(name, module),
         Type::Vec(inner) => decode_vec(inner, module),
         Type::Option(inner) => decode_option(inner, module),
+        Type::Result { ok, err } => decode_result(ok, err, module),
         Type::Bytes => TypeCodec::variable(format!("wire.readBytesWithSize(at: {})", OFFSET_PLACEHOLDER)),
         other => panic!("wire decode not supported for type: {:?}", other),
     }
@@ -178,6 +179,17 @@ fn decode_option(inner: &Type, module: &Module) -> TypeCodec {
     ))
 }
 
+fn decode_result(ok: &Type, err: &Type, module: &Module) -> TypeCodec {
+    let ok_codec = decode_type(ok, module);
+    let err_codec = decode_type(err, module);
+    TypeCodec::variable(format!(
+        "wire.readResult(at: {}, okReader: {{ {} }}, errReader: {{ {} }})",
+        OFFSET_PLACEHOLDER,
+        ok_codec.as_tuple_reader(),
+        err_codec.as_tuple_reader()
+    ))
+}
+
 fn primitive_wire_info(p: Primitive) -> (&'static str, usize) {
     match p {
         Primitive::Bool => ("readBool", 1),
@@ -214,6 +226,7 @@ pub fn encode_type(ty: &Type, name: &str, module: &Module) -> TypeEncoder {
         Type::Enum(enum_name) => encode_enum(enum_name, name, module),
         Type::Vec(inner) => encode_vec(inner, name, module),
         Type::Option(inner) => encode_option(inner, name, module),
+        Type::Result { ok, err } => encode_result(ok, err, name, module),
         Type::Bytes => encode_bytes(name),
         other => panic!("wire encode not supported for type: {:?}", other),
     }
@@ -358,6 +371,26 @@ fn encode_option(inner: &Type, name: &str, module: &Module) -> TypeEncoder {
         encode_to_bytes: format!(
             "if let v = {} {{ bytes.appendU8(1); {} }} else {{ bytes.appendU8(0) }}",
             name, inner_encoder.encode_to_bytes
+        ),
+    }
+}
+
+fn encode_result(ok: &Type, err: &Type, name: &str, module: &Module) -> TypeEncoder {
+    let ok_encoder = encode_type(ok, "okVal", module);
+    let err_encoder = encode_type(err, "errVal", module);
+
+    TypeEncoder {
+        size_expr: format!(
+            "({{ switch {} {{ case .success(let okVal): return 1 + {}; case .failure(let errVal): return 1 + {} }} }}())",
+            name, ok_encoder.size_expr, err_encoder.size_expr
+        ),
+        encode_to_data: format!(
+            "switch {} {{ case .success(let okVal): data.appendU8(0); {}; case .failure(let errVal): data.appendU8(1); {} }}",
+            name, ok_encoder.encode_to_data, err_encoder.encode_to_data
+        ),
+        encode_to_bytes: format!(
+            "switch {} {{ case .success(let okVal): bytes.appendU8(0); {}; case .failure(let errVal): bytes.appendU8(1); {} }}",
+            name, ok_encoder.encode_to_bytes, err_encoder.encode_to_bytes
         ),
     }
 }

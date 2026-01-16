@@ -118,6 +118,15 @@ final class FfiFutureState<T>: @unchecked Sendable {
         let (value, size) = reader(offset + 1)
         return (value, 1 + size)
     }
+    @inlinable func readResult<T, E: Error>(at offset: Int, okReader: (Int) -> (value: T, size: Int), errReader: (Int) -> (value: E, size: Int)) -> (value: Result<T, E>, size: Int) {
+        if data[offset] == 0 {
+            let (value, size) = okReader(offset + 1)
+            return (.success(value), 1 + size)
+        } else {
+            let (value, size) = errReader(offset + 1)
+            return (.failure(value), 1 + size)
+        }
+    }
     @inlinable func readArray<T>(at offset: Int, reader: (Int) -> (value: T, size: Int)) -> (value: [T], size: Int) {
         let count = Int(readU32(at: offset))
         guard count > 0 else { return ([], 4) }
