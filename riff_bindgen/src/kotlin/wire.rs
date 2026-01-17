@@ -54,6 +54,14 @@ impl KotlinCodec {
         }
     }
 
+    pub fn lambda_body_at(&self, offset_var: &str) -> String {
+        let expr = self.reader_expr.replace(OFFSET_PLACEHOLDER, offset_var);
+        match &self.size_kind {
+            SizeKind::Fixed(size) => format!("{} to {}", expr, size),
+            SizeKind::Variable => expr,
+        }
+    }
+
     pub fn decode_to_binding(&self, name: &str, offset_var: &str) -> String {
         let expr = self.reader_expr.replace(OFFSET_PLACEHOLDER, offset_var);
         match &self.size_kind {

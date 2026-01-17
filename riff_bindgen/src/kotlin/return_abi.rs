@@ -22,6 +22,11 @@ impl ReturnAbi {
     fn from_value_type(ty: &Type, module: &Module) -> Self {
         match ty {
             Type::Void => Self::Unit,
+            Type::Primitive(Primitive::Bool) => Self::WireEncoded {
+                kotlin_type: "Boolean".into(),
+                decode_expr: "wire.readBool(0)".into(),
+                throws: false,
+            },
             Type::Primitive(_) => Self::Direct {
                 kotlin_type: TypeMapper::map_type(ty),
             },
@@ -40,11 +45,10 @@ impl ReturnAbi {
 
     fn from_fallible(ok: &Type, err: &Type, module: &Module) -> Self {
         let ok_kotlin = TypeMapper::map_type(ok);
-        let err_kotlin = Self::error_type_name(err, module);
 
         Self::WireEncoded {
             kotlin_type: if ok.is_void() { "Unit".into() } else { ok_kotlin },
-            decode_expr: Self::result_decode_expr(ok, err, &err_kotlin, module),
+            decode_expr: Self::result_decode_expr(ok, err, module),
             throws: true,
         }
     }
@@ -54,48 +58,42 @@ impl ReturnAbi {
         codec.value_at("0")
     }
 
-    fn result_decode_expr(ok: &Type, err: &Type, err_kotlin: &str, module: &Module) -> String {
-        let ok_decode = if ok.is_void() {
-            "Unit to 0".into()
-        } else {
-            let codec = wire::decode_type(ok, module);
-            codec.as_lambda_reader()
-        };
-
-        let err_decode = Self::error_decode_lambda(err, err_kotlin, module);
+    fn result_decode_expr(ok: &Type, err: &Type, module: &Module) -> String {
+        let ok_lambda = Self::ok_decode_lambda(ok, module);
+        let err_lambda = Self::error_decode_lambda(err, module);
 
         format!(
-            "wire.readResult(0, {}, {}).also {{ (result, _) -> result.getOrThrow() }}.first.getOrThrow()",
-            ok_decode, err_decode
+            "wire.readResult(0, {{ pos -> {} }}, {{ pos -> {} }}).first.getOrThrow()",
+            ok_lambda, err_lambda
         )
     }
 
-    fn error_type_name(err: &Type, module: &Module) -> String {
-        match err {
-            Type::String => "FfiException".into(),
-            Type::Enum(name) => {
-                if module.enums.iter().any(|e| &e.name == name && e.is_error) {
-                    NamingConvention::class_name(name)
-                } else {
-                    "FfiException".into()
-                }
-            }
-            _ => "FfiException".into(),
+    fn ok_decode_lambda(ok: &Type, module: &Module) -> String {
+        if ok.is_void() {
+            "Unit to 0".into()
+        } else {
+            let codec = wire::decode_type(ok, module);
+            codec.lambda_body_at("pos")
         }
     }
 
-    fn error_decode_lambda(err: &Type, err_kotlin: &str, module: &Module) -> String {
+    fn error_decode_lambda(err: &Type, module: &Module) -> String {
         match err {
-            Type::String => "{ FfiException(-1, wire.readString(it).first) to wire.readString(it).second }".into(),
+            Type::String => {
+                "val (msg, sz) = wire.readString(pos); FfiException(-1, msg) to sz".into()
+            }
             Type::Enum(name) => {
                 let class_name = NamingConvention::class_name(name);
-                if module.is_data_enum(name) {
-                    format!("{{ {}.decode(wire, it) }}", class_name)
+                if module.is_data_enum(name) || module.enums.iter().any(|e| &e.name == name && e.is_error) {
+                    format!("{}.decode(wire, pos)", class_name)
                 } else {
-                    format!("{{ FfiException(-1, \"Error code: ${{{}.fromValue(wire.readI32(it))}}\") to 4 }}", class_name)
+                    format!(
+                        "FfiException(-1, \"Error: ${{{}.fromValue(wire.readI32(pos))}}\") to 4",
+                        class_name
+                    )
                 }
             }
-            _ => "{ FfiException(-1, \"Unknown error\") to 0 }".into(),
+            _ => "FfiException(-1, \"Unknown error\") to 0".into(),
         }
     }
 

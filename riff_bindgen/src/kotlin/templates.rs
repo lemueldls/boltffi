@@ -12,6 +12,7 @@ use crate::model::{
 use super::layout::{KotlinBufferRead, KotlinBufferWrite};
 use super::marshal::{OptionView, ParamConversion, ResultView, ReturnKind};
 use super::primitives;
+use super::return_abi::ReturnAbi;
 use super::{FactoryStyle, KotlinOptions, NamingConvention, TypeMapper};
 
 #[derive(Template)]
@@ -624,6 +625,80 @@ impl FunctionTemplate {
             is_async: function.is_async,
             option,
             result,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "kotlin/function_wire.txt", escape = "none")]
+pub struct WireFunctionTemplate {
+    pub func_name: String,
+    pub ffi_name: String,
+    pub params: Vec<ParamView>,
+    pub return_type: Option<String>,
+    pub return_abi: ReturnAbi,
+    pub throws: bool,
+    pub err_type: String,
+}
+
+impl WireFunctionTemplate {
+    pub fn from_function(function: &Function, module: &Module) -> Self {
+        let ffi_name = naming::function_ffi_name(&function.name);
+        let return_abi = ReturnAbi::from_return_type(&function.returns, module);
+
+        let params: Vec<ParamView> = function
+            .inputs
+            .iter()
+            .map(|param| {
+                let param_name = NamingConvention::param_name(&param.name);
+                let conversion = Self::param_conversion(&param_name, &param.param_type, module);
+                ParamView {
+                    name: param_name,
+                    kotlin_type: TypeMapper::map_type(&param.param_type),
+                    conversion,
+                }
+            })
+            .collect();
+
+        let return_type = return_abi.kotlin_type().map(String::from);
+        let throws = return_abi.throws();
+        let err_type = function
+            .returns
+            .as_result_types()
+            .map(|(_, err)| Self::error_type_name(err, module))
+            .unwrap_or_else(|| "FfiException".into());
+
+        Self {
+            func_name: NamingConvention::method_name(&function.name),
+            ffi_name,
+            params,
+            return_type,
+            return_abi,
+            throws,
+            err_type,
+        }
+    }
+
+    fn param_conversion(name: &str, ty: &Type, module: &Module) -> String {
+        match ty {
+            Type::Enum(enum_name) => {
+                let is_data = module.is_data_enum(enum_name);
+                if is_data {
+                    format!("{}Codec.pack({})", NamingConvention::class_name(enum_name), name)
+                } else {
+                    format!("{}.value", name)
+                }
+            }
+            _ => ParamConversion::to_ffi(name, ty),
+        }
+    }
+
+    fn error_type_name(err: &Type, module: &Module) -> String {
+        match err {
+            Type::Enum(name) if module.enums.iter().any(|e| &e.name == name && e.is_error) => {
+                NamingConvention::class_name(name)
+            }
+            _ => "FfiException".into(),
         }
     }
 }
@@ -1452,5 +1527,156 @@ impl CallbackTraitTemplate {
             Type::Void => "Unit".to_string(),
             _ => "throw IllegalStateException(\"Handle not found\")".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Function, Module, Parameter, Primitive, RecordField, Record, ReturnType, Type};
+
+    fn make_function(name: &str, inputs: Vec<Parameter>, returns: ReturnType) -> Function {
+        Function {
+            name: name.into(),
+            inputs,
+            returns,
+            is_async: false,
+            wire_encoded: true,
+            doc: None,
+            deprecated: None,
+        }
+    }
+
+    fn make_record(name: &str, fields: Vec<RecordField>) -> Record {
+        Record {
+            name: name.into(),
+            fields,
+            doc: None,
+            deprecated: None,
+        }
+    }
+
+    #[test]
+    fn test_wire_function_unit_return() {
+        let module = Module::new("test");
+        let func = make_function("do_something", vec![], ReturnType::Void);
+
+        let template = WireFunctionTemplate::from_function(&func, &module);
+        let output = template.render().unwrap();
+
+        assert!(output.contains("fun doSomething()"));
+        assert!(output.contains("Native.riff_do_something()"));
+        assert!(!output.contains("return"));
+    }
+
+    #[test]
+    fn test_wire_function_direct_return() {
+        let module = Module::new("test");
+        let func = make_function(
+            "get_count",
+            vec![],
+            ReturnType::Value(Type::Primitive(Primitive::I32)),
+        );
+
+        let template = WireFunctionTemplate::from_function(&func, &module);
+        let output = template.render().unwrap();
+
+        assert!(output.contains("fun getCount(): Int"));
+        assert!(output.contains("return Native.riff_get_count()"));
+        assert!(!output.contains("WireBuffer"));
+    }
+
+    #[test]
+    fn test_wire_function_string_return() {
+        let module = Module::new("test");
+        let func = make_function("get_name", vec![], ReturnType::Value(Type::String));
+
+        let template = WireFunctionTemplate::from_function(&func, &module);
+        let output = template.render().unwrap();
+
+        assert!(output.contains("fun getName(): String"));
+        assert!(output.contains("WireBuffer"));
+        assert!(output.contains("wire.readString(0).first"));
+    }
+
+    #[test]
+    fn test_wire_function_fallible_return() {
+        let module = Module::new("test");
+        let func = make_function(
+            "try_something",
+            vec![],
+            ReturnType::Fallible {
+                ok: Type::String,
+                err: Type::String,
+            },
+        );
+
+        let template = WireFunctionTemplate::from_function(&func, &module);
+        let output = template.render().unwrap();
+
+        assert!(output.contains("@Throws(FfiException::class)"));
+        assert!(output.contains("fun trySomething(): String"));
+        assert!(output.contains("readResult"));
+        assert!(output.contains("getOrThrow()"));
+    }
+
+    #[test]
+    fn test_wire_function_with_params() {
+        let module = Module::new("test");
+        let func = make_function(
+            "add",
+            vec![
+                Parameter::new("a", Type::Primitive(Primitive::I32)),
+                Parameter::new("b", Type::Primitive(Primitive::I32)),
+            ],
+            ReturnType::Value(Type::Primitive(Primitive::I32)),
+        );
+
+        let template = WireFunctionTemplate::from_function(&func, &module);
+        let output = template.render().unwrap();
+
+        assert!(output.contains("fun add(a: Int, b: Int): Int"));
+        assert!(output.contains("Native.riff_add(a, b)"));
+    }
+
+    #[test]
+    fn test_wire_function_vec_return() {
+        let module = Module::new("test");
+        let func = make_function(
+            "get_items",
+            vec![],
+            ReturnType::Value(Type::Vec(Box::new(Type::Primitive(Primitive::I32)))),
+        );
+
+        let template = WireFunctionTemplate::from_function(&func, &module);
+        let output = template.render().unwrap();
+
+        assert!(output.contains("fun getItems(): List<Int>"));
+        assert!(output.contains("WireBuffer"));
+        assert!(output.contains("readList"));
+    }
+
+    #[test]
+    fn test_wire_function_record_return() {
+        let mut module = Module::new("test");
+        module.records.push(make_record(
+            "Point",
+            vec![
+                RecordField::new("x", Type::Primitive(Primitive::I32)),
+                RecordField::new("y", Type::Primitive(Primitive::I32)),
+            ],
+        ));
+
+        let func = make_function(
+            "get_point",
+            vec![],
+            ReturnType::Value(Type::Record("Point".into())),
+        );
+
+        let template = WireFunctionTemplate::from_function(&func, &module);
+        let output = template.render().unwrap();
+
+        assert!(output.contains("fun getPoint(): Point"));
+        assert!(output.contains("WireBuffer"));
     }
 }

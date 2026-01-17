@@ -21,6 +21,7 @@ pub use templates::{
     AsyncFunctionTemplate, ClosureInterfaceTemplate, CStyleEnumTemplate, CallbackTraitTemplate,
     ClassTemplate, DataEnumCodecTemplate, FunctionTemplate, NativeTemplate, PreambleTemplate,
     RecordReaderTemplate, RecordTemplate, RecordWriterTemplate, SealedEnumTemplate,
+    WireFunctionTemplate,
 };
 pub use types::TypeMapper;
 
@@ -210,9 +211,9 @@ impl Kotlin {
                 .render()
                 .expect("async function template failed")
         } else {
-            FunctionTemplate::from_function(function, module)
+            WireFunctionTemplate::from_function(function, module)
                 .render()
-                .expect("function template failed")
+                .expect("wire function template failed")
         }
     }
 
