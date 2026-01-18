@@ -91,7 +91,7 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                                 ffi_cb_args.push(quote! { *const u8 });
                                 ffi_cb_args.push(quote! { usize });
                                 wire_vars.push(quote! {
-                                    let #wire_name = crate::wire::encode(&#arg_name);
+                                    let #wire_name = ::riff::wire::encode(&#arg_name);
                                 });
                                 cb_call_args.push(quote! { #wire_name.as_ptr() });
                                 cb_call_args.push(quote! { #wire_name.len() });
@@ -194,7 +194,7 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                             Vec::new()
                         } else {
                             let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -212,7 +212,7 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                             None
                         } else {
                             let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -229,7 +229,7 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                         let #name: #record_ty = {
                             assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                             let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -393,7 +393,7 @@ pub fn transform_params_async(
                             Vec::new()
                         } else {
                             let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -412,7 +412,7 @@ pub fn transform_params_async(
                             None
                         } else {
                             let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -430,7 +430,7 @@ pub fn transform_params_async(
                         let #name: #record_ty = {
                             assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                             let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -528,7 +528,7 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                                 ffi_cb_args.push(quote! { *const u8 });
                                 ffi_cb_args.push(quote! { usize });
                                 wire_vars.push(quote! {
-                                    let #wire_name = crate::wire::encode(&#arg_name);
+                                    let #wire_name = ::riff::wire::encode(&#arg_name);
                                 });
                                 cb_call_args.push(quote! { #wire_name.as_ptr() });
                                 cb_call_args.push(quote! { #wire_name.len() });
@@ -631,7 +631,7 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                             Vec::new()
                         } else {
                             let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -649,7 +649,7 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                             None
                         } else {
                             let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -666,7 +666,7 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                         let #name: #record_ty = {
                             assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                             let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -792,7 +792,7 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                             Vec::new()
                         } else {
                             let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -811,7 +811,7 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                             None
                         } else {
                             let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -829,7 +829,7 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                         let #name: #record_ty = {
                             assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                             let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 

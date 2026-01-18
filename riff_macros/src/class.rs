@@ -202,15 +202,15 @@ fn generate_method_export(
             quote! {
                 #(#conversions)*
                 #call_expr;
-                crate::FfiStatus::OK
+                ::riff::FfiStatus::OK
             }
         } else {
             quote! {
                 #call_expr;
-                crate::FfiStatus::OK
+                ::riff::FfiStatus::OK
             }
         };
-        (b, quote! { -> crate::FfiStatus })
+        (b, quote! { -> ::riff::FfiStatus })
     } else {
         let b = if has_conversions {
             quote! {
@@ -298,9 +298,9 @@ fn generate_async_method_export(
             #[unsafe(no_mangle)]
             pub unsafe extern "C" fn #entry_ident(
                 handle: *mut #type_name
-            ) -> crate::RustFutureHandle {
+            ) -> ::riff::RustFutureHandle {
                 let instance = &*handle;
-                crate::rustfuture::rust_future_new(async move {
+                ::riff::rustfuture::rust_future_new(async move {
                     #future_body
                 })
             }
@@ -311,11 +311,11 @@ fn generate_async_method_export(
             pub unsafe extern "C" fn #entry_ident(
                 handle: *mut #type_name,
                 #(#ffi_params),*
-            ) -> crate::RustFutureHandle {
+            ) -> ::riff::RustFutureHandle {
                 let instance = &*handle;
                 #(#pre_spawn)*
                 #(let _ = &#move_vars;)*
-                crate::rustfuture::rust_future_new(async move {
+                ::riff::rustfuture::rust_future_new(async move {
                     #future_body
                 })
             }
@@ -325,13 +325,13 @@ fn generate_async_method_export(
     let complete_fn = quote! {
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #complete_ident(
-            handle: crate::RustFutureHandle,
-            out_status: *mut crate::FfiStatus,
+            handle: ::riff::RustFutureHandle,
+            out_status: *mut ::riff::FfiStatus,
         ) -> #ffi_return_type {
-            match crate::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+            match ::riff::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
                 Some(result) => { #complete_conversion }
                 None => {
-                    if !out_status.is_null() { *out_status = crate::FfiStatus::CANCELLED; }
+                    if !out_status.is_null() { *out_status = ::riff::FfiStatus::CANCELLED; }
                     #default_value
                 }
             }
@@ -343,23 +343,23 @@ fn generate_async_method_export(
 
         #[unsafe(no_mangle)]
         pub extern "C" fn #poll_ident(
-            handle: crate::RustFutureHandle,
+            handle: ::riff::RustFutureHandle,
             callback_data: u64,
-            callback: crate::RustFutureContinuationCallback,
+            callback: ::riff::RustFutureContinuationCallback,
         ) {
-            unsafe { crate::rustfuture::rust_future_poll::<#rust_return_type>(handle, callback, callback_data) }
+            unsafe { ::riff::rustfuture::rust_future_poll::<#rust_return_type>(handle, callback, callback_data) }
         }
 
         #complete_fn
 
         #[unsafe(no_mangle)]
-        pub extern "C" fn #cancel_ident(handle: crate::RustFutureHandle) {
-            unsafe { crate::rustfuture::rust_future_cancel::<#rust_return_type>(handle) }
+        pub extern "C" fn #cancel_ident(handle: ::riff::RustFutureHandle) {
+            unsafe { ::riff::rustfuture::rust_future_cancel::<#rust_return_type>(handle) }
         }
 
         #[unsafe(no_mangle)]
-        pub extern "C" fn #free_ident(handle: crate::RustFutureHandle) {
-            unsafe { crate::rustfuture::rust_future_free::<#rust_return_type>(handle) }
+        pub extern "C" fn #free_ident(handle: ::riff::RustFutureHandle) {
+            unsafe { ::riff::rustfuture::rust_future_free::<#rust_return_type>(handle) }
         }
     })
 }
@@ -421,18 +421,18 @@ fn generate_stream_exports(
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #subscribe_ident(
             handle: *const #type_name,
-        ) -> crate::SubscriptionHandle {
+        ) -> ::riff::SubscriptionHandle {
             if handle.is_null() {
                 return std::ptr::null_mut();
             }
             let instance = unsafe { &*handle };
             let subscription = instance.#method_name();
-            std::sync::Arc::into_raw(subscription) as crate::SubscriptionHandle
+            std::sync::Arc::into_raw(subscription) as ::riff::SubscriptionHandle
         }
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #pop_batch_ident(
-            subscription_handle: crate::SubscriptionHandle,
+            subscription_handle: ::riff::SubscriptionHandle,
             output_ptr: *mut #item_type,
             output_capacity: usize,
         ) -> usize {
@@ -440,7 +440,7 @@ fn generate_stream_exports(
                 return 0;
             }
             let subscription = unsafe {
-                &*(subscription_handle as *const crate::EventSubscription<#item_type>)
+                &*(subscription_handle as *const ::riff::EventSubscription<#item_type>)
             };
             let output_slice = unsafe {
                 std::slice::from_raw_parts_mut(
@@ -453,57 +453,57 @@ fn generate_stream_exports(
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #wait_ident(
-            subscription_handle: crate::SubscriptionHandle,
+            subscription_handle: ::riff::SubscriptionHandle,
             timeout_milliseconds: u32,
         ) -> i32 {
             if subscription_handle.is_null() {
-                return crate::WaitResult::Unsubscribed as i32;
+                return ::riff::WaitResult::Unsubscribed as i32;
             }
             let subscription = unsafe {
-                &*(subscription_handle as *const crate::EventSubscription<#item_type>)
+                &*(subscription_handle as *const ::riff::EventSubscription<#item_type>)
             };
             subscription.wait_for_events(timeout_milliseconds) as i32
         }
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #poll_ident(
-            subscription_handle: crate::SubscriptionHandle,
+            subscription_handle: ::riff::SubscriptionHandle,
             callback_data: u64,
-            callback: crate::StreamContinuationCallback,
+            callback: ::riff::StreamContinuationCallback,
         ) {
             if subscription_handle.is_null() {
-                callback(callback_data, crate::StreamPollResult::Closed);
+                callback(callback_data, ::riff::StreamPollResult::Closed);
                 return;
             }
             let subscription = unsafe {
-                &*(subscription_handle as *const crate::EventSubscription<#item_type>)
+                &*(subscription_handle as *const ::riff::EventSubscription<#item_type>)
             };
             subscription.poll(callback_data, callback);
         }
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #unsubscribe_ident(
-            subscription_handle: crate::SubscriptionHandle,
+            subscription_handle: ::riff::SubscriptionHandle,
         ) {
             if subscription_handle.is_null() {
                 return;
             }
             let subscription = unsafe {
-                &*(subscription_handle as *const crate::EventSubscription<#item_type>)
+                &*(subscription_handle as *const ::riff::EventSubscription<#item_type>)
             };
             subscription.unsubscribe();
         }
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #free_ident(
-            subscription_handle: crate::SubscriptionHandle,
+            subscription_handle: ::riff::SubscriptionHandle,
         ) {
             if subscription_handle.is_null() {
                 return;
             }
             drop(unsafe {
                 std::sync::Arc::from_raw(
-                    subscription_handle as *const crate::EventSubscription<#item_type>
+                    subscription_handle as *const ::riff::EventSubscription<#item_type>
                 )
             });
         }

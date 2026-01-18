@@ -175,7 +175,7 @@ pub fn get_async_ffi_return_type(abi: &AsyncReturnAbi) -> proc_macro2::TokenStre
     match abi {
         AsyncReturnAbi::Unit => quote! { () },
         AsyncReturnAbi::Direct { rust_type } => quote! { #rust_type },
-        AsyncReturnAbi::WireEncoded { .. } => quote! { crate::FfiBuf<u8> },
+        AsyncReturnAbi::WireEncoded { .. } => quote! { ::riff::FfiBuf<u8> },
     }
 }
 
@@ -191,16 +191,16 @@ pub fn get_async_rust_return_type(abi: &AsyncReturnAbi) -> proc_macro2::TokenStr
 pub fn get_async_complete_conversion(abi: &AsyncReturnAbi) -> proc_macro2::TokenStream {
     match abi {
         AsyncReturnAbi::Unit => quote! {
-            if !out_status.is_null() { *out_status = crate::FfiStatus::OK; }
+            if !out_status.is_null() { *out_status = ::riff::FfiStatus::OK; }
             ()
         },
         AsyncReturnAbi::Direct { .. } => quote! {
-            if !out_status.is_null() { *out_status = crate::FfiStatus::OK; }
+            if !out_status.is_null() { *out_status = ::riff::FfiStatus::OK; }
             result
         },
         AsyncReturnAbi::WireEncoded { .. } => quote! {
-            if !out_status.is_null() { *out_status = crate::FfiStatus::OK; }
-            crate::FfiBuf::wire_encode(&result)
+            if !out_status.is_null() { *out_status = ::riff::FfiStatus::OK; }
+            ::riff::FfiBuf::wire_encode(&result)
         },
     }
 }
@@ -209,6 +209,6 @@ pub fn get_async_default_ffi_value(abi: &AsyncReturnAbi) -> proc_macro2::TokenSt
     match abi {
         AsyncReturnAbi::Unit => quote! { () },
         AsyncReturnAbi::Direct { .. } => quote! { Default::default() },
-        AsyncReturnAbi::WireEncoded { .. } => quote! { crate::FfiBuf::default() },
+        AsyncReturnAbi::WireEncoded { .. } => quote! { ::riff::FfiBuf::default() },
     }
 }

@@ -71,9 +71,9 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
             if is_async {
                 let callback_type = if let Some(ref ret_ty) = return_type {
                     let ffi_ret = rust_type_to_ffi_param_type(ret_ty);
-                    quote! { extern "C" fn(callback_data: u64, result: #ffi_ret, status: crate::FfiStatus) }
+                    quote! { extern "C" fn(callback_data: u64, result: #ffi_ret, status: ::riff::FfiStatus) }
                 } else {
-                    quote! { extern "C" fn(callback_data: u64, status: crate::FfiStatus) }
+                    quote! { extern "C" fn(callback_data: u64, status: ::riff::FfiStatus) }
                 };
 
                 vtable_fields.push(quote! {
@@ -104,7 +104,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
                             waker: std::cell::UnsafeCell::new(None),
                         });
 
-                        extern "C" fn callback<T: Copy>(data: u64, result: T, _status: crate::FfiStatus) {
+                        extern "C" fn callback<T: Copy>(data: u64, result: T, _status: ::riff::FfiStatus) {
                             let ctx = unsafe { Arc::from_raw(data as *const AsyncContext<T>) };
                             unsafe { *ctx.result.get() = Some(result) };
                             ctx.completed.store(true, Ordering::Release);
@@ -150,7 +150,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
                             waker: std::cell::UnsafeCell::new(None),
                         });
 
-                        extern "C" fn callback(data: u64, _status: crate::FfiStatus) {
+                        extern "C" fn callback(data: u64, _status: ::riff::FfiStatus) {
                             let ctx = unsafe { Arc::from_raw(data as *const AsyncContext) };
                             ctx.completed.store(true, Ordering::Release);
                             if let Some(waker) = unsafe { (*ctx.waker.get()).take() } {
@@ -201,14 +201,14 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
                         handle: u64,
                         #(#param_types,)*
                         #out_param
-                        status: *mut crate::FfiStatus
+                        status: *mut ::riff::FfiStatus
                     )
                 });
 
                 let impl_body = if let Some(ref ret_ty) = return_type {
                     quote! {
                         let mut out: #ret_ty = Default::default();
-                        let mut status = crate::FfiStatus::default();
+                        let mut status = ::riff::FfiStatus::default();
                         unsafe {
                             ((*self.vtable).#method_name_snake)(
                                 self.handle,
@@ -221,7 +221,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
                     }
                 } else {
                     quote! {
-                        let mut status = crate::FfiStatus::default();
+                        let mut status = ::riff::FfiStatus::default();
                         unsafe {
                             ((*self.vtable).#method_name_snake)(
                                 self.handle,
