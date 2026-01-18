@@ -31,6 +31,17 @@ pub use subscription::{
 };
 pub use types::{FfiBuf, FfiError, FfiOption, FfiSlice, FfiString};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnexpectedFfiCallbackError;
+
+impl std::fmt::Display for UnexpectedFfiCallbackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unexpected ffi callback error")
+    }
+}
+
+impl std::error::Error for UnexpectedFfiCallbackError {}
+
 pub const VERSION_MAJOR: u32 = 0;
 pub const VERSION_MINOR: u32 = 1;
 pub const VERSION_PATCH: u32 = 0;

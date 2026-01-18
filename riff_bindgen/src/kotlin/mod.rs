@@ -1,7 +1,7 @@
+mod call_plan;
 mod jni;
 mod layout;
 mod marshal;
-mod call_plan;
 mod names;
 mod primitives;
 mod return_abi;
@@ -20,9 +20,9 @@ pub use marshal::{JniParamInfo, JniReturnKind, ParamConversion};
 pub use names::NamingConvention;
 pub use templates::{
     AsyncFunctionTemplate, CStyleEnumTemplate, CallbackTraitTemplate, ClassTemplate,
-    ClosureInterfaceTemplate, DataEnumCodecTemplate, NativeTemplate,
-    PreambleTemplate, RecordReaderTemplate, RecordTemplate, RecordWriterTemplate,
-    SealedEnumTemplate, WireFunctionTemplate,
+    ClosureInterfaceTemplate, DataEnumCodecTemplate, NativeTemplate, PreambleTemplate,
+    RecordReaderTemplate, RecordTemplate, RecordWriterTemplate, SealedEnumTemplate,
+    WireFunctionTemplate,
 };
 pub use types::TypeMapper;
 
@@ -699,7 +699,10 @@ mod tests {
     #[test]
     fn test_wire_function_option_param_is_encoded() {
         let func = Function::new("count_optional")
-            .with_param(Parameter::new("maybe_name", Type::Option(Box::new(Type::String))))
+            .with_param(Parameter::new(
+                "maybe_name",
+                Type::Option(Box::new(Type::String)),
+            ))
             .with_output(Type::Primitive(Primitive::I32));
 
         let module = Module::new("test").with_function(func);
@@ -716,10 +719,8 @@ mod tests {
     #[test]
     fn test_wire_function_closure_param_is_wrapped_to_interface() {
         let signature = ClosureSignature::single_param(Type::Primitive(Primitive::I32));
-        let func = Function::new("with_callback").with_param(Parameter::new(
-            "callback",
-            Type::Closure(signature),
-        ));
+        let func = Function::new("with_callback")
+            .with_param(Parameter::new("callback", Type::Closure(signature)));
 
         let module = Module::new("test").with_function(func);
         let output = Kotlin::render_module(&module);

@@ -261,7 +261,12 @@ fn encode_vec(inner: &Type, name: &str, module: &Module) -> KotlinEncoder {
 
     let record_struct_size = inner
         .record_name()
-        .and_then(|record_name| module.records.iter().find(|record| record.name == record_name))
+        .and_then(|record_name| {
+            module
+                .records
+                .iter()
+                .find(|record| record.name == record_name)
+        })
         .filter(|record| record.is_blittable())
         .map(|record| record.struct_size().as_usize());
 

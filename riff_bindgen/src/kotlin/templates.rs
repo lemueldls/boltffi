@@ -9,8 +9,8 @@ use crate::model::{
     Primitive, Record, RecordField, ReturnType, TraitMethod, TraitMethodParam, Type,
 };
 
-use super::layout::{KotlinBufferRead, KotlinBufferWrite};
 use super::call_plan::{AsyncCallPlan, WireFunctionPlan};
+use super::layout::{KotlinBufferRead, KotlinBufferWrite};
 use super::marshal::{OptionView, ParamConversion};
 use super::primitives;
 use super::return_abi::ReturnAbi;
@@ -406,7 +406,10 @@ impl RecordTemplate {
         let is_blittable = record.is_blittable();
         let layout = record.layout();
         let struct_size = layout.total_size().as_usize();
-        let offsets = layout.offsets().map(|offset| offset.as_usize()).collect::<Vec<_>>();
+        let offsets = layout
+            .offsets()
+            .map(|offset| offset.as_usize())
+            .collect::<Vec<_>>();
 
         let fields = record
             .fields
@@ -636,8 +639,12 @@ pub struct WireFunctionTemplate {
 
 impl WireFunctionTemplate {
     pub fn from_function(function: &Function, module: &Module) -> Self {
-        let plan =
-            WireFunctionPlan::for_function(&function.name, &function.inputs, &function.returns, module);
+        let plan = WireFunctionPlan::for_function(
+            &function.name,
+            &function.inputs,
+            &function.returns,
+            module,
+        );
         let signature_params = plan
             .signature_params
             .into_iter()
@@ -697,7 +704,12 @@ pub struct AsyncFunctionTemplate {
 
 impl AsyncFunctionTemplate {
     pub fn from_function(function: &Function, module: &Module) -> Self {
-        let plan = AsyncCallPlan::for_function(&function.name, &function.inputs, &function.returns, module);
+        let plan = AsyncCallPlan::for_function(
+            &function.name,
+            &function.inputs,
+            &function.returns,
+            module,
+        );
         let signature_params = plan
             .signature_params
             .into_iter()
@@ -873,12 +885,8 @@ pub struct WireMethodTemplate {
 
 impl WireMethodTemplate {
     pub fn from_method(class: &Class, method: &Method, module: &Module) -> Self {
-        let plan = WireFunctionPlan::for_function(
-            &method.name,
-            &method.inputs,
-            &method.returns,
-            module,
-        );
+        let plan =
+            WireFunctionPlan::for_function(&method.name, &method.inputs, &method.returns, module);
 
         Self {
             method_name: NamingConvention::method_name(&method.name),
@@ -1067,10 +1075,7 @@ impl NativeTemplate {
                     if return_abi.is_wire_encoded() {
                         "ByteBuffer?".to_string()
                     } else {
-                        return_abi
-                            .kotlin_type()
-                            .unwrap_or("Unit")
-                            .to_string()
+                        return_abi.kotlin_type().unwrap_or("Unit").to_string()
                     }
                 } else {
                     String::new()
@@ -1083,7 +1088,9 @@ impl NativeTemplate {
                         .iter()
                         .map(|p| NativeParamView {
                             name: NamingConvention::param_name(&p.name),
-                            jni_type: WireFunctionPlan::jni_param_type_for_wire_param(&p.param_type),
+                            jni_type: WireFunctionPlan::jni_param_type_for_wire_param(
+                                &p.param_type,
+                            ),
                         })
                         .collect(),
                     has_out_param,
@@ -1112,7 +1119,9 @@ impl NativeTemplate {
                         .iter()
                         .map(|p| NativeParamView {
                             name: NamingConvention::param_name(&p.name),
-                            jni_type: WireFunctionPlan::jni_param_type_for_wire_param(&p.param_type),
+                            jni_type: WireFunctionPlan::jni_param_type_for_wire_param(
+                                &p.param_type,
+                            ),
                         })
                         .collect(),
                     return_jni_type: Self::wire_return_jni_type(&return_abi),
@@ -1168,7 +1177,9 @@ impl NativeTemplate {
                     .methods
                     .iter()
                     .filter(|method| method.is_async)
-                    .filter(|method| AsyncCallPlan::supports_call(&method.inputs, &method.returns, module))
+                    .filter(|method| {
+                        AsyncCallPlan::supports_call(&method.inputs, &method.returns, module)
+                    })
                     .map(|method| {
                         let method_ffi = naming::method_ffi_name(&class.name, &method.name);
                         let (has_out_param, out_type, _return_jni_type) =
@@ -1208,7 +1219,9 @@ impl NativeTemplate {
                     .methods
                     .iter()
                     .filter(|method| !method.is_async)
-                    .filter(|method| WireFunctionPlan::supports_call(&method.inputs, &method.returns, module))
+                    .filter(|method| {
+                        WireFunctionPlan::supports_call(&method.inputs, &method.returns, module)
+                    })
                     .map(|method| {
                         let return_abi = ReturnAbi::from_return_type(&method.returns, module);
                         NativeSyncMethodView {
@@ -1375,7 +1388,6 @@ impl NativeTemplate {
             _ => (false, String::new(), TypeMapper::jni_type(ok)),
         }
     }
-
 }
 
 #[derive(Template)]

@@ -101,12 +101,12 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                 quote! {
                     #(#conversions)*
                     #fn_name(#(#call_args),*);
-                    ::riff::FfiStatus::OK
+                    ::riff::__private::FfiStatus::OK
                 }
             } else {
                 quote! {
                     #fn_name(#(#call_args),*);
-                    ::riff::FfiStatus::OK
+                    ::riff::__private::FfiStatus::OK
                 }
             };
 
@@ -117,7 +117,7 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                     #[unsafe(no_mangle)]
                     #fn_vis unsafe extern "C" fn #export_ident(
                         #(#ffi_params),*
-                    ) -> ::riff::FfiStatus {
+                    ) -> ::riff::__private::FfiStatus {
                         #body
                     }
                 }
@@ -126,7 +126,7 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                     #input
 
                     #[unsafe(no_mangle)]
-                    #fn_vis extern "C" fn #export_ident() -> ::riff::FfiStatus {
+                    #fn_vis extern "C" fn #export_ident() -> ::riff::__private::FfiStatus {
                         #body
                     }
                 }
@@ -170,12 +170,12 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                 quote! {
                     #(#conversions)*
                     let result: #inner_ty = #fn_name(#(#call_args),*);
-                    ::riff::FfiBuf::wire_encode(&result)
+                    ::riff::__private::FfiBuf::wire_encode(&result)
                 }
             } else {
                 quote! {
                     let result: #inner_ty = #fn_name(#(#call_args),*);
-                    ::riff::FfiBuf::wire_encode(&result)
+                    ::riff::__private::FfiBuf::wire_encode(&result)
                 }
             };
 
@@ -186,7 +186,7 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                     #[unsafe(no_mangle)]
                     #fn_vis unsafe extern "C" fn #export_ident(
                         #(#ffi_params),*
-                    ) -> ::riff::FfiBuf<u8> {
+                    ) -> ::riff::__private::FfiBuf<u8> {
                         #body
                     }
                 }
@@ -195,7 +195,7 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                     #input
 
                     #[unsafe(no_mangle)]
-                    #fn_vis extern "C" fn #export_ident() -> ::riff::FfiBuf<u8> {
+                    #fn_vis extern "C" fn #export_ident() -> ::riff::__private::FfiBuf<u8> {
                         #body
                     }
                 }
@@ -248,8 +248,8 @@ fn generate_async_export(input: &ItemFn) -> TokenStream {
     let entry_fn = if ffi_params.is_empty() {
         quote! {
             #[unsafe(no_mangle)]
-            #fn_vis extern "C" fn #entry_ident() -> ::riff::RustFutureHandle {
-                ::riff::rustfuture::rust_future_new(async move {
+            #fn_vis extern "C" fn #entry_ident() -> ::riff::__private::RustFutureHandle {
+                ::riff::__private::rustfuture::rust_future_new(async move {
                     #future_body
                 })
             }
@@ -257,10 +257,10 @@ fn generate_async_export(input: &ItemFn) -> TokenStream {
     } else {
         quote! {
             #[unsafe(no_mangle)]
-            #fn_vis extern "C" fn #entry_ident(#(#ffi_params),*) -> ::riff::RustFutureHandle {
+            #fn_vis extern "C" fn #entry_ident(#(#ffi_params),*) -> ::riff::__private::RustFutureHandle {
                 #(#pre_spawn)*
                 #(let _ = &#move_vars;)*
-                ::riff::rustfuture::rust_future_new(async move {
+                ::riff::__private::rustfuture::rust_future_new(async move {
                     #future_body
                 })
             }
@@ -270,13 +270,13 @@ fn generate_async_export(input: &ItemFn) -> TokenStream {
     let complete_fn = quote! {
         #[unsafe(no_mangle)]
         #fn_vis unsafe extern "C" fn #complete_ident(
-            handle: ::riff::RustFutureHandle,
-            out_status: *mut ::riff::FfiStatus,
+            handle: ::riff::__private::RustFutureHandle,
+            out_status: *mut ::riff::__private::FfiStatus,
         ) -> #ffi_return_type {
-            match ::riff::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+            match ::riff::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
                 Some(result) => { #complete_conversion }
                 None => {
-                    if !out_status.is_null() { *out_status = ::riff::FfiStatus::CANCELLED; }
+                    if !out_status.is_null() { *out_status = ::riff::__private::FfiStatus::CANCELLED; }
                     #default_value
                 }
             }
@@ -290,23 +290,23 @@ fn generate_async_export(input: &ItemFn) -> TokenStream {
 
         #[unsafe(no_mangle)]
         #fn_vis extern "C" fn #poll_ident(
-            handle: ::riff::RustFutureHandle,
+            handle: ::riff::__private::RustFutureHandle,
             callback_data: u64,
-            callback: ::riff::RustFutureContinuationCallback,
+            callback: ::riff::__private::RustFutureContinuationCallback,
         ) {
-            unsafe { ::riff::rustfuture::rust_future_poll::<#rust_return_type>(handle, callback, callback_data) }
+            unsafe { ::riff::__private::rustfuture::rust_future_poll::<#rust_return_type>(handle, callback, callback_data) }
         }
 
         #complete_fn
 
         #[unsafe(no_mangle)]
-        #fn_vis extern "C" fn #cancel_ident(handle: ::riff::RustFutureHandle) {
-            unsafe { ::riff::rustfuture::rust_future_cancel::<#rust_return_type>(handle) }
+        #fn_vis extern "C" fn #cancel_ident(handle: ::riff::__private::RustFutureHandle) {
+            unsafe { ::riff::__private::rustfuture::rust_future_cancel::<#rust_return_type>(handle) }
         }
 
         #[unsafe(no_mangle)]
-        #fn_vis extern "C" fn #free_ident(handle: ::riff::RustFutureHandle) {
-            unsafe { ::riff::rustfuture::rust_future_free::<#rust_return_type>(handle) }
+        #fn_vis extern "C" fn #free_ident(handle: ::riff::__private::RustFutureHandle) {
+            unsafe { ::riff::__private::rustfuture::rust_future_free::<#rust_return_type>(handle) }
         }
     };
 

@@ -3,11 +3,11 @@ use std::collections::HashSet;
 use askama::Template;
 use riff_ffi_rules::naming;
 
+use super::NamingConvention;
 use super::call_plan::{AsyncCallPlan, WireFunctionPlan};
 use super::marshal::{JniParamInfo, JniReturnKind, OptionView, ResultView};
 use super::primitives;
 use super::return_abi::ReturnAbi;
-use super::NamingConvention;
 use crate::model::{
     CallbackTrait, Class, ClosureSignature, Function, Method, Module, Primitive, ReturnType,
     TraitMethod, TraitMethodParam, Type,
@@ -80,7 +80,9 @@ impl JniWireMethodTemplate {
         let params: Vec<JniParamInfo> = method
             .inputs
             .iter()
-            .map(|param| JniParamInfo::from_param_with_module(&param.name, &param.param_type, module))
+            .map(|param| {
+                JniParamInfo::from_param_with_module(&param.name, &param.param_type, module)
+            })
             .collect();
 
         let jni_params = if params.is_empty() {
@@ -1256,9 +1258,7 @@ impl JniGlueTemplate {
             .filter_map(|param_type| match param_type {
                 Type::Closure(signature) => {
                     let signature_id = signature.signature_id();
-                    seen_signature_ids
-                        .insert(signature_id)
-                        .then_some(signature)
+                    seen_signature_ids.insert(signature_id).then_some(signature)
                 }
                 _ => None,
             })
@@ -1266,10 +1266,7 @@ impl JniGlueTemplate {
             .collect()
     }
 
-    fn build_trampoline_view(
-        sig: &ClosureSignature,
-        _package_path: &str,
-    ) -> ClosureTrampolineView {
+    fn build_trampoline_view(sig: &ClosureSignature, _package_path: &str) -> ClosureTrampolineView {
         let signature_id = sig.signature_id();
         let trampoline_name = format!("trampoline_{}", signature_id);
         let invoke_method_name = "invoke";

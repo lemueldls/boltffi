@@ -11,6 +11,15 @@ pub struct FfiParams {
     pub call_args: Vec<proc_macro2::TokenStream>,
 }
 
+fn foreign_trait_path(trait_path: &syn::Path) -> syn::Path {
+    let mut foreign_path = trait_path.clone();
+    if let Some(last) = foreign_path.segments.last_mut() {
+        last.ident = syn::Ident::new(&format!("Foreign{}", last.ident), last.ident.span());
+        last.arguments = syn::PathArguments::None;
+    }
+    foreign_path
+}
+
 pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![,]>) -> FfiParams {
     inputs
         .iter()
@@ -44,7 +53,7 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                         let #name: &str = if #ptr_name.is_null() {
                             ""
                         } else {
-                            core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name))
+                            ::core::str::from_utf8(::core::slice::from_raw_parts(#ptr_name, #len_name))
                                 .expect(concat!(stringify!(#name), ": invalid UTF-8"))
                         };
                     });
@@ -62,7 +71,7 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                         let #name: String = if #ptr_name.is_null() {
                             String::new()
                         } else {
-                            core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name))
+                            ::core::str::from_utf8(::core::slice::from_raw_parts(#ptr_name, #len_name))
                                 .expect(concat!(stringify!(#name), ": invalid UTF-8"))
                                 .to_string()
                         };
@@ -91,7 +100,7 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                                 ffi_cb_args.push(quote! { *const u8 });
                                 ffi_cb_args.push(quote! { usize });
                                 wire_vars.push(quote! {
-                                    let #wire_name = ::riff::wire::encode(&#arg_name);
+                                    let #wire_name = ::riff::__private::wire::encode(&#arg_name);
                                 });
                                 cb_call_args.push(quote! { #wire_name.as_ptr() });
                                 cb_call_args.push(quote! { #wire_name.len() });
@@ -104,10 +113,10 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                     );
 
                     acc.ffi_params.push(
-                        quote! { #cb_name: extern "C" fn(*mut core::ffi::c_void, #(#ffi_cb_args),*) },
+                        quote! { #cb_name: extern "C" fn(*mut ::core::ffi::c_void, #(#ffi_cb_args),*) },
                     );
                     acc.ffi_params
-                        .push(quote! { #ud_name: *mut core::ffi::c_void });
+                        .push(quote! { #ud_name: *mut ::core::ffi::c_void });
 
                     acc.conversions.push(quote! {
                         let #name = |#(#arg_names: #arg_types),*| {
@@ -129,7 +138,7 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                         let #name: &[#inner_ty] = if #ptr_name.is_null() {
                             &[]
                         } else {
-                            core::slice::from_raw_parts(#ptr_name, #len_name)
+                            ::core::slice::from_raw_parts(#ptr_name, #len_name)
                         };
                     });
 
@@ -146,21 +155,58 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                         let #name: &mut [#inner_ty] = if #ptr_name.is_null() {
                             &mut []
                         } else {
-                            core::slice::from_raw_parts_mut(#ptr_name, #len_name)
+                            ::core::slice::from_raw_parts_mut(#ptr_name, #len_name)
                         };
                     });
 
                     acc.call_args.push(quote! { #name });
                 }
-                ParamTransform::BoxedTrait(trait_name) => {
-                    let foreign_type =
-                        syn::Ident::new(&format!("Foreign{}", trait_name), trait_name.span());
+                ParamTransform::BoxedDynTrait(trait_path) => {
+                    let foreign_path = foreign_trait_path(&trait_path);
+                    let foreign_ident = syn::Ident::new(&format!("__{}_foreign", name), name.span());
 
-                    acc.ffi_params.push(quote! { #name: *mut #foreign_type });
+                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
 
                     acc.conversions.push(quote! {
                         assert!(!#name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                        let #name: Box<dyn #trait_name> = Box::from_raw(#name);
+                        let #foreign_ident: Box<#foreign_path> = Box::from_raw(#name);
+                        let #name: Box<dyn #trait_path> = #foreign_ident;
+                    });
+
+                    acc.call_args.push(quote! { #name });
+                }
+                ParamTransform::ArcDynTrait(trait_path) => {
+                    let foreign_path = foreign_trait_path(&trait_path);
+                    let boxed_ident = syn::Ident::new(&format!("__{}_foreign_box", name), name.span());
+                    let arc_ident = syn::Ident::new(&format!("__{}_foreign_arc", name), name.span());
+
+                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
+
+                    acc.conversions.push(quote! {
+                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null pointer"));
+                        let #boxed_ident: Box<#foreign_path> = Box::from_raw(#name);
+                        let #arc_ident: ::std::sync::Arc<#foreign_path> = #boxed_ident.into();
+                        let #name: ::std::sync::Arc<dyn #trait_path> = #arc_ident;
+                    });
+
+                    acc.call_args.push(quote! { #name });
+                }
+                ParamTransform::OptionArcDynTrait(trait_path) => {
+                    let foreign_path = foreign_trait_path(&trait_path);
+                    let boxed_ident = syn::Ident::new(&format!("__{}_foreign_box", name), name.span());
+                    let arc_ident = syn::Ident::new(&format!("__{}_foreign_arc", name), name.span());
+
+                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
+
+                    acc.conversions.push(quote! {
+                        let #name: Option<::std::sync::Arc<dyn #trait_path>> = if #name.is_null() {
+                            None
+                        } else {
+                            let #boxed_ident: Box<#foreign_path> = Box::from_raw(#name);
+                            let #arc_ident: ::std::sync::Arc<#foreign_path> = #boxed_ident.into();
+                            let #name: ::std::sync::Arc<dyn #trait_path> = #arc_ident;
+                            Some(#name)
+                        };
                     });
 
                     acc.call_args.push(quote! { #name });
@@ -176,7 +222,7 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                         let #name: Vec<#inner_ty> = if #ptr_name.is_null() {
                             Vec::new()
                         } else {
-                            core::slice::from_raw_parts(#ptr_name, #len_name).to_vec()
+                            ::core::slice::from_raw_parts(#ptr_name, #len_name).to_vec()
                         };
                     });
 
@@ -193,8 +239,8 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                         let #name: Vec<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
                             Vec::new()
                         } else {
-                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -211,8 +257,8 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                         let #name: Option<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
                             None
                         } else {
-                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -228,8 +274,8 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                     acc.conversions.push(quote! {
                         let #name: #record_ty = {
                             assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -292,7 +338,7 @@ pub fn transform_params_async(
                         let #owned_name: String = if #ptr_name.is_null() {
                             String::new()
                         } else {
-                            match core::str::from_utf8(unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) }) {
+                            match ::core::str::from_utf8(unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) }) {
                                 Ok(s) => s.to_string(),
                                 Err(_) => {
                                     panic!(concat!(stringify!(#name), " is not valid UTF-8"));
@@ -319,7 +365,7 @@ pub fn transform_params_async(
                         let #name: String = if #ptr_name.is_null() {
                             String::new()
                         } else {
-                            match core::str::from_utf8(unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) }) {
+                            match ::core::str::from_utf8(unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) }) {
                                 Ok(s) => s.to_string(),
                                 Err(_) => {
                                     panic!(concat!(stringify!(#name), " is not valid UTF-8"));
@@ -346,7 +392,7 @@ pub fn transform_params_async(
                         let #owned_name: Vec<#inner_ty> = if #ptr_name.is_null() {
                             Vec::new()
                         } else {
-                            unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) }.to_vec()
+                            unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) }.to_vec()
                         };
                     });
 
@@ -360,8 +406,10 @@ pub fn transform_params_async(
                 ParamTransform::SliceMut(_) => {
                     panic!("Mutable slices are not supported in async functions");
                 }
-                ParamTransform::BoxedTrait(_) => {
-                    panic!("Box<dyn Trait> parameters are not yet supported in async functions");
+                ParamTransform::BoxedDynTrait(_)
+                | ParamTransform::ArcDynTrait(_)
+                | ParamTransform::OptionArcDynTrait(_) => {
+                    panic!("Trait object parameters are not yet supported in async functions");
                 }
                 ParamTransform::VecPrimitive(inner_ty) => {
                     let ptr_name = ptr_ident(&name);
@@ -374,7 +422,7 @@ pub fn transform_params_async(
                         let #name: Vec<#inner_ty> = if #ptr_name.is_null() {
                             Vec::new()
                         } else {
-                            unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) }.to_vec()
+                            unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) }.to_vec()
                         };
                     });
 
@@ -392,8 +440,8 @@ pub fn transform_params_async(
                         let #name: Vec<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
                             Vec::new()
                         } else {
-                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -411,8 +459,8 @@ pub fn transform_params_async(
                         let #name: Option<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
                             None
                         } else {
-                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -429,8 +477,8 @@ pub fn transform_params_async(
                     acc.pre_spawn.push(quote! {
                         let #name: #record_ty = {
                             assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -481,7 +529,7 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                         let #name: &str = if #ptr_name.is_null() {
                             ""
                         } else {
-                            core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name))
+                            ::core::str::from_utf8(::core::slice::from_raw_parts(#ptr_name, #len_name))
                                 .expect(concat!(stringify!(#name), ": invalid UTF-8"))
                         };
                     });
@@ -499,7 +547,7 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                         let #name: String = if #ptr_name.is_null() {
                             String::new()
                         } else {
-                            core::str::from_utf8(core::slice::from_raw_parts(#ptr_name, #len_name))
+                            ::core::str::from_utf8(::core::slice::from_raw_parts(#ptr_name, #len_name))
                                 .expect(concat!(stringify!(#name), ": invalid UTF-8"))
                                 .to_string()
                         };
@@ -528,7 +576,7 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                                 ffi_cb_args.push(quote! { *const u8 });
                                 ffi_cb_args.push(quote! { usize });
                                 wire_vars.push(quote! {
-                                    let #wire_name = ::riff::wire::encode(&#arg_name);
+                                    let #wire_name = ::riff::__private::wire::encode(&#arg_name);
                                 });
                                 cb_call_args.push(quote! { #wire_name.as_ptr() });
                                 cb_call_args.push(quote! { #wire_name.len() });
@@ -541,10 +589,10 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                     );
 
                     acc.ffi_params.push(
-                        quote! { #cb_name: extern "C" fn(*mut core::ffi::c_void, #(#ffi_cb_args),*) },
+                        quote! { #cb_name: extern "C" fn(*mut ::core::ffi::c_void, #(#ffi_cb_args),*) },
                     );
                     acc.ffi_params
-                        .push(quote! { #ud_name: *mut core::ffi::c_void });
+                        .push(quote! { #ud_name: *mut ::core::ffi::c_void });
 
                     acc.conversions.push(quote! {
                         let #name = |#(#arg_names: #arg_types),*| {
@@ -566,7 +614,7 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                         let #name: &[#inner_ty] = if #ptr_name.is_null() {
                             &[]
                         } else {
-                            core::slice::from_raw_parts(#ptr_name, #len_name)
+                            ::core::slice::from_raw_parts(#ptr_name, #len_name)
                         };
                     });
 
@@ -583,21 +631,58 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                         let #name: &mut [#inner_ty] = if #ptr_name.is_null() {
                             &mut []
                         } else {
-                            core::slice::from_raw_parts_mut(#ptr_name, #len_name)
+                            ::core::slice::from_raw_parts_mut(#ptr_name, #len_name)
                         };
                     });
 
                     acc.call_args.push(quote! { #name });
                 }
-                ParamTransform::BoxedTrait(trait_name) => {
-                    let foreign_type =
-                        syn::Ident::new(&format!("Foreign{}", trait_name), trait_name.span());
+                ParamTransform::BoxedDynTrait(trait_path) => {
+                    let foreign_path = foreign_trait_path(&trait_path);
+                    let foreign_ident = syn::Ident::new(&format!("__{}_foreign", name), name.span());
 
-                    acc.ffi_params.push(quote! { #name: *mut #foreign_type });
+                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
 
                     acc.conversions.push(quote! {
                         assert!(!#name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                        let #name: Box<dyn #trait_name> = Box::from_raw(#name);
+                        let #foreign_ident: Box<#foreign_path> = Box::from_raw(#name);
+                        let #name: Box<dyn #trait_path> = #foreign_ident;
+                    });
+
+                    acc.call_args.push(quote! { #name });
+                }
+                ParamTransform::ArcDynTrait(trait_path) => {
+                    let foreign_path = foreign_trait_path(&trait_path);
+                    let boxed_ident = syn::Ident::new(&format!("__{}_foreign_box", name), name.span());
+                    let arc_ident = syn::Ident::new(&format!("__{}_foreign_arc", name), name.span());
+
+                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
+
+                    acc.conversions.push(quote! {
+                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null pointer"));
+                        let #boxed_ident: Box<#foreign_path> = Box::from_raw(#name);
+                        let #arc_ident: ::std::sync::Arc<#foreign_path> = #boxed_ident.into();
+                        let #name: ::std::sync::Arc<dyn #trait_path> = #arc_ident;
+                    });
+
+                    acc.call_args.push(quote! { #name });
+                }
+                ParamTransform::OptionArcDynTrait(trait_path) => {
+                    let foreign_path = foreign_trait_path(&trait_path);
+                    let boxed_ident = syn::Ident::new(&format!("__{}_foreign_box", name), name.span());
+                    let arc_ident = syn::Ident::new(&format!("__{}_foreign_arc", name), name.span());
+
+                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
+
+                    acc.conversions.push(quote! {
+                        let #name: Option<::std::sync::Arc<dyn #trait_path>> = if #name.is_null() {
+                            None
+                        } else {
+                            let #boxed_ident: Box<#foreign_path> = Box::from_raw(#name);
+                            let #arc_ident: ::std::sync::Arc<#foreign_path> = #boxed_ident.into();
+                            let #name: ::std::sync::Arc<dyn #trait_path> = #arc_ident;
+                            Some(#name)
+                        };
                     });
 
                     acc.call_args.push(quote! { #name });
@@ -613,7 +698,7 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                         let #name: Vec<#inner_ty> = if #ptr_name.is_null() {
                             Vec::new()
                         } else {
-                            core::slice::from_raw_parts(#ptr_name, #len_name).to_vec()
+                            ::core::slice::from_raw_parts(#ptr_name, #len_name).to_vec()
                         };
                     });
 
@@ -630,8 +715,8 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                         let #name: Vec<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
                             Vec::new()
                         } else {
-                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -648,8 +733,8 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                         let #name: Option<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
                             None
                         } else {
-                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -665,8 +750,8 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                     acc.conversions.push(quote! {
                         let #name: #record_ty = {
                             assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -718,7 +803,7 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                         let #owned_name: String = if #ptr_name.is_null() {
                             String::new()
                         } else {
-                            match core::str::from_utf8(unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) }) {
+                            match ::core::str::from_utf8(unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) }) {
                                 Ok(s) => s.to_string(),
                                 Err(_) => panic!(concat!(stringify!(#name), " is not valid UTF-8")),
                             }
@@ -743,7 +828,7 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                         let #name: String = if #ptr_name.is_null() {
                             String::new()
                         } else {
-                            match core::str::from_utf8(unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) }) {
+                            match ::core::str::from_utf8(unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) }) {
                                 Ok(s) => s.to_string(),
                                 Err(_) => panic!(concat!(stringify!(#name), " is not valid UTF-8")),
                             }
@@ -759,8 +844,10 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                 ParamTransform::SliceRef(_) | ParamTransform::SliceMut(_) => {
                     panic!("Slices are not supported in async methods");
                 }
-                ParamTransform::BoxedTrait(_) => {
-                    panic!("Box<dyn Trait> is not supported in async methods");
+                ParamTransform::BoxedDynTrait(_)
+                | ParamTransform::ArcDynTrait(_)
+                | ParamTransform::OptionArcDynTrait(_) => {
+                    panic!("Trait object parameters are not supported in async methods");
                 }
                 ParamTransform::VecPrimitive(inner_ty) => {
                     let ptr_name = ptr_ident(&name);
@@ -773,7 +860,7 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                         let #name: Vec<#inner_ty> = if #ptr_name.is_null() {
                             Vec::new()
                         } else {
-                            unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) }.to_vec()
+                            unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) }.to_vec()
                         };
                     });
 
@@ -791,8 +878,8 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                         let #name: Vec<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
                             Vec::new()
                         } else {
-                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -810,8 +897,8 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                         let #name: Option<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
                             None
                         } else {
-                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 
@@ -828,8 +915,8 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                     acc.pre_spawn.push(quote! {
                         let #name: #record_ty = {
                             assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
-                            ::riff::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                            let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
                     });
 

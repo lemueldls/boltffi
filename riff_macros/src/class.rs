@@ -5,8 +5,9 @@ use syn::{FnArg, ReturnType, Type};
 
 use crate::params::{FfiParams, transform_method_params, transform_method_params_async};
 use crate::returns::{
-    classify_async_return_abi, get_async_complete_conversion, get_async_default_ffi_value,
-    get_async_ffi_return_type, get_async_rust_return_type,
+    OptionReturnAbi, ReturnKind, classify_async_return_abi, classify_return,
+    get_async_complete_conversion, get_async_default_ffi_value, get_async_ffi_return_type,
+    get_async_rust_return_type,
 };
 
 pub fn ffi_class_impl(item: TokenStream) -> TokenStream {
@@ -27,7 +28,6 @@ pub fn ffi_class_impl(item: TokenStream) -> TokenStream {
     };
 
     let type_name_str = type_name.to_string();
-    let new_ident = syn::Ident::new(&naming::class_ffi_new(&type_name_str), type_name.span());
     let free_ident = syn::Ident::new(&naming::class_ffi_free(&type_name_str), type_name.span());
 
     let method_exports: Vec<_> = input
@@ -61,11 +61,6 @@ pub fn ffi_class_impl(item: TokenStream) -> TokenStream {
         #input
 
         #[unsafe(no_mangle)]
-        pub extern "C" fn #new_ident() -> *mut #type_name {
-            Box::into_raw(Box::new(#type_name::new()))
-        }
-
-        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #free_ident(handle: *mut #type_name) {
             if !handle.is_null() {
                 drop(Box::from_raw(handle));
@@ -78,11 +73,54 @@ pub fn ffi_class_impl(item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-fn is_factory_constructor(method: &syn::ImplItemFn, type_name: &syn::Ident) -> bool {
-    if method.sig.ident == "new" {
-        return false;
-    }
+fn should_wire_encode(kind: &ReturnKind) -> bool {
+    matches!(
+        kind,
+        ReturnKind::String
+            | ReturnKind::Vec(_)
+            | ReturnKind::Option(_)
+            | ReturnKind::ResultString { .. }
+            | ReturnKind::ResultPrimitive { .. }
+            | ReturnKind::ResultUnit { .. }
+    )
+}
 
+fn convert_to_wire_encoded(kind: ReturnKind) -> ReturnKind {
+    match kind {
+        ReturnKind::String => {
+            let ty: syn::Type = syn::parse_quote!(String);
+            ReturnKind::WireEncoded(ty)
+        }
+        ReturnKind::Vec(inner) => {
+            let ty: syn::Type = syn::parse_quote!(Vec<#inner>);
+            ReturnKind::WireEncoded(ty)
+        }
+        ReturnKind::Option(abi) => {
+            let inner_ty = match &abi {
+                OptionReturnAbi::OutValue { inner } => inner.clone(),
+                OptionReturnAbi::OutFfiString => syn::parse_quote!(String),
+                OptionReturnAbi::Vec { inner } => syn::parse_quote!(Vec<#inner>),
+            };
+            let ty: syn::Type = syn::parse_quote!(Option<#inner_ty>);
+            ReturnKind::WireEncoded(ty)
+        }
+        ReturnKind::ResultString { err } => {
+            let ty: syn::Type = syn::parse_quote!(Result<String, #err>);
+            ReturnKind::WireEncoded(ty)
+        }
+        ReturnKind::ResultPrimitive { ok, err } => {
+            let ty: syn::Type = syn::parse_quote!(Result<#ok, #err>);
+            ReturnKind::WireEncoded(ty)
+        }
+        ReturnKind::ResultUnit { err } => {
+            let ty: syn::Type = syn::parse_quote!(Result<(), #err>);
+            ReturnKind::WireEncoded(ty)
+        }
+        other => other,
+    }
+}
+
+fn is_factory_constructor(method: &syn::ImplItemFn, type_name: &syn::Ident) -> bool {
     let has_self = method
         .sig
         .inputs
@@ -94,21 +132,42 @@ fn is_factory_constructor(method: &syn::ImplItemFn, type_name: &syn::Ident) -> b
         return false;
     }
 
-    match &method.sig.output {
+    is_factory_return(&method.sig.output, type_name)
+}
+
+fn is_factory_return(output: &ReturnType, type_name: &syn::Ident) -> bool {
+    match output {
         ReturnType::Default => false,
-        ReturnType::Type(_, ty) => {
-            if let Type::Path(type_path) = ty.as_ref() {
-                type_path
-                    .path
-                    .segments
-                    .last()
-                    .map(|s| s.ident == "Self" || s.ident == *type_name)
-                    .unwrap_or(false)
-            } else {
-                false
+        ReturnType::Type(_, ty) => match ty.as_ref() {
+            Type::Path(type_path) => {
+                is_self_type_path(&type_path.path, type_name)
+                    || is_result_of_self_type_path(&type_path.path, type_name)
             }
-        }
+            _ => false,
+        },
     }
+}
+
+fn is_self_type_path(path: &syn::Path, type_name: &syn::Ident) -> bool {
+    path.segments
+        .last()
+        .is_some_and(|segment| segment.ident == "Self" || segment.ident == *type_name)
+}
+
+fn is_result_of_self_type_path(path: &syn::Path, type_name: &syn::Ident) -> bool {
+    let Some(result_segment) = path.segments.last() else {
+        return false;
+    };
+    if result_segment.ident != "Result" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &result_segment.arguments else {
+        return false;
+    };
+    let Some(syn::GenericArgument::Type(Type::Path(ok_type_path))) = args.args.first() else {
+        return false;
+    };
+    is_self_type_path(&ok_type_path.path, type_name)
 }
 
 fn generate_factory_constructor_export(
@@ -117,10 +176,12 @@ fn generate_factory_constructor_export(
     method: &syn::ImplItemFn,
 ) -> Option<proc_macro2::TokenStream> {
     let method_name = &method.sig.ident;
-    let export_name = syn::Ident::new(
-        &naming::method_ffi_name(class_name, &method_name.to_string()),
-        method_name.span(),
-    );
+    let export_name_str = if method_name == "new" {
+        naming::class_ffi_new(class_name)
+    } else {
+        naming::method_ffi_name(class_name, &method_name.to_string())
+    };
+    let export_name = syn::Ident::new(&export_name_str, method_name.span());
 
     let inputs = method.sig.inputs.iter().cloned();
     let FfiParams {
@@ -131,7 +192,37 @@ fn generate_factory_constructor_export(
 
     let call_expr = quote! { #type_name::#method_name(#(#call_args),*) };
 
-    let body = if conversions.is_empty() {
+    let is_fallible = matches!(
+        &method.sig.output,
+        ReturnType::Type(_, ty)
+            if matches!(ty.as_ref(), Type::Path(type_path) if is_result_of_self_type_path(&type_path.path, type_name))
+    );
+
+    let body = if is_fallible {
+        let call = quote! { #call_expr };
+        if conversions.is_empty() {
+            quote! {
+                match #call {
+                    Ok(value) => Box::into_raw(Box::new(value)),
+                    Err(error) => {
+                        ::riff::__private::set_last_error(format!("{error:?}"));
+                        ::core::ptr::null_mut()
+                    }
+                }
+            }
+        } else {
+            quote! {
+                #(#conversions)*
+                match #call {
+                    Ok(value) => Box::into_raw(Box::new(value)),
+                    Err(error) => {
+                        ::riff::__private::set_last_error(format!("{error:?}"));
+                        ::core::ptr::null_mut()
+                    }
+                }
+            }
+        }
+    } else if conversions.is_empty() {
         quote! { Box::into_raw(Box::new(#call_expr)) }
     } else {
         quote! {
@@ -191,36 +282,66 @@ fn generate_method_export(
         call_args,
     } = transform_method_params(other_inputs);
 
-    let fn_output = &method.sig.output;
     let has_conversions = !conversions.is_empty();
-    let is_unit_return = matches!(fn_output, ReturnType::Default);
 
     let call_expr = quote! { (*handle).#method_name(#(#call_args),*) };
 
-    let (body, return_type) = if is_unit_return {
-        let b = if has_conversions {
-            quote! {
-                #(#conversions)*
-                #call_expr;
-                ::riff::FfiStatus::OK
-            }
-        } else {
-            quote! {
-                #call_expr;
-                ::riff::FfiStatus::OK
-            }
-        };
-        (b, quote! { -> ::riff::FfiStatus })
+    let return_kind = classify_return(&method.sig.output);
+    let return_kind = if should_wire_encode(&return_kind) {
+        convert_to_wire_encoded(return_kind)
     } else {
-        let b = if has_conversions {
-            quote! {
-                #(#conversions)*
-                #call_expr
-            }
-        } else {
-            call_expr
-        };
-        (b, quote! { #fn_output })
+        return_kind
+    };
+
+    let (body, return_type) = match return_kind {
+        ReturnKind::Unit => {
+            let body = if has_conversions {
+                quote! {
+                    #(#conversions)*
+                    #call_expr;
+                    ::riff::__private::FfiStatus::OK
+                }
+            } else {
+                quote! {
+                    #call_expr;
+                    ::riff::__private::FfiStatus::OK
+                }
+            };
+            (body, quote! { -> ::riff::__private::FfiStatus })
+        }
+        ReturnKind::Primitive => {
+            let fn_output = &method.sig.output;
+            let body = if has_conversions {
+                quote! {
+                    #(#conversions)*
+                    #call_expr
+                }
+            } else {
+                call_expr
+            };
+            (body, quote! { #fn_output })
+        }
+        ReturnKind::WireEncoded(inner_ty) => {
+            let body = if has_conversions {
+                quote! {
+                    #(#conversions)*
+                    let result: #inner_ty = #call_expr;
+                    ::riff::__private::FfiBuf::wire_encode(&result)
+                }
+            } else {
+                quote! {
+                    let result: #inner_ty = #call_expr;
+                    ::riff::__private::FfiBuf::wire_encode(&result)
+                }
+            };
+            (body, quote! { -> ::riff::__private::FfiBuf<u8> })
+        }
+        ReturnKind::String
+        | ReturnKind::ResultString { .. }
+        | ReturnKind::ResultPrimitive { .. }
+        | ReturnKind::ResultUnit { .. }
+        | ReturnKind::Vec(_)
+        | ReturnKind::Option(_) => unreachable!("converted to WireEncoded"),
     };
 
     if ffi_params.is_empty() {
@@ -298,9 +419,9 @@ fn generate_async_method_export(
             #[unsafe(no_mangle)]
             pub unsafe extern "C" fn #entry_ident(
                 handle: *mut #type_name
-            ) -> ::riff::RustFutureHandle {
+            ) -> ::riff::__private::RustFutureHandle {
                 let instance = &*handle;
-                ::riff::rustfuture::rust_future_new(async move {
+                ::riff::__private::rustfuture::rust_future_new(async move {
                     #future_body
                 })
             }
@@ -311,11 +432,11 @@ fn generate_async_method_export(
             pub unsafe extern "C" fn #entry_ident(
                 handle: *mut #type_name,
                 #(#ffi_params),*
-            ) -> ::riff::RustFutureHandle {
+            ) -> ::riff::__private::RustFutureHandle {
                 let instance = &*handle;
                 #(#pre_spawn)*
                 #(let _ = &#move_vars;)*
-                ::riff::rustfuture::rust_future_new(async move {
+                ::riff::__private::rustfuture::rust_future_new(async move {
                     #future_body
                 })
             }
@@ -325,13 +446,13 @@ fn generate_async_method_export(
     let complete_fn = quote! {
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #complete_ident(
-            handle: ::riff::RustFutureHandle,
-            out_status: *mut ::riff::FfiStatus,
+            handle: ::riff::__private::RustFutureHandle,
+            out_status: *mut ::riff::__private::FfiStatus,
         ) -> #ffi_return_type {
-            match ::riff::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+            match ::riff::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
                 Some(result) => { #complete_conversion }
                 None => {
-                    if !out_status.is_null() { *out_status = ::riff::FfiStatus::CANCELLED; }
+                    if !out_status.is_null() { *out_status = ::riff::__private::FfiStatus::CANCELLED; }
                     #default_value
                 }
             }
@@ -343,23 +464,23 @@ fn generate_async_method_export(
 
         #[unsafe(no_mangle)]
         pub extern "C" fn #poll_ident(
-            handle: ::riff::RustFutureHandle,
+            handle: ::riff::__private::RustFutureHandle,
             callback_data: u64,
-            callback: ::riff::RustFutureContinuationCallback,
+            callback: ::riff::__private::RustFutureContinuationCallback,
         ) {
-            unsafe { ::riff::rustfuture::rust_future_poll::<#rust_return_type>(handle, callback, callback_data) }
+            unsafe { ::riff::__private::rustfuture::rust_future_poll::<#rust_return_type>(handle, callback, callback_data) }
         }
 
         #complete_fn
 
         #[unsafe(no_mangle)]
-        pub extern "C" fn #cancel_ident(handle: ::riff::RustFutureHandle) {
-            unsafe { ::riff::rustfuture::rust_future_cancel::<#rust_return_type>(handle) }
+        pub extern "C" fn #cancel_ident(handle: ::riff::__private::RustFutureHandle) {
+            unsafe { ::riff::__private::rustfuture::rust_future_cancel::<#rust_return_type>(handle) }
         }
 
         #[unsafe(no_mangle)]
-        pub extern "C" fn #free_ident(handle: ::riff::RustFutureHandle) {
-            unsafe { ::riff::rustfuture::rust_future_free::<#rust_return_type>(handle) }
+        pub extern "C" fn #free_ident(handle: ::riff::__private::RustFutureHandle) {
+            unsafe { ::riff::__private::rustfuture::rust_future_free::<#rust_return_type>(handle) }
         }
     })
 }
@@ -421,18 +542,18 @@ fn generate_stream_exports(
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #subscribe_ident(
             handle: *const #type_name,
-        ) -> ::riff::SubscriptionHandle {
+        ) -> ::riff::__private::SubscriptionHandle {
             if handle.is_null() {
                 return std::ptr::null_mut();
             }
             let instance = unsafe { &*handle };
             let subscription = instance.#method_name();
-            std::sync::Arc::into_raw(subscription) as ::riff::SubscriptionHandle
+            std::sync::Arc::into_raw(subscription) as ::riff::__private::SubscriptionHandle
         }
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #pop_batch_ident(
-            subscription_handle: ::riff::SubscriptionHandle,
+            subscription_handle: ::riff::__private::SubscriptionHandle,
             output_ptr: *mut #item_type,
             output_capacity: usize,
         ) -> usize {
@@ -440,7 +561,7 @@ fn generate_stream_exports(
                 return 0;
             }
             let subscription = unsafe {
-                &*(subscription_handle as *const ::riff::EventSubscription<#item_type>)
+                &*(subscription_handle as *const ::riff::__private::EventSubscription<#item_type>)
             };
             let output_slice = unsafe {
                 std::slice::from_raw_parts_mut(
@@ -453,57 +574,57 @@ fn generate_stream_exports(
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #wait_ident(
-            subscription_handle: ::riff::SubscriptionHandle,
+            subscription_handle: ::riff::__private::SubscriptionHandle,
             timeout_milliseconds: u32,
         ) -> i32 {
             if subscription_handle.is_null() {
-                return ::riff::WaitResult::Unsubscribed as i32;
+                return ::riff::__private::WaitResult::Unsubscribed as i32;
             }
             let subscription = unsafe {
-                &*(subscription_handle as *const ::riff::EventSubscription<#item_type>)
+                &*(subscription_handle as *const ::riff::__private::EventSubscription<#item_type>)
             };
             subscription.wait_for_events(timeout_milliseconds) as i32
         }
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #poll_ident(
-            subscription_handle: ::riff::SubscriptionHandle,
+            subscription_handle: ::riff::__private::SubscriptionHandle,
             callback_data: u64,
-            callback: ::riff::StreamContinuationCallback,
+            callback: ::riff::__private::StreamContinuationCallback,
         ) {
             if subscription_handle.is_null() {
-                callback(callback_data, ::riff::StreamPollResult::Closed);
+                callback(callback_data, ::riff::__private::StreamPollResult::Closed);
                 return;
             }
             let subscription = unsafe {
-                &*(subscription_handle as *const ::riff::EventSubscription<#item_type>)
+                &*(subscription_handle as *const ::riff::__private::EventSubscription<#item_type>)
             };
             subscription.poll(callback_data, callback);
         }
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #unsubscribe_ident(
-            subscription_handle: ::riff::SubscriptionHandle,
+            subscription_handle: ::riff::__private::SubscriptionHandle,
         ) {
             if subscription_handle.is_null() {
                 return;
             }
             let subscription = unsafe {
-                &*(subscription_handle as *const ::riff::EventSubscription<#item_type>)
+                &*(subscription_handle as *const ::riff::__private::EventSubscription<#item_type>)
             };
             subscription.unsubscribe();
         }
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #free_ident(
-            subscription_handle: ::riff::SubscriptionHandle,
+            subscription_handle: ::riff::__private::SubscriptionHandle,
         ) {
             if subscription_handle.is_null() {
                 return;
             }
             drop(unsafe {
                 std::sync::Arc::from_raw(
-                    subscription_handle as *const ::riff::EventSubscription<#item_type>
+                    subscription_handle as *const ::riff::__private::EventSubscription<#item_type>
                 )
             });
         }

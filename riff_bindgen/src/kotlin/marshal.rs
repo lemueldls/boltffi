@@ -619,7 +619,13 @@ impl ParamConversion {
                 .callback_traits
                 .iter()
                 .any(|t| t.name == *name)
-                .then(|| format!("{}Bridge.create({})", NamingConvention::class_name(name), param_name))
+                .then(|| {
+                    format!(
+                        "{}Bridge.create({})",
+                        NamingConvention::class_name(name),
+                        param_name
+                    )
+                })
                 .unwrap_or_else(|| format!("{}.handle", param_name)),
             Type::Vec(inner) | Type::Slice(inner) => match inner.as_ref() {
                 Type::Record(name) => {
@@ -1132,7 +1138,10 @@ mod tests {
     #[test]
     fn test_param_conversion_string() {
         let module = Module::new("test");
-        assert_eq!(ParamConversion::to_ffi("name", &Type::String, &module), "name");
+        assert_eq!(
+            ParamConversion::to_ffi("name", &Type::String, &module),
+            "name"
+        );
     }
 
     #[test]

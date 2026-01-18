@@ -23,7 +23,9 @@ pub enum ParamTransform {
     Callback(Vec<syn::Type>),
     SliceRef(syn::Type),
     SliceMut(syn::Type),
-    BoxedTrait(syn::Ident),
+    BoxedDynTrait(syn::Path),
+    ArcDynTrait(syn::Path),
+    OptionArcDynTrait(syn::Path),
     VecPrimitive(syn::Type),
     VecWireEncoded(syn::Type),
     OptionWireEncoded(syn::Type),
@@ -71,16 +73,16 @@ pub fn extract_slice_inner(ty: &Type) -> Option<(syn::Type, bool)> {
     None
 }
 
-pub fn extract_boxed_dyn_trait(ty: &Type) -> Option<syn::Ident> {
+fn extract_dyn_trait_in_container(ty: &Type, container: &str) -> Option<syn::Path> {
     if let Type::Path(type_path) = ty
+        && type_path.qself.is_none()
         && let Some(segment) = type_path.path.segments.last()
-        && segment.ident == "Box"
+        && segment.ident == container
         && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
         && let Some(syn::GenericArgument::Type(Type::TraitObject(trait_obj))) = args.args.first()
         && let Some(syn::TypeParamBound::Trait(trait_bound)) = trait_obj.bounds.first()
-        && let Some(seg) = trait_bound.path.segments.last()
     {
-        return Some(seg.ident.clone());
+        return Some(trait_bound.path.clone());
     }
     None
 }
@@ -131,8 +133,12 @@ pub fn classify_param_transform(ty: &Type) -> ParamTransform {
         };
     }
 
-    if let Some(trait_name) = extract_boxed_dyn_trait(ty) {
-        return ParamTransform::BoxedTrait(trait_name);
+    if let Some(trait_path) = extract_dyn_trait_in_container(ty, "Box") {
+        return ParamTransform::BoxedDynTrait(trait_path);
+    }
+
+    if let Some(trait_path) = extract_dyn_trait_in_container(ty, "Arc") {
+        return ParamTransform::ArcDynTrait(trait_path);
     }
 
     if type_str.starts_with("*const") || type_str.starts_with("*mut") {
@@ -153,6 +159,9 @@ pub fn classify_param_transform(ty: &Type) -> ParamTransform {
     }
 
     if let Some(inner_ty) = extract_option_param_inner(ty) {
+        if let Some(trait_path) = extract_dyn_trait_in_container(&inner_ty, "Arc") {
+            return ParamTransform::OptionArcDynTrait(trait_path);
+        }
         return ParamTransform::OptionWireEncoded(inner_ty);
     }
 

@@ -1,6 +1,16 @@
 use riff_core::wire::{DecodeError, WireDecode, WireEncode, WireSize};
 use riff_macros::data;
 
+extern crate self as riff;
+
+pub mod __private {
+    pub use riff_core::{
+        EventSubscription, FfiBuf, FfiStatus, RustFutureContinuationCallback, RustFutureHandle,
+        StreamContinuationCallback, StreamPollResult, SubscriptionHandle, WaitResult, rustfuture,
+        wire,
+    };
+}
+
 mod primitives {
     use super::*;
 

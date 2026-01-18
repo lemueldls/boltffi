@@ -1,5 +1,18 @@
 use crate::wire::constants::*;
 
+#[cfg(feature = "uuid")]
+use uuid::Uuid;
+
+#[cfg(feature = "chrono")]
+use chrono::{DateTime, Utc};
+
+#[cfg(feature = "uom")]
+use uom::si::{
+    f64::{Length, Velocity},
+    length::meter,
+    velocity::kilometer_per_hour,
+};
+
 pub trait WireSize {
     fn is_fixed_size() -> bool
     where
@@ -47,6 +60,32 @@ macro_rules! impl_wire_primitive {
 }
 
 impl_wire_primitive!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
+
+impl WireSize for core::time::Duration {
+    #[inline]
+    fn is_fixed_size() -> bool {
+        true
+    }
+
+    #[inline]
+    fn fixed_size() -> Option<usize> {
+        Some(12)
+    }
+
+    #[inline]
+    fn wire_size(&self) -> usize {
+        12
+    }
+}
+
+impl WireEncode for core::time::Duration {
+    #[inline]
+    fn encode_to(&self, buf: &mut [u8]) -> usize {
+        buf[..8].copy_from_slice(&self.as_secs().to_le_bytes());
+        buf[8..12].copy_from_slice(&self.subsec_nanos().to_le_bytes());
+        12
+    }
+}
 
 impl WireSize for bool {
     #[inline]
@@ -165,6 +204,111 @@ impl WireEncode for String {
     #[inline]
     fn encode_to(&self, buf: &mut [u8]) -> usize {
         self.as_str().encode_to(buf)
+    }
+}
+
+#[cfg(feature = "uuid")]
+impl WireSize for Uuid {
+    #[inline]
+    fn is_fixed_size() -> bool {
+        true
+    }
+
+    #[inline]
+    fn fixed_size() -> Option<usize> {
+        Some(16)
+    }
+
+    #[inline]
+    fn wire_size(&self) -> usize {
+        16
+    }
+}
+
+#[cfg(feature = "uuid")]
+impl WireEncode for Uuid {
+    #[inline]
+    fn encode_to(&self, buf: &mut [u8]) -> usize {
+        buf[..16].copy_from_slice(self.as_bytes());
+        16
+    }
+}
+
+#[cfg(feature = "chrono")]
+impl WireSize for DateTime<Utc> {
+    #[inline]
+    fn is_fixed_size() -> bool {
+        true
+    }
+
+    #[inline]
+    fn fixed_size() -> Option<usize> {
+        Some(8)
+    }
+
+    #[inline]
+    fn wire_size(&self) -> usize {
+        8
+    }
+}
+
+#[cfg(feature = "chrono")]
+impl WireEncode for DateTime<Utc> {
+    #[inline]
+    fn encode_to(&self, buf: &mut [u8]) -> usize {
+        self.timestamp_millis().encode_to(buf)
+    }
+}
+
+#[cfg(feature = "uom")]
+impl WireSize for Length {
+    #[inline]
+    fn is_fixed_size() -> bool {
+        true
+    }
+
+    #[inline]
+    fn fixed_size() -> Option<usize> {
+        Some(8)
+    }
+
+    #[inline]
+    fn wire_size(&self) -> usize {
+        8
+    }
+}
+
+#[cfg(feature = "uom")]
+impl WireEncode for Length {
+    #[inline]
+    fn encode_to(&self, buf: &mut [u8]) -> usize {
+        self.get::<meter>().encode_to(buf)
+    }
+}
+
+#[cfg(feature = "uom")]
+impl WireSize for Velocity {
+    #[inline]
+    fn is_fixed_size() -> bool {
+        true
+    }
+
+    #[inline]
+    fn fixed_size() -> Option<usize> {
+        Some(8)
+    }
+
+    #[inline]
+    fn wire_size(&self) -> usize {
+        8
+    }
+}
+
+#[cfg(feature = "uom")]
+impl WireEncode for Velocity {
+    #[inline]
+    fn encode_to(&self, buf: &mut [u8]) -> usize {
+        self.get::<kilometer_per_hour>().encode_to(buf)
     }
 }
 

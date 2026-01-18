@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 
 use crate::wire_gen;
 
@@ -12,11 +12,20 @@ pub fn data_impl(item: TokenStream) -> TokenStream {
             item_struct.attrs.insert(0, syn::parse_quote!(#[repr(C)]));
         }
 
+        let struct_name = &item_struct.ident;
+        let free_fn_name = format_ident!("riff_free_buf_{}", struct_name);
+
         let wire_impls = wire_gen::generate_wire_impls(&item_struct);
 
         return TokenStream::from(quote! {
             #item_struct
             #wire_impls
+
+            #[cfg(not(test))]
+            #[unsafe(no_mangle)]
+            pub extern "C" fn #free_fn_name(buf: ::riff::__private::FfiBuf<#struct_name>) {
+                drop(buf);
+            }
         });
     }
 

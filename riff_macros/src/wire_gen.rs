@@ -92,23 +92,23 @@ pub fn generate_wire_impls(item_struct: &ItemStruct) -> TokenStream {
 
 fn generate_empty_struct_impls(struct_name: &syn::Ident) -> TokenStream {
     quote! {
-        impl riff_core::wire::WireSize for #struct_name {
+        impl ::riff::__private::wire::WireSize for #struct_name {
             fn is_fixed_size() -> bool { true }
             fn fixed_size() -> Option<usize> { Some(2) }
             fn wire_size(&self) -> usize { 2 }
         }
 
-        impl riff_core::wire::WireEncode for #struct_name {
+        impl ::riff::__private::wire::WireEncode for #struct_name {
             fn encode_to(&self, buf: &mut [u8]) -> usize {
                 buf[0..2].copy_from_slice(&0u16.to_le_bytes());
                 2
             }
         }
 
-        impl riff_core::wire::WireDecode for #struct_name {
-            fn decode_from(buf: &[u8]) -> riff_core::wire::DecodeResult<Self> {
+        impl ::riff::__private::wire::WireDecode for #struct_name {
+            fn decode_from(buf: &[u8]) -> ::riff::__private::wire::DecodeResult<Self> {
                 if buf.len() < 2 {
-                    return Err(riff_core::wire::DecodeError::BufferTooSmall);
+                    return Err(::riff::__private::wire::DecodeError::BufferTooSmall);
                 }
                 Ok((Self {}, 2))
             }
@@ -127,34 +127,34 @@ fn generate_wire_size_impl(
 ) -> TokenStream {
     if is_blittable {
         return quote! {
-            impl #impl_generics riff_core::wire::WireSize for #struct_name #ty_generics #where_clause {
+            impl #impl_generics ::riff::__private::wire::WireSize for #struct_name #ty_generics #where_clause {
                 fn is_fixed_size() -> bool { true }
-                fn fixed_size() -> Option<usize> { Some(core::mem::size_of::<Self>()) }
-                fn wire_size(&self) -> usize { core::mem::size_of::<Self>() }
+                fn fixed_size() -> Option<usize> { Some(::core::mem::size_of::<Self>()) }
+                fn wire_size(&self) -> usize { ::core::mem::size_of::<Self>() }
             }
         };
     }
 
     let all_fixed_check = field_types.iter().map(|ty| {
-        quote! { <#ty as riff_core::wire::WireSize>::is_fixed_size() }
+        quote! { <#ty as ::riff::__private::wire::WireSize>::is_fixed_size() }
     });
 
     let fixed_size_sum = field_types.iter().map(|ty| {
-        quote! { <#ty as riff_core::wire::WireSize>::fixed_size().unwrap_or(0) }
+        quote! { <#ty as ::riff::__private::wire::WireSize>::fixed_size().unwrap_or(0) }
     });
 
     let field_wire_sizes = field_names.iter().map(|name| {
-        quote! { riff_core::wire::WireSize::wire_size(&self.#name) }
+        quote! { ::riff::__private::wire::WireSize::wire_size(&self.#name) }
     });
 
     quote! {
-        impl #impl_generics riff_core::wire::WireSize for #struct_name #ty_generics #where_clause {
+        impl #impl_generics ::riff::__private::wire::WireSize for #struct_name #ty_generics #where_clause {
             fn is_fixed_size() -> bool {
                 #(#all_fixed_check)&&*
             }
 
             fn fixed_size() -> Option<usize> {
-                if <Self as riff_core::wire::WireSize>::is_fixed_size() {
+                if <Self as ::riff::__private::wire::WireSize>::is_fixed_size() {
                     Some(#(#fixed_size_sum)+*)
                 } else {
                     None
@@ -162,7 +162,7 @@ fn generate_wire_size_impl(
             }
 
             fn wire_size(&self) -> usize {
-                <Self as riff_core::wire::WireSize>::fixed_size().unwrap_or_else(|| {
+                <Self as ::riff::__private::wire::WireSize>::fixed_size().unwrap_or_else(|| {
                     #(#field_wire_sizes)+*
                 })
             }
@@ -180,12 +180,12 @@ fn generate_wire_encode_impl(
 ) -> TokenStream {
     if is_blittable {
         return quote! {
-            impl #impl_generics riff_core::wire::WireEncode for #struct_name #ty_generics #where_clause {
+            impl #impl_generics ::riff::__private::wire::WireEncode for #struct_name #ty_generics #where_clause {
                 fn encode_to(&self, buf: &mut [u8]) -> usize {
-                    let size = core::mem::size_of::<Self>();
+                    let size = ::core::mem::size_of::<Self>();
                     let src = self as *const Self as *const u8;
                     unsafe {
-                        core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), size);
+                        ::core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), size);
                     }
                     size
                 }
@@ -195,12 +195,12 @@ fn generate_wire_encode_impl(
 
     let encode_fields = field_names.iter().map(|name| {
         quote! {
-            written += riff_core::wire::WireEncode::encode_to(&self.#name, &mut buf[written..]);
+            written += ::riff::__private::wire::WireEncode::encode_to(&self.#name, &mut buf[written..]);
         }
     });
 
     quote! {
-        impl #impl_generics riff_core::wire::WireEncode for #struct_name #ty_generics #where_clause {
+        impl #impl_generics ::riff::__private::wire::WireEncode for #struct_name #ty_generics #where_clause {
             fn encode_to(&self, buf: &mut [u8]) -> usize {
                 let mut written = 0usize;
                 #(#encode_fields)*
@@ -223,15 +223,15 @@ fn generate_wire_decode_impl(
 
     if is_blittable {
         return quote! {
-            impl #impl_generics riff_core::wire::WireDecode for #struct_name #ty_generics #where_clause {
+            impl #impl_generics ::riff::__private::wire::WireDecode for #struct_name #ty_generics #where_clause {
                 const IS_BLITTABLE: bool = true;
 
-                fn decode_from(buf: &[u8]) -> riff_core::wire::DecodeResult<Self> {
-                    let size = core::mem::size_of::<Self>();
+                fn decode_from(buf: &[u8]) -> ::riff::__private::wire::DecodeResult<Self> {
+                    let size = ::core::mem::size_of::<Self>();
                     if buf.len() < size {
-                        return Err(riff_core::wire::DecodeError::BufferTooSmall);
+                        return Err(::riff::__private::wire::DecodeError::BufferTooSmall);
                     }
-                    let value = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
+                    let value = unsafe { ::core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
                     Ok((value, size))
                 }
             }
@@ -240,16 +240,16 @@ fn generate_wire_decode_impl(
 
     let decode_fields = field_names.iter().zip(field_types.iter()).map(|(name, ty)| {
         quote! {
-            let (#name, size) = <#ty as riff_core::wire::WireDecode>::decode_from(&buf[position..])?;
+            let (#name, size) = <#ty as ::riff::__private::wire::WireDecode>::decode_from(&buf[position..])?;
             position += size;
         }
     });
 
     quote! {
-        impl #impl_generics riff_core::wire::WireDecode for #struct_name #ty_generics #where_clause {
+        impl #impl_generics ::riff::__private::wire::WireDecode for #struct_name #ty_generics #where_clause {
             const IS_BLITTABLE: bool = false;
 
-            fn decode_from(buf: &[u8]) -> riff_core::wire::DecodeResult<Self> {
+            fn decode_from(buf: &[u8]) -> ::riff::__private::wire::DecodeResult<Self> {
                 let mut position = 0usize;
                 #(#decode_fields)*
                 Ok((Self { #(#field_names_for_struct),* }, position))
@@ -320,7 +320,7 @@ fn generate_enum_wire_size_impl(
                     .collect();
                 quote! {
                     Self::#variant_name(#(#field_bindings),*) => {
-                        4 + #(riff_core::wire::WireSize::wire_size(#field_bindings))+*
+                        4 + #( ::riff::__private::wire::WireSize::wire_size(#field_bindings) )+*
                     }
                 }
             }
@@ -332,7 +332,7 @@ fn generate_enum_wire_size_impl(
                     .collect();
                 quote! {
                     Self::#variant_name { #(#field_names),* } => {
-                        4 + #(riff_core::wire::WireSize::wire_size(#field_names))+*
+                        4 + #( ::riff::__private::wire::WireSize::wire_size(#field_names) )+*
                     }
                 }
             }
@@ -341,7 +341,7 @@ fn generate_enum_wire_size_impl(
 
     if all_unit {
         quote! {
-            impl #impl_generics riff_core::wire::WireSize for #enum_name #ty_generics #where_clause {
+            impl #impl_generics ::riff::__private::wire::WireSize for #enum_name #ty_generics #where_clause {
                 fn is_fixed_size() -> bool { true }
                 fn fixed_size() -> Option<usize> { Some(4) }
                 fn wire_size(&self) -> usize { 4 }
@@ -349,7 +349,7 @@ fn generate_enum_wire_size_impl(
         }
     } else {
         quote! {
-            impl #impl_generics riff_core::wire::WireSize for #enum_name #ty_generics #where_clause {
+            impl #impl_generics ::riff::__private::wire::WireSize for #enum_name #ty_generics #where_clause {
                 fn is_fixed_size() -> bool { false }
                 fn fixed_size() -> Option<usize> { None }
                 fn wire_size(&self) -> usize {
@@ -372,7 +372,7 @@ fn generate_enum_wire_encode_impl(
     let encode_arms = variants.iter().enumerate().map(|(discriminant, variant)| {
         let variant_name = &variant.ident;
         let discriminant_i32 = discriminant as i32;
-        
+
         match &variant.fields {
             Fields::Unit => {
                 quote! {
@@ -387,7 +387,7 @@ fn generate_enum_wire_encode_impl(
                     .map(|i| quote::format_ident!("f{}", i))
                     .collect();
                 let encode_fields = field_bindings.iter().map(|f| {
-                    quote! { written += riff_core::wire::WireEncode::encode_to(#f, &mut buf[written..]); }
+                    quote! { written += ::riff::__private::wire::WireEncode::encode_to(#f, &mut buf[written..]); }
                 });
                 quote! {
                     Self::#variant_name(#(#field_bindings),*) => {
@@ -403,7 +403,7 @@ fn generate_enum_wire_encode_impl(
                     .filter_map(|f| f.ident.as_ref())
                     .collect();
                 let encode_fields = field_names.iter().map(|f| {
-                    quote! { written += riff_core::wire::WireEncode::encode_to(#f, &mut buf[written..]); }
+                    quote! { written += ::riff::__private::wire::WireEncode::encode_to(#f, &mut buf[written..]); }
                 });
                 quote! {
                     Self::#variant_name { #(#field_names),* } => {
@@ -418,7 +418,7 @@ fn generate_enum_wire_encode_impl(
     });
 
     quote! {
-        impl #impl_generics riff_core::wire::WireEncode for #enum_name #ty_generics #where_clause {
+        impl #impl_generics ::riff::__private::wire::WireEncode for #enum_name #ty_generics #where_clause {
             fn encode_to(&self, buf: &mut [u8]) -> usize {
                 match self {
                     #(#encode_arms),*
@@ -438,7 +438,7 @@ fn generate_enum_wire_decode_impl(
     let decode_arms = variants.iter().enumerate().map(|(discriminant, variant)| {
         let variant_name = &variant.ident;
         let discriminant_i32 = discriminant as i32;
-        
+
         match &variant.fields {
             Fields::Unit => {
                 quote! {
@@ -454,7 +454,7 @@ fn generate_enum_wire_decode_impl(
                     .collect();
                 let decode_fields = field_bindings.iter().zip(field_types.iter()).map(|(binding, ty)| {
                     quote! {
-                        let (#binding, size) = <#ty as riff_core::wire::WireDecode>::decode_from(&buf[position..])?;
+                        let (#binding, size) = <#ty as ::riff::__private::wire::WireDecode>::decode_from(&buf[position..])?;
                         position += size;
                     }
                 });
@@ -475,7 +475,7 @@ fn generate_enum_wire_decode_impl(
                     .collect();
                 let decode_fields = field_names.iter().zip(field_types.iter()).map(|(name, ty)| {
                     quote! {
-                        let (#name, size) = <#ty as riff_core::wire::WireDecode>::decode_from(&buf[position..])?;
+                        let (#name, size) = <#ty as ::riff::__private::wire::WireDecode>::decode_from(&buf[position..])?;
                         position += size;
                     }
                 });
@@ -491,16 +491,16 @@ fn generate_enum_wire_decode_impl(
     });
 
     quote! {
-        impl #impl_generics riff_core::wire::WireDecode for #enum_name #ty_generics #where_clause {
-            fn decode_from(buf: &[u8]) -> riff_core::wire::DecodeResult<Self> {
+        impl #impl_generics ::riff::__private::wire::WireDecode for #enum_name #ty_generics #where_clause {
+            fn decode_from(buf: &[u8]) -> ::riff::__private::wire::DecodeResult<Self> {
                 let disc_bytes: [u8; 4] = buf.get(0..4)
-                    .ok_or(riff_core::wire::DecodeError::BufferTooSmall)?
+                    .ok_or(::riff::__private::wire::DecodeError::BufferTooSmall)?
                     .try_into()
-                    .map_err(|_| riff_core::wire::DecodeError::BufferTooSmall)?;
+                    .map_err(|_| ::riff::__private::wire::DecodeError::BufferTooSmall)?;
                 let discriminant = i32::from_le_bytes(disc_bytes);
                 match discriminant {
                     #(#decode_arms),*,
-                    _ => Err(riff_core::wire::DecodeError::BufferTooSmall)
+                    _ => Err(::riff::__private::wire::DecodeError::BufferTooSmall)
                 }
             }
         }

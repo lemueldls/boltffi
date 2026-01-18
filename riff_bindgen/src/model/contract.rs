@@ -9,7 +9,11 @@ pub struct CallContract {
 }
 
 impl CallContract {
-    pub fn for_function(params: &[super::Parameter], returns: &ReturnType, module: &Module) -> Self {
+    pub fn for_function(
+        params: &[super::Parameter],
+        returns: &ReturnType,
+        module: &Module,
+    ) -> Self {
         Self {
             params: params
                 .iter()
@@ -58,10 +62,17 @@ pub enum PassThroughType {
     Primitive(Primitive),
     String,
     Bytes,
-    PrimitiveVec { primitive: Primitive },
-    PrimitiveSlice { primitive: Primitive, mutability: SliceMutability },
+    PrimitiveVec {
+        primitive: Primitive,
+    },
+    PrimitiveSlice {
+        primitive: Primitive,
+        mutability: SliceMutability,
+    },
     Handle,
-    Closure { signature_id: String },
+    Closure {
+        signature_id: String,
+    },
 }
 
 impl PassThroughType {
@@ -74,27 +85,33 @@ impl PassThroughType {
                 .as_ref()
                 .primitive()
                 .map(|primitive| Self::PrimitiveVec { primitive }),
-            Type::Slice(inner) => inner
-                .as_ref()
-                .primitive()
-                .map(|primitive| Self::PrimitiveSlice {
-                    primitive,
-                    mutability: SliceMutability::Shared,
-                }),
-            Type::MutSlice(inner) => inner
-                .as_ref()
-                .primitive()
-                .map(|primitive| Self::PrimitiveSlice {
-                    primitive,
-                    mutability: SliceMutability::Mutable,
-                }),
+            Type::Slice(inner) => {
+                inner
+                    .as_ref()
+                    .primitive()
+                    .map(|primitive| Self::PrimitiveSlice {
+                        primitive,
+                        mutability: SliceMutability::Shared,
+                    })
+            }
+            Type::MutSlice(inner) => {
+                inner
+                    .as_ref()
+                    .primitive()
+                    .map(|primitive| Self::PrimitiveSlice {
+                        primitive,
+                        mutability: SliceMutability::Mutable,
+                    })
+            }
             Type::Object(_) | Type::BoxedTrait(_) => Some(Self::Handle),
             Type::Closure(signature) => Some(Self::Closure {
                 signature_id: signature.signature_id(),
             }),
-            Type::Void | Type::Record(_) | Type::Enum(_) | Type::Option(_) | Type::Result { .. } => {
-                None
-            }
+            Type::Void
+            | Type::Record(_)
+            | Type::Enum(_)
+            | Type::Option(_)
+            | Type::Result { .. } => None,
         }
     }
 }
@@ -175,7 +192,11 @@ impl AbiType {
             },
             Type::Record(name) => Self::Record(RecordRepr::for_name(name, module)),
             Type::Enum(name) => Self::Enum(EnumRepr::for_name(name, module)),
-            Type::Slice(_) | Type::MutSlice(_) | Type::Object(_) | Type::BoxedTrait(_) | Type::Closure(_) => {
+            Type::Slice(_)
+            | Type::MutSlice(_)
+            | Type::Object(_)
+            | Type::BoxedTrait(_)
+            | Type::Closure(_) => {
                 panic!("AbiType not supported for: {ty:?}")
             }
         }
@@ -245,7 +266,10 @@ pub enum EnumRepr {
 
 impl EnumRepr {
     pub fn for_name(name: &str, module: &Module) -> Self {
-        let enum_def = module.enums.iter().find(|enumeration| enumeration.name == name);
+        let enum_def = module
+            .enums
+            .iter()
+            .find(|enumeration| enumeration.name == name);
         let is_data = enum_def.map(|e| e.is_data_enum()).unwrap_or(false);
 
         if is_data {

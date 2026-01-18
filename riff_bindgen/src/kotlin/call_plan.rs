@@ -1,7 +1,7 @@
 use riff_ffi_rules::naming;
 
 use crate::model::{
-    CallContract, Class, Method, Module, Parameter, ParamTransport, PassThroughType, ReturnType,
+    CallContract, Class, Method, Module, ParamTransport, Parameter, PassThroughType, ReturnType,
     Type,
 };
 
@@ -144,13 +144,17 @@ impl WireFunctionPlan {
     }
 
     fn supports_param_type(param_type: &Type, module: &Module) -> bool {
-        PassThroughType::try_from_model(param_type).is_some() || Self::supports_wire_type(param_type, module)
+        PassThroughType::try_from_model(param_type).is_some()
+            || Self::supports_wire_type(param_type, module)
     }
 
     fn supports_return_type(returns: &ReturnType, module: &Module) -> bool {
         match returns {
             ReturnType::Void => true,
-            ReturnType::Value(ty) => PassThroughType::try_from_model(ty).is_some() || Self::supports_wire_type(ty, module),
+            ReturnType::Value(ty) => {
+                PassThroughType::try_from_model(ty).is_some()
+                    || Self::supports_wire_type(ty, module)
+            }
             ReturnType::Fallible { ok, err } => {
                 Self::supports_wire_type(ok, module) && Self::supports_wire_type(err, module)
             }
@@ -165,7 +169,11 @@ impl WireFunctionPlan {
                 Self::supports_wire_type(ok, module) && Self::supports_wire_type(err, module)
             }
             Type::Record(_) | Type::Enum(_) => true,
-            Type::Slice(_) | Type::MutSlice(_) | Type::Object(_) | Type::BoxedTrait(_) | Type::Closure(_) => false,
+            Type::Slice(_)
+            | Type::MutSlice(_)
+            | Type::Object(_)
+            | Type::BoxedTrait(_)
+            | Type::Closure(_) => false,
         }
     }
 
@@ -288,8 +296,10 @@ impl AsyncCallPlan {
     pub fn supports_call(inputs: &[Parameter], returns: &ReturnType, module: &Module) -> bool {
         let inputs_supported = inputs.iter().all(|param| {
             let ty = &param.param_type;
-            !matches!(ty, Type::Closure(_) | Type::Object(_) | Type::BoxedTrait(_) | Type::MutSlice(_))
-                && WireFunctionPlan::supports_param_type(ty, module)
+            !matches!(
+                ty,
+                Type::Closure(_) | Type::Object(_) | Type::BoxedTrait(_) | Type::MutSlice(_)
+            ) && WireFunctionPlan::supports_param_type(ty, module)
         });
 
         inputs_supported && Self::supports_return_type(returns, module)
@@ -317,11 +327,20 @@ impl AsyncCallPlan {
                 Self::supports_value_type(ok, module) && Self::supports_value_type(err, module)
             }
             Type::Record(_) | Type::Enum(_) => true,
-            Type::Slice(_) | Type::MutSlice(_) | Type::Object(_) | Type::BoxedTrait(_) | Type::Closure(_) => false,
+            Type::Slice(_)
+            | Type::MutSlice(_)
+            | Type::Object(_)
+            | Type::BoxedTrait(_)
+            | Type::Closure(_) => false,
         }
     }
 
-    pub fn for_function(function_name: &str, inputs: &[Parameter], returns: &ReturnType, module: &Module) -> Self {
+    pub fn for_function(
+        function_name: &str,
+        inputs: &[Parameter],
+        returns: &ReturnType,
+        module: &Module,
+    ) -> Self {
         let contract = CallContract::for_function(inputs, returns, module);
         let return_abi = ReturnAbi::from_return_type(returns, module);
         let is_blittable_return =

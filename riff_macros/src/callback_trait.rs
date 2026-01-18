@@ -1,12 +1,12 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use riff_ffi_rules::naming;
-use syn::{FnArg, Pat, ReturnType};
+use syn::{FnArg, Pat, ReturnType, Type};
 
 pub fn ffi_trait_impl(item: TokenStream) -> TokenStream {
     let item_trait = syn::parse_macro_input!(item as syn::ItemTrait);
     expand_ffi_trait(item_trait)
-        .unwrap_or_else(|e| e.to_compile_error())
+        .unwrap_or_else(|error| error.to_compile_error())
         .into()
 }
 
@@ -32,218 +32,31 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         trait_name.span(),
     );
 
+    let async_trait_attr = item_trait
+        .attrs
+        .iter()
+        .find(|attr| {
+            attr.path()
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "async_trait")
+        })
+        .cloned();
+
     let mut vtable_fields = vec![
         quote! { pub free: extern "C" fn(handle: u64) },
         quote! { pub clone: extern "C" fn(handle: u64) -> u64 },
     ];
 
-    let mut foreign_impls = Vec::new();
-
-    for item in &item_trait.items {
-        if let syn::TraitItem::Fn(method) = item {
-            let method_name = &method.sig.ident;
-            let method_name_snake = to_snake_case_ident(&method_name.to_string());
-            let is_async = method.sig.asyncness.is_some();
-
-            let mut param_types = Vec::new();
-            let mut param_names = Vec::new();
-            let mut call_args = Vec::new();
-
-            for input in &method.sig.inputs {
-                if let FnArg::Typed(pat_type) = input
-                    && let Pat::Ident(pat_ident) = &*pat_type.pat
-                {
-                    let param_name = &pat_ident.ident;
-                    let param_type = &pat_type.ty;
-
-                    let ffi_type = rust_type_to_ffi_param_type(param_type);
-                    param_types.push(quote! { #param_name: #ffi_type });
-                    param_names.push(quote! { #param_name: #param_type });
-                    call_args.push(quote! { #param_name });
-                }
-            }
-
-            let return_type = match &method.sig.output {
-                ReturnType::Default => None,
-                ReturnType::Type(_, ty) => Some(ty.clone()),
-            };
-
-            if is_async {
-                let callback_type = if let Some(ref ret_ty) = return_type {
-                    let ffi_ret = rust_type_to_ffi_param_type(ret_ty);
-                    quote! { extern "C" fn(callback_data: u64, result: #ffi_ret, status: ::riff::FfiStatus) }
-                } else {
-                    quote! { extern "C" fn(callback_data: u64, status: ::riff::FfiStatus) }
-                };
-
-                vtable_fields.push(quote! {
-                    pub #method_name_snake: extern "C" fn(
-                        handle: u64,
-                        #(#param_types,)*
-                        callback: #callback_type,
-                        callback_data: u64
-                    )
-                });
-
-                let impl_body = if let Some(ref ret_ty) = return_type {
-                    quote! {
-                        use std::sync::Arc;
-                        use std::sync::atomic::{AtomicBool, Ordering};
-
-                        struct AsyncContext<T> {
-                            result: std::cell::UnsafeCell<Option<T>>,
-                            completed: AtomicBool,
-                            waker: std::cell::UnsafeCell<Option<std::task::Waker>>,
-                        }
-                        unsafe impl<T> Send for AsyncContext<T> {}
-                        unsafe impl<T> Sync for AsyncContext<T> {}
-
-                        let ctx = Arc::new(AsyncContext::<#ret_ty> {
-                            result: std::cell::UnsafeCell::new(None),
-                            completed: AtomicBool::new(false),
-                            waker: std::cell::UnsafeCell::new(None),
-                        });
-
-                        extern "C" fn callback<T: Copy>(data: u64, result: T, _status: ::riff::FfiStatus) {
-                            let ctx = unsafe { Arc::from_raw(data as *const AsyncContext<T>) };
-                            unsafe { *ctx.result.get() = Some(result) };
-                            ctx.completed.store(true, Ordering::Release);
-                            if let Some(waker) = unsafe { (*ctx.waker.get()).take() } {
-                                waker.wake();
-                            }
-                        }
-
-                        let ctx_ptr = Arc::into_raw(ctx.clone()) as u64;
-                        unsafe {
-                            ((*self.vtable).#method_name_snake)(
-                                self.handle,
-                                #(#call_args,)*
-                                callback::<#ret_ty>,
-                                ctx_ptr
-                            );
-                        }
-
-                        std::future::poll_fn(move |cx| {
-                            if ctx.completed.load(Ordering::Acquire) {
-                                let result = unsafe { (*ctx.result.get()).take().unwrap() };
-                                std::task::Poll::Ready(result)
-                            } else {
-                                unsafe { *ctx.waker.get() = Some(cx.waker().clone()) };
-                                std::task::Poll::Pending
-                            }
-                        }).await
-                    }
-                } else {
-                    quote! {
-                        use std::sync::Arc;
-                        use std::sync::atomic::{AtomicBool, Ordering};
-
-                        struct AsyncContext {
-                            completed: AtomicBool,
-                            waker: std::cell::UnsafeCell<Option<std::task::Waker>>,
-                        }
-                        unsafe impl Send for AsyncContext {}
-                        unsafe impl Sync for AsyncContext {}
-
-                        let ctx = Arc::new(AsyncContext {
-                            completed: AtomicBool::new(false),
-                            waker: std::cell::UnsafeCell::new(None),
-                        });
-
-                        extern "C" fn callback(data: u64, _status: ::riff::FfiStatus) {
-                            let ctx = unsafe { Arc::from_raw(data as *const AsyncContext) };
-                            ctx.completed.store(true, Ordering::Release);
-                            if let Some(waker) = unsafe { (*ctx.waker.get()).take() } {
-                                waker.wake();
-                            }
-                        }
-
-                        let ctx_ptr = Arc::into_raw(ctx.clone()) as u64;
-                        unsafe {
-                            ((*self.vtable).#method_name_snake)(
-                                self.handle,
-                                #(#call_args,)*
-                                callback,
-                                ctx_ptr
-                            );
-                        }
-
-                        std::future::poll_fn(move |cx| {
-                            if ctx.completed.load(Ordering::Acquire) {
-                                std::task::Poll::Ready(())
-                            } else {
-                                unsafe { *ctx.waker.get() = Some(cx.waker().clone()) };
-                                std::task::Poll::Pending
-                            }
-                        }).await
-                    }
-                };
-
-                let output_type = return_type
-                    .as_ref()
-                    .map(|t| quote! { -> #t })
-                    .unwrap_or_default();
-                foreign_impls.push(quote! {
-                    async fn #method_name(&self, #(#param_names,)*) #output_type {
-                        #impl_body
-                    }
-                });
-            } else {
-                let out_param = if let Some(ref ret_ty) = return_type {
-                    let ffi_ret = rust_type_to_ffi_param_type(ret_ty);
-                    quote! { out: *mut #ffi_ret, }
-                } else {
-                    quote! {}
-                };
-
-                vtable_fields.push(quote! {
-                    pub #method_name_snake: extern "C" fn(
-                        handle: u64,
-                        #(#param_types,)*
-                        #out_param
-                        status: *mut ::riff::FfiStatus
-                    )
-                });
-
-                let impl_body = if let Some(ref ret_ty) = return_type {
-                    quote! {
-                        let mut out: #ret_ty = Default::default();
-                        let mut status = ::riff::FfiStatus::default();
-                        unsafe {
-                            ((*self.vtable).#method_name_snake)(
-                                self.handle,
-                                #(#call_args,)*
-                                &mut out as *mut _,
-                                &mut status
-                            );
-                        }
-                        out
-                    }
-                } else {
-                    quote! {
-                        let mut status = ::riff::FfiStatus::default();
-                        unsafe {
-                            ((*self.vtable).#method_name_snake)(
-                                self.handle,
-                                #(#call_args,)*
-                                &mut status
-                            );
-                        }
-                    }
-                };
-
-                let output_type = return_type
-                    .as_ref()
-                    .map(|t| quote! { -> #t })
-                    .unwrap_or_default();
-                foreign_impls.push(quote! {
-                    fn #method_name(&self, #(#param_names,)*) #output_type {
-                        #impl_body
-                    }
-                });
-            }
-        }
-    }
+    let foreign_impls = item_trait
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::TraitItem::Fn(method) => Some(method),
+            _ => None,
+        })
+        .map(|method| expand_method(method, &mut vtable_fields))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let expanded = quote! {
         #item_trait
@@ -253,6 +66,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
             #(#vtable_fields),*
         }
 
+        #[derive(Debug)]
         pub struct #foreign_name {
             vtable: *const #vtable_name,
             handle: u64,
@@ -277,6 +91,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
             }
         }
 
+        #async_trait_attr
         impl #trait_name for #foreign_name {
             #(#foreign_impls)*
         }
@@ -302,13 +117,281 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
     Ok(expanded)
 }
 
+fn expand_method(
+    method: &syn::TraitItemFn,
+    vtable_fields: &mut Vec<proc_macro2::TokenStream>,
+) -> Result<proc_macro2::TokenStream, syn::Error> {
+    let method_name = &method.sig.ident;
+    let method_name_snake = to_snake_case_ident(&method_name.to_string());
+    let is_async = method.sig.asyncness.is_some();
+
+    let (param_types, param_names, call_args) = method
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|input| match input {
+            FnArg::Typed(pat_type) => match pat_type.pat.as_ref() {
+                Pat::Ident(pat_ident) => Some((pat_ident.ident.clone(), pat_type.ty.clone())),
+                _ => None,
+            },
+            FnArg::Receiver(_) => None,
+        })
+        .map(|(param_name, param_type)| {
+            let ffi_type = rust_type_to_ffi_param_type(&param_type);
+            (
+                quote! { #param_name: #ffi_type },
+                quote! { #param_name: #param_type },
+                quote! { #param_name },
+            )
+        })
+        .fold(
+            (Vec::new(), Vec::new(), Vec::new()),
+            |(mut ffi, mut rust, mut call), (ffi_ts, rust_ts, call_ts)| {
+                ffi.push(ffi_ts);
+                rust.push(rust_ts);
+                call.push(call_ts);
+                (ffi, rust, call)
+            },
+        );
+
+    let return_type = match &method.sig.output {
+        ReturnType::Default => None,
+        ReturnType::Type(_, ty) => Some(ty.clone()),
+    };
+
+    if is_async {
+        let callback_type = if let Some(ref ret_ty) = return_type {
+            let ffi_ret = rust_type_to_ffi_param_type(ret_ty);
+            quote! { extern "C" fn(callback_data: u64, result: #ffi_ret, status: ::riff::__private::FfiStatus) }
+        } else {
+            quote! { extern "C" fn(callback_data: u64, status: ::riff::__private::FfiStatus) }
+        };
+
+        vtable_fields.push(quote! {
+            pub #method_name_snake: extern "C" fn(
+                handle: u64,
+                #(#param_types,)*
+                callback: #callback_type,
+                callback_data: u64
+            )
+        });
+
+        let output_type = return_type
+            .as_ref()
+            .map(|t| quote! { -> #t })
+            .unwrap_or_default();
+
+        let impl_body = match return_type.as_deref() {
+            Some(ret_ty) => {
+                let error_expr = parse_result_type(ret_ty)
+                    .map(|(_, err_ty)| {
+                        quote! {
+                            Err(<#err_ty as ::core::convert::From<::riff::UnexpectedFfiCallbackError>>::from(::riff::UnexpectedFfiCallbackError))
+                        }
+                    })
+                    .unwrap_or_else(|| quote! { result });
+
+                quote! {
+                    use std::sync::{Arc, Mutex};
+                    use std::task::Waker;
+
+                    struct AsyncState<T> {
+                        result: Option<T>,
+                        status: ::riff::__private::FfiStatus,
+                        waker: Option<Waker>,
+                    }
+
+                    struct AsyncContext<T> {
+                        state: Mutex<AsyncState<T>>,
+                    }
+
+                    let ctx = Arc::new(AsyncContext::<#ret_ty> {
+                        state: Mutex::new(AsyncState {
+                            result: None,
+                            status: ::riff::__private::FfiStatus::OK,
+                            waker: None,
+                        }),
+                    });
+
+                    extern "C" fn callback(data: u64, result: #ret_ty, status: ::riff::__private::FfiStatus) {
+                        let ctx = unsafe { Arc::from_raw(data as *const AsyncContext<#ret_ty>) };
+                        let waker = ctx
+                            .state
+                            .lock()
+                            .ok()
+                            .and_then(|mut guard| {
+                                guard.result = Some(result);
+                                guard.status = status;
+                                guard.waker.take()
+                            });
+                        if let Some(waker) = waker {
+                            waker.wake();
+                        }
+                    }
+
+                    let ctx_ptr = Arc::into_raw(Arc::clone(&ctx)) as u64;
+                    unsafe {
+                        ((*self.vtable).#method_name_snake)(
+                            self.handle,
+                            #(#call_args,)*
+                            callback,
+                            ctx_ptr
+                        );
+                    }
+
+                    std::future::poll_fn(move |cx| {
+                        let mut guard = ctx.state.lock().expect("async callback mutex poisoned");
+                        if let Some(result) = guard.result.take() {
+                            let status = guard.status;
+                            if status.is_err() {
+                                return std::task::Poll::Ready(#error_expr);
+                            }
+                            std::task::Poll::Ready(result)
+                        } else {
+                            guard.waker = Some(cx.waker().clone());
+                            std::task::Poll::Pending
+                        }
+                    }).await
+                }
+            }
+            None => quote! {
+                use std::sync::{Arc, Mutex};
+                use std::task::Waker;
+
+                struct AsyncState {
+                    completed: bool,
+                    status: ::riff::__private::FfiStatus,
+                    waker: Option<Waker>,
+                }
+
+                struct AsyncContext {
+                    state: Mutex<AsyncState>,
+                }
+
+                let ctx = Arc::new(AsyncContext {
+                    state: Mutex::new(AsyncState {
+                        completed: false,
+                        status: ::riff::__private::FfiStatus::OK,
+                        waker: None,
+                    }),
+                });
+
+                extern "C" fn callback(data: u64, status: ::riff::__private::FfiStatus) {
+                    let ctx = unsafe { Arc::from_raw(data as *const AsyncContext) };
+                    let waker = ctx
+                        .state
+                        .lock()
+                        .ok()
+                        .and_then(|mut guard| {
+                            guard.completed = true;
+                            guard.status = status;
+                            guard.waker.take()
+                        });
+                    if let Some(waker) = waker {
+                        waker.wake();
+                    }
+                }
+
+                let ctx_ptr = Arc::into_raw(Arc::clone(&ctx)) as u64;
+                unsafe {
+                    ((*self.vtable).#method_name_snake)(
+                        self.handle,
+                        #(#call_args,)*
+                        callback,
+                        ctx_ptr
+                    );
+                }
+
+                std::future::poll_fn(move |cx| {
+                    let mut guard = ctx.state.lock().expect("async callback mutex poisoned");
+                    if guard.completed {
+                        std::task::Poll::Ready(())
+                    } else {
+                        guard.waker = Some(cx.waker().clone());
+                        std::task::Poll::Pending
+                    }
+                }).await
+            },
+        };
+
+        Ok(quote! {
+            async fn #method_name(&self, #(#param_names,)*) #output_type {
+                #impl_body
+            }
+        })
+    } else {
+        let out_param = if let Some(ref ret_ty) = return_type {
+            let ffi_ret = rust_type_to_ffi_param_type(ret_ty);
+            quote! { out: *mut #ffi_ret, }
+        } else {
+            quote! {}
+        };
+
+        vtable_fields.push(quote! {
+            pub #method_name_snake: extern "C" fn(
+                handle: u64,
+                #(#param_types,)*
+                #out_param
+                status: *mut ::riff::__private::FfiStatus
+            )
+        });
+
+        let output_type = return_type
+            .as_ref()
+            .map(|t| quote! { -> #t })
+            .unwrap_or_default();
+
+        let impl_body = match return_type.as_deref() {
+            Some(ret_ty) => {
+                let error_expr = parse_result_type(ret_ty).map(|(_, err_ty)| {
+                    quote! {
+                        return Err(<#err_ty as ::core::convert::From<::riff::UnexpectedFfiCallbackError>>::from(::riff::UnexpectedFfiCallbackError));
+                    }
+                });
+
+                quote! {
+                    let mut out: #ret_ty = Default::default();
+                    let mut status = ::riff::__private::FfiStatus::default();
+                    unsafe {
+                        ((*self.vtable).#method_name_snake)(
+                            self.handle,
+                            #(#call_args,)*
+                            &mut out as *mut _,
+                            &mut status
+                        );
+                    }
+                    if status.is_err() {
+                        #error_expr
+                    }
+                    out
+                }
+            }
+            None => quote! {
+                let mut status = ::riff::__private::FfiStatus::default();
+                unsafe {
+                    ((*self.vtable).#method_name_snake)(
+                        self.handle,
+                        #(#call_args,)*
+                        &mut status
+                    );
+                }
+            },
+        };
+
+        Ok(quote! {
+            fn #method_name(&self, #(#param_names,)*) #output_type {
+                #impl_body
+            }
+        })
+    }
+}
+
 fn to_snake_case_ident(name: &str) -> syn::Ident {
     syn::Ident::new(&naming::to_snake_case(name), proc_macro2::Span::call_site())
 }
 
 fn rust_type_to_ffi_param_type(ty: &syn::Type) -> proc_macro2::TokenStream {
     let type_str = quote!(#ty).to_string().replace(' ', "");
-
     match type_str.as_str() {
         "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool"
         | "usize" | "isize" => quote!(#ty),
@@ -316,4 +399,24 @@ fn rust_type_to_ffi_param_type(ty: &syn::Type) -> proc_macro2::TokenStream {
         "String" => quote!(*const std::os::raw::c_char),
         _ => quote!(#ty),
     }
+}
+
+fn parse_result_type(ty: &Type) -> Option<(Type, Type)> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    let result_segment = type_path.path.segments.last()?;
+    if result_segment.ident != "Result" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &result_segment.arguments else {
+        return None;
+    };
+    let mut types = args.args.iter().filter_map(|arg| match arg {
+        syn::GenericArgument::Type(ty) => Some(ty.clone()),
+        _ => None,
+    });
+    let ok = types.next()?;
+    let err = types.next()?;
+    Some((ok, err))
 }
