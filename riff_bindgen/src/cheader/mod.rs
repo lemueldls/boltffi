@@ -525,7 +525,12 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
 
     fn is_wire_encoded_type(ty: &Type, _module: &Module) -> bool {
         match ty {
-            Type::String | Type::Vec(_) | Type::Option(_) | Type::Record(_) | Type::Enum(_) => true,
+            Type::String
+            | Type::Vec(_)
+            | Type::Option(_)
+            | Type::Record(_)
+            | Type::Enum(_)
+            | Type::Custom { .. } => true,
             Type::Primitive(_) | Type::Void | Type::Object(_) => false,
             Type::Bytes | Type::Slice(_) | Type::MutSlice(_) => false,
             Type::Closure(_) | Type::BoxedTrait(_) => false,
@@ -939,6 +944,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             Type::String => "FfiString".to_string(),
             Type::Bytes => "uint8_t*".to_string(),
             Type::Record(name) | Type::Enum(name) => name.clone(),
+            Type::Custom { repr, .. } => Self::type_to_c(repr),
             Type::Object(name) => format!("struct {}*", name),
             Type::BoxedTrait(name) => format!("struct Foreign{}*", name),
             Type::Vec(inner) => format!("{}*", Self::type_to_c(inner)),

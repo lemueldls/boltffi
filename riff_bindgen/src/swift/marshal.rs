@@ -51,6 +51,7 @@ impl SwiftType {
             },
             Type::Enum(name) => Self::Enum(name.clone()),
             Type::Record(name) => Self::Record(name.clone()),
+            Type::Custom { name, .. } => Self::Record(name.clone()),
             Type::Object(name) => Self::Object(name.clone()),
             Type::BoxedTrait(name) => Self::BoxedTrait(name.clone()),
             Type::Closure(sig) => Self::Closure {
@@ -347,7 +348,12 @@ impl ReturnAbi {
                 swift_type: SwiftType::from_model(ty).swift_type(),
                 conversion: None,
             },
-            Type::String | Type::Record(_) | Type::Enum(_) | Type::Vec(_) | Type::Option(_) => {
+            Type::String
+            | Type::Record(_)
+            | Type::Custom { .. }
+            | Type::Enum(_)
+            | Type::Vec(_)
+            | Type::Option(_) => {
                 Self::WireEncoded {
                     swift_type: SwiftType::from_model(ty).swift_type(),
                     decode_expr: wire::decode_value_at_offset(ty, module, "0"),

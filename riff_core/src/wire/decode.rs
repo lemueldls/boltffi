@@ -1,8 +1,5 @@
 use crate::wire::constants::*;
 
-#[cfg(feature = "uuid")]
-use uuid::Uuid;
-
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, Utc};
 
@@ -47,26 +44,6 @@ macro_rules! impl_wire_decode_primitive {
 }
 
 impl_wire_decode_primitive!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
-
-impl WireDecode for core::time::Duration {
-    #[inline]
-    fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
-        let secs_bytes: [u8; 8] = buf
-            .get(..8)
-            .ok_or(DecodeError::BufferTooSmall)?
-            .try_into()
-            .map_err(|_| DecodeError::BufferTooSmall)?;
-        let nanos_bytes: [u8; 4] = buf
-            .get(8..12)
-            .ok_or(DecodeError::BufferTooSmall)?
-            .try_into()
-            .map_err(|_| DecodeError::BufferTooSmall)?;
-
-        let secs = u64::from_le_bytes(secs_bytes);
-        let nanos = u32::from_le_bytes(nanos_bytes);
-        Ok((core::time::Duration::new(secs, nanos), 12))
-    }
-}
 
 impl WireDecode for bool {
     #[inline]
@@ -121,19 +98,6 @@ impl WireDecode for String {
         let string_bytes = buf.get(4..total_size).ok_or(DecodeError::BufferTooSmall)?;
         let string = unsafe { core::str::from_utf8_unchecked(string_bytes) }.to_owned();
         Ok((string, total_size))
-    }
-}
-
-#[cfg(feature = "uuid")]
-impl WireDecode for Uuid {
-    #[inline]
-    fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
-        let bytes: [u8; 16] = buf
-            .get(..16)
-            .ok_or(DecodeError::BufferTooSmall)?
-            .try_into()
-            .map_err(|_| DecodeError::BufferTooSmall)?;
-        Ok((Uuid::from_bytes(bytes), 16))
     }
 }
 

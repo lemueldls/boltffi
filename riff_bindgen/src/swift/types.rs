@@ -32,6 +32,7 @@ impl TypeMapper {
                 };
                 format!("({}) -> {}", params, ret)
             }
+            Type::Custom { name, .. } => NamingConvention::class_name(name),
             Type::Object(name) => NamingConvention::class_name(name),
             Type::Record(name) => NamingConvention::class_name(name),
             Type::Enum(name) => NamingConvention::class_name(name),
@@ -63,7 +64,7 @@ impl TypeMapper {
                 format!("@convention(c) ({}) -> {}", params, ret)
             }
             Type::Object(_) => "OpaquePointer".into(),
-            Type::Record(_) => "UnsafePointer<UInt8>?, UInt".into(),
+            Type::Record(_) | Type::Custom { .. } => "UnsafePointer<UInt8>?, UInt".into(),
             Type::Enum(_) => "Int32".into(),
             Type::BoxedTrait(_) => "OpaquePointer".into(),
             Type::Void => "Void".into(),

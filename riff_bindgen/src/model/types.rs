@@ -293,6 +293,7 @@ pub enum Type {
     Option(Box<Type>),
     Result { ok: Box<Type>, err: Box<Type> },
     Closure(ClosureSignature),
+    Custom { name: String, repr: Box<Type> },
     Object(String),
     Record(String),
     Enum(String),
@@ -333,7 +334,9 @@ impl Type {
 
     pub fn named_type(&self) -> Option<&str> {
         match self {
-            Self::Object(name) | Self::Record(name) | Self::Enum(name) => Some(name),
+            Self::Custom { name, .. } | Self::Object(name) | Self::Record(name) | Self::Enum(name) => {
+                Some(name)
+            }
             _ => None,
         }
     }
@@ -408,6 +411,7 @@ impl Type {
             Self::Slice(inner) => format!("Slice{}", inner.type_id()),
             Self::MutSlice(inner) => format!("MutSlice{}", inner.type_id()),
             Self::Result { ok, .. } => format!("Result{}", ok.type_id()),
+            Self::Custom { name, .. } => heck::AsUpperCamelCase(name).to_string(),
             Self::Record(name) => heck::AsUpperCamelCase(name).to_string(),
             Self::Enum(name) => heck::AsUpperCamelCase(name).to_string(),
             Self::Object(name) => heck::AsUpperCamelCase(name).to_string(),
@@ -427,7 +431,7 @@ impl CLayout for Type {
                 Layout::new(24, 8)
             }
             Self::Object(_) | Self::BoxedTrait(_) | Self::Closure(_) => Layout::new(8, 8),
-            Self::Record(_) | Self::Enum(_) => Layout::new(8, 8),
+            Self::Record(_) | Self::Enum(_) | Self::Custom { .. } => Layout::new(8, 8),
             Self::Option(inner) => {
                 let inner_layout = inner.c_layout();
                 Layout::new(
