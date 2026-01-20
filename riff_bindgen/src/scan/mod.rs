@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -7,10 +8,10 @@ use syn::{
 use walkdir::WalkDir;
 
 use crate::model::{
-    CallbackTrait, Class, ClosureSignature as MClosureSignature, Constructor, ConstructorParam,
-    CustomType, Enumeration, Function, Method, Module, Parameter, Primitive, Receiver, Record,
-    RecordField, ReturnType, StreamMethod, StreamMode, TraitMethod, TraitMethodParam,
-    Type as MType, Variant,
+    BuiltinId, CallbackTrait, Class, ClosureSignature as MClosureSignature, Constructor,
+    ConstructorParam, CustomType, Enumeration, Function, Method, Module, Parameter, Primitive,
+    Receiver, Record, RecordField, ReturnType, StreamMethod, StreamMode, TraitMethod,
+    TraitMethodParam, Type as MType, Variant,
 };
 
 #[derive(Default)]
@@ -64,6 +65,137 @@ impl TypeRegistry {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct AliasResolver {
+    use_aliases: HashMap<String, Vec<String>>,
+    type_aliases: HashMap<String, Vec<String>>,
+}
+
+impl AliasResolver {
+    fn from_items(items: &[Item]) -> Self {
+        let mut resolver = Self::default();
+
+        items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Use(item_use) => Some(&item_use.tree),
+                _ => None,
+            })
+            .for_each(|tree| resolver.collect_use_tree(Vec::new(), tree));
+
+        items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Type(item_type) => Some(item_type),
+                _ => None,
+            })
+            .filter_map(|item_type| {
+                let target = match item_type.ty.as_ref() {
+                    Type::Path(type_path) => Some(Self::segments_from_path(type_path)),
+                    _ => None,
+                }?;
+                Some((item_type.ident.to_string(), target))
+            })
+            .for_each(|(alias, target)| {
+                resolver.type_aliases.insert(alias, target);
+            });
+
+        resolver
+    }
+
+    fn with_global(mut self, global: &HashMap<String, Vec<String>>) -> Self {
+        global
+            .iter()
+            .filter_map(|(name, target)| {
+                (!self.type_aliases.contains_key(name))
+                    .then(|| (name.clone(), target.clone()))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .for_each(|(name, target)| {
+                self.type_aliases.insert(name, target);
+            });
+        self
+    }
+
+    fn resolve_type_spelling<'a>(&self, spelling: &'a str) -> Cow<'a, str> {
+        let stripped = spelling.trim().trim_start_matches("::");
+        let parts: Vec<String> = stripped
+            .split("::")
+            .filter(|p| !p.is_empty())
+            .map(|p| p.to_string())
+            .collect();
+
+        let resolved = self.resolve_segments(parts);
+        let resolved_spelling = resolved
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("::");
+
+        (resolved_spelling != stripped)
+            .then(|| Cow::Owned(resolved_spelling))
+            .unwrap_or_else(|| Cow::Borrowed(stripped))
+    }
+
+    fn resolve_segments(&self, segments: Vec<String>) -> Vec<String> {
+        let expanded = std::iter::successors(Some(segments), |current| {
+            let first = current.first()?;
+            let replacement = self.use_aliases.get(first)?;
+            let next = replacement
+                .iter()
+                .cloned()
+                .chain(current.iter().skip(1).cloned())
+                .collect::<Vec<_>>();
+            (next != *current).then_some(next)
+        })
+        .take(16)
+        .last()
+        .unwrap_or_default()
+        ;
+
+        expanded
+            .last()
+            .and_then(|last| self.type_aliases.get(last))
+            .cloned()
+            .unwrap_or(expanded)
+    }
+
+    fn segments_from_path(type_path: &syn::TypePath) -> Vec<String> {
+        type_path
+            .path
+            .segments
+            .iter()
+            .map(|seg| seg.ident.to_string())
+            .collect()
+    }
+
+    fn collect_use_tree(&mut self, prefix: Vec<String>, tree: &syn::UseTree) {
+        match tree {
+            syn::UseTree::Path(path) => {
+                let mut next_prefix = prefix;
+                next_prefix.push(path.ident.to_string());
+                self.collect_use_tree(next_prefix, &path.tree);
+            }
+            syn::UseTree::Name(name) => {
+                let mut target = prefix;
+                target.push(name.ident.to_string());
+                self.use_aliases.insert(name.ident.to_string(), target);
+            }
+            syn::UseTree::Rename(rename) => {
+                let mut target = prefix;
+                target.push(rename.ident.to_string());
+                self.use_aliases.insert(rename.rename.to_string(), target);
+            }
+            syn::UseTree::Group(group) => group
+                .items
+                .iter()
+                .for_each(|item| self.collect_use_tree(prefix.clone(), item)),
+            syn::UseTree::Glob(_) => {}
+        }
+    }
+}
+
 pub struct SourceScanner {
     module_name: String,
     type_registry: TypeRegistry,
@@ -73,6 +205,8 @@ pub struct SourceScanner {
     functions: Vec<ScannedFunction>,
     callback_traits: Vec<ScannedCallbackTrait>,
     custom_types: Vec<ScannedCustomType>,
+    alias_resolver: AliasResolver,
+    global_aliases: HashMap<String, Vec<String>>,
 }
 
 struct ScannedClass {
@@ -153,6 +287,8 @@ impl SourceScanner {
             functions: Vec::new(),
             callback_traits: Vec::new(),
             custom_types: Vec::new(),
+            alias_resolver: AliasResolver::default(),
+            global_aliases: HashMap::new(),
         }
     }
 
@@ -164,10 +300,69 @@ impl SourceScanner {
             .map(|e| e.path().to_path_buf())
             .collect();
 
+        self.global_aliases = Self::collect_global_aliases(&files)?;
         files.iter().try_for_each(|path| self.collect_type_names(path))?;
         files.iter().try_for_each(|path| self.collect_custom_types(path))?;
         files.iter().try_for_each(|path| self.scan_file(path))?;
         Ok(())
+    }
+
+    fn collect_global_aliases(files: &[std::path::PathBuf]) -> Result<HashMap<String, Vec<String>>, String> {
+        let mut aliases = HashMap::<String, Vec<String>>::new();
+        let mut conflicts = HashSet::<String>::new();
+
+        files.iter().try_for_each(|path| {
+            let content = fs::read_to_string(path)
+                .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+
+            let syntax = syn::parse_file(&content)
+                .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
+
+            let local = AliasResolver::from_items(&syntax.items);
+            syntax
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Type(item_type) => Some(item_type),
+                    _ => None,
+                })
+                .filter_map(|item_type| {
+                    let target_path = match item_type.ty.as_ref() {
+                        Type::Path(type_path) => Some(
+                            AliasResolver::segments_from_path(type_path)
+                                .join("::"),
+                        ),
+                        _ => None,
+                    }?;
+
+                    let resolved = local.resolve_type_spelling(&target_path).into_owned();
+                    let segments = resolved
+                        .split("::")
+                        .filter(|p| !p.is_empty())
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>();
+                    Some((item_type.ident.to_string(), segments))
+                })
+                .for_each(|(alias_name, target)| {
+                    match aliases.get(&alias_name) {
+                        None => {
+                            aliases.insert(alias_name, target);
+                        }
+                        Some(existing) if *existing == target => {}
+                        Some(_) => {
+                            conflicts.insert(alias_name);
+                        }
+                    }
+                });
+
+            Ok::<(), String>(())
+        })?;
+
+        conflicts.iter().for_each(|name| {
+            aliases.remove(name);
+        });
+
+        Ok(aliases)
     }
 
     fn collect_custom_types(&mut self, path: &Path) -> Result<(), String> {
@@ -177,6 +372,8 @@ impl SourceScanner {
         let syntax = syn::parse_file(&content)
             .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
 
+        let alias_resolver =
+            AliasResolver::from_items(&syntax.items).with_global(&self.global_aliases);
         syntax
             .items
             .iter()
@@ -186,10 +383,14 @@ impl SourceScanner {
                 }
                 _ => None,
             })
-            .try_for_each(|item_impl| self.collect_custom_type(item_impl))
+            .try_for_each(|item_impl| self.collect_custom_type(item_impl, &alias_resolver))
     }
 
-    fn collect_custom_type(&mut self, item_impl: &ItemImpl) -> Result<(), String> {
+    fn collect_custom_type(
+        &mut self,
+        item_impl: &ItemImpl,
+        alias_resolver: &AliasResolver,
+    ) -> Result<(), String> {
         let Some(name) = impl_self_type_ident(item_impl) else {
             return Err("custom_ffi: unsupported self type".to_string());
         };
@@ -214,7 +415,8 @@ impl SourceScanner {
             .next()
             .ok_or_else(|| format!("custom_ffi: `{}` is missing `type FfiRepr = ...;`", name))?;
 
-        let repr = rust_type_to_ffi_type(repr_syn_type, &self.type_registry).ok_or_else(|| {
+        let repr = rust_type_to_ffi_type(repr_syn_type, &self.type_registry, alias_resolver)
+            .ok_or_else(|| {
             format!(
                 "custom_ffi: `{}` has an unsupported FfiRepr type: {}",
                 name,
@@ -283,9 +485,9 @@ impl SourceScanner {
         let syntax = syn::parse_file(&content)
             .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
 
-        for item in syntax.items {
-            self.process_item(&item);
-        }
+        self.alias_resolver =
+            AliasResolver::from_items(&syntax.items).with_global(&self.global_aliases);
+        syntax.items.iter().for_each(|item| self.process_item(item));
 
         Ok(())
     }
@@ -344,7 +546,8 @@ impl SourceScanner {
                 .iter()
                 .filter_map(|f| {
                     let field_name = f.ident.as_ref()?.to_string();
-                    let field_type = rust_type_to_ffi_type(&f.ty, &self.type_registry)?;
+                    let field_type =
+                        rust_type_to_ffi_type(&f.ty, &self.type_registry, &self.alias_resolver)?;
                     Some((field_name, field_type))
                 })
                 .collect(),
@@ -376,7 +579,11 @@ impl SourceScanner {
                         .iter()
                         .filter_map(|f| {
                             let field_name = f.ident.as_ref()?.to_string();
-                            let field_type = rust_type_to_ffi_type(&f.ty, &self.type_registry)?;
+                            let field_type = rust_type_to_ffi_type(
+                                &f.ty,
+                                &self.type_registry,
+                                &self.alias_resolver,
+                            )?;
                             Some((field_name, field_type))
                         })
                         .collect(),
@@ -385,7 +592,11 @@ impl SourceScanner {
                         .iter()
                         .enumerate()
                         .filter_map(|(i, f)| {
-                            let field_type = rust_type_to_ffi_type(&f.ty, &self.type_registry)?;
+                            let field_type = rust_type_to_ffi_type(
+                                &f.ty,
+                                &self.type_registry,
+                                &self.alias_resolver,
+                            )?;
                             Some((format!("_{}", i), field_type))
                         })
                         .collect(),
@@ -431,7 +642,11 @@ impl SourceScanner {
                     syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
                     _ => return None,
                 };
-                let param_type = rust_type_to_ffi_type(&pat_type.ty, &self.type_registry)?;
+                let param_type = rust_type_to_ffi_type(
+                    &pat_type.ty,
+                    &self.type_registry,
+                    &self.alias_resolver,
+                )?;
                 Some((param_name, param_type))
             })
             .collect();
@@ -443,7 +658,8 @@ impl SourceScanner {
         let output = match &item_fn.sig.output {
             syn::ReturnType::Default => None,
             syn::ReturnType::Type(_, ty) => {
-                let converted = rust_type_to_ffi_type(ty, &self.type_registry);
+                let converted =
+                    rust_type_to_ffi_type(ty, &self.type_registry, &self.alias_resolver);
                 if converted.is_none() {
                     return;
                 }
@@ -489,7 +705,11 @@ impl SourceScanner {
                         syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
                         _ => return None,
                     };
-                    let param_type = rust_type_to_ffi_type(&pat_type.ty, &self.type_registry)?;
+                    let param_type = rust_type_to_ffi_type(
+                        &pat_type.ty,
+                        &self.type_registry,
+                        &self.alias_resolver,
+                    )?;
                     Some((param_name, param_type))
                 } else {
                     None
@@ -499,7 +719,9 @@ impl SourceScanner {
 
         let output = match &method.sig.output {
             syn::ReturnType::Default => None,
-            syn::ReturnType::Type(_, ty) => rust_type_to_ffi_type(ty, &self.type_registry),
+            syn::ReturnType::Type(_, ty) => {
+                rust_type_to_ffi_type(ty, &self.type_registry, &self.alias_resolver)
+            }
         };
 
         Some(ScannedTraitMethod {
@@ -593,7 +815,11 @@ impl SourceScanner {
                     syn::Pat::Ident(ident) => ident.ident.to_string(),
                     _ => return None,
                 };
-                let param_type = rust_type_to_ffi_type(&pat_type.ty, &self.type_registry)?;
+                let param_type = rust_type_to_ffi_type(
+                    &pat_type.ty,
+                    &self.type_registry,
+                    &self.alias_resolver,
+                )?;
                 Some((param_name, param_type))
             })
             .collect();
@@ -604,7 +830,9 @@ impl SourceScanner {
 
         let output = match &method.sig.output {
             syn::ReturnType::Default => None,
-            syn::ReturnType::Type(_, ty) => rust_type_to_ffi_type(ty, &self.type_registry),
+            syn::ReturnType::Type(_, ty) => {
+                rust_type_to_ffi_type(ty, &self.type_registry, &self.alias_resolver)
+            }
         };
 
         Some(ScannedMethod {
@@ -619,7 +847,8 @@ impl SourceScanner {
     fn process_stream_method(&self, method: &syn::ImplItemFn) -> Option<ScannedStream> {
         let name = method.sig.ident.to_string();
 
-        let (item_type, mode) = extract_stream_attr(&method.attrs, &self.type_registry)?;
+        let (item_type, mode) =
+            extract_stream_attr(&method.attrs, &self.type_registry, &self.alias_resolver)?;
 
         Some(ScannedStream {
             name,
@@ -684,7 +913,11 @@ impl SourceScanner {
                         syn::Pat::Ident(ident) => ident.ident.to_string(),
                         _ => return None,
                     };
-                    let param_type = rust_type_to_ffi_type(&pat_type.ty, &self.type_registry)?;
+                    let param_type = rust_type_to_ffi_type(
+                        &pat_type.ty,
+                        &self.type_registry,
+                        &self.alias_resolver,
+                    )?;
                     Some((param_name, param_type))
                 }
                 syn::FnArg::Receiver(_) => None,
@@ -901,6 +1134,7 @@ fn has_ffi_type_derive(attrs: &[Attribute]) -> bool {
 fn extract_stream_attr(
     attrs: &[Attribute],
     registry: &TypeRegistry,
+    alias_resolver: &AliasResolver,
 ) -> Option<(MType, StreamMode)> {
     for attr in attrs {
         if !attr.path().is_ident("ffi_stream") {
@@ -912,7 +1146,7 @@ fn extract_stream_attr(
         };
 
         let tokens = meta.tokens.to_string();
-        let item_type = extract_item_type(&tokens, registry)?;
+        let item_type = extract_item_type(&tokens, registry, alias_resolver)?;
         let mode = extract_stream_mode(&tokens);
 
         return Some((item_type, mode));
@@ -920,7 +1154,7 @@ fn extract_stream_attr(
     None
 }
 
-fn extract_item_type(tokens: &str, registry: &TypeRegistry) -> Option<MType> {
+fn extract_item_type(tokens: &str, registry: &TypeRegistry, alias_resolver: &AliasResolver) -> Option<MType> {
     let item_start = tokens.find("item")? + 4;
     let rest = &tokens[item_start..];
     let eq_pos = rest.find('=')?;
@@ -931,7 +1165,7 @@ fn extract_item_type(tokens: &str, registry: &TypeRegistry) -> Option<MType> {
         .unwrap_or(after_eq.find(')').unwrap_or(after_eq.len()));
     let type_str = after_eq[..type_end].trim();
 
-    string_to_ffi_type(type_str, registry)
+    string_to_ffi_type(type_str, registry, alias_resolver)
 }
 
 fn extract_stream_mode(tokens: &str) -> StreamMode {
@@ -948,7 +1182,11 @@ fn extract_stream_mode(tokens: &str) -> StreamMode {
     }
 }
 
-fn rust_type_to_ffi_type(ty: &Type, registry: &TypeRegistry) -> Option<MType> {
+fn rust_type_to_ffi_type(
+    ty: &Type,
+    registry: &TypeRegistry,
+    alias_resolver: &AliasResolver,
+) -> Option<MType> {
     match ty {
         Type::Path(type_path) => {
             let last_segment = type_path.path.segments.last()?;
@@ -978,14 +1216,14 @@ fn rust_type_to_ffi_type(ty: &Type, registry: &TypeRegistry) -> Option<MType> {
                 && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
                 && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
             {
-                return rust_type_to_ffi_type(inner_ty, registry);
+                return rust_type_to_ffi_type(inner_ty, registry, alias_resolver);
             }
 
             if ident == "Vec" {
                 if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
                     && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
                 {
-                    let inner = rust_type_to_ffi_type(inner_ty, registry)?;
+                    let inner = rust_type_to_ffi_type(inner_ty, registry, alias_resolver)?;
                     return Some(MType::Vec(Box::new(inner)));
                 }
                 return None;
@@ -995,7 +1233,7 @@ fn rust_type_to_ffi_type(ty: &Type, registry: &TypeRegistry) -> Option<MType> {
                 if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
                     && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
                 {
-                    let inner = rust_type_to_ffi_type(inner_ty, registry)?;
+                    let inner = rust_type_to_ffi_type(inner_ty, registry, alias_resolver)?;
                     return Some(MType::Option(Box::new(inner)));
                 }
                 return None;
@@ -1005,12 +1243,12 @@ fn rust_type_to_ffi_type(ty: &Type, registry: &TypeRegistry) -> Option<MType> {
                 if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
                     let mut args_iter = args.args.iter();
                     if let Some(syn::GenericArgument::Type(ok_ty)) = args_iter.next() {
-                        let ok = rust_type_to_ffi_type(ok_ty, registry)?;
+                        let ok = rust_type_to_ffi_type(ok_ty, registry, alias_resolver)?;
                         let err = args_iter
                             .next()
                             .and_then(|arg| {
                                 if let syn::GenericArgument::Type(err_ty) = arg {
-                                    rust_type_to_ffi_type(err_ty, registry)
+                                    rust_type_to_ffi_type(err_ty, registry, alias_resolver)
                                 } else {
                                     None
                                 }
@@ -1033,7 +1271,7 @@ fn rust_type_to_ffi_type(ty: &Type, registry: &TypeRegistry) -> Option<MType> {
                 .collect::<Vec<_>>()
                 .join("::");
 
-            string_to_ffi_type(&path_str, registry)
+            string_to_ffi_type(&path_str, registry, alias_resolver)
         }
         Type::Reference(type_ref) => {
             if let Type::Path(inner) = &*type_ref.elem {
@@ -1043,17 +1281,17 @@ fn rust_type_to_ffi_type(ty: &Type, registry: &TypeRegistry) -> Option<MType> {
                 }
             }
             if let Type::Slice(slice) = &*type_ref.elem {
-                let inner = rust_type_to_ffi_type(&slice.elem, registry)?;
+                let inner = rust_type_to_ffi_type(&slice.elem, registry, alias_resolver)?;
                 return if type_ref.mutability.is_some() {
                     Some(MType::MutSlice(Box::new(inner)))
                 } else {
                     Some(MType::Slice(Box::new(inner)))
                 };
             }
-            rust_type_to_ffi_type(&type_ref.elem, registry)
+            rust_type_to_ffi_type(&type_ref.elem, registry, alias_resolver)
         }
         Type::Slice(slice) => {
-            let inner = rust_type_to_ffi_type(&slice.elem, registry)?;
+            let inner = rust_type_to_ffi_type(&slice.elem, registry, alias_resolver)?;
             Some(MType::Slice(Box::new(inner)))
         }
         Type::ImplTrait(impl_trait) => {
@@ -1072,13 +1310,14 @@ fn rust_type_to_ffi_type(ty: &Type, registry: &TypeRegistry) -> Option<MType> {
                         let params: Vec<MType> = args
                             .inputs
                             .iter()
-                            .filter_map(|t| rust_type_to_ffi_type(t, registry))
+                            .filter_map(|t| rust_type_to_ffi_type(t, registry, alias_resolver))
                             .collect();
 
                         let returns = match &args.output {
                             syn::ReturnType::Default => MType::Void,
                             syn::ReturnType::Type(_, ty) => {
-                                rust_type_to_ffi_type(ty, registry).unwrap_or(MType::Void)
+                                rust_type_to_ffi_type(ty, registry, alias_resolver)
+                                    .unwrap_or(MType::Void)
                             }
                         };
 
@@ -1100,7 +1339,7 @@ fn rust_type_to_ffi_type(ty: &Type, registry: &TypeRegistry) -> Option<MType> {
     }
 }
 
-fn string_to_ffi_type(s: &str, registry: &TypeRegistry) -> Option<MType> {
+fn string_to_ffi_type(s: &str, registry: &TypeRegistry, alias_resolver: &AliasResolver) -> Option<MType> {
     let trimmed = s.trim();
     match trimmed {
         "i8" => Some(MType::Primitive(Primitive::I8)),
@@ -1119,30 +1358,44 @@ fn string_to_ffi_type(s: &str, registry: &TypeRegistry) -> Option<MType> {
         "String" | "str" | "std::string::String" | "alloc::string::String" => Some(MType::String),
         s if s.starts_with("Vec<") => {
             let inner = &s[4..s.len() - 1];
-            Some(MType::Vec(Box::new(string_to_ffi_type(inner, registry)?)))
+            Some(MType::Vec(Box::new(string_to_ffi_type(
+                inner,
+                registry,
+                alias_resolver,
+            )?)))
         }
         s if s.starts_with("Option<") => {
             let inner = &s[7..s.len() - 1];
             Some(MType::Option(Box::new(string_to_ffi_type(
                 inner, registry,
+                alias_resolver,
             )?)))
         }
         s if s.starts_with("Result<") => {
             let inner = &s[7..s.len() - 1];
             let parts: Vec<&str> = inner.splitn(2, ',').map(|p| p.trim()).collect();
-            let ok = string_to_ffi_type(parts.first()?, registry)?;
+            let ok = string_to_ffi_type(parts.first()?, registry, alias_resolver)?;
             let err = parts
                 .get(1)
-                .and_then(|e| string_to_ffi_type(e, registry))
+                .and_then(|e| string_to_ffi_type(e, registry, alias_resolver))
                 .unwrap_or(MType::String);
             Some(MType::Result {
                 ok: Box::new(ok),
                 err: Box::new(err),
             })
         }
-        s => registry
-            .classify_named_type(s)
-            .or_else(|| s.rsplit("::").next().and_then(|name| registry.classify_named_type(name))),
+        s => {
+            let resolved = alias_resolver.resolve_type_spelling(s);
+            BuiltinId::from_rust_path(resolved.as_ref())
+                .map(MType::Builtin)
+                .or_else(|| registry.classify_named_type(resolved.as_ref()))
+                .or_else(|| {
+                    resolved
+                        .rsplit("::")
+                        .next()
+                        .and_then(|name| registry.classify_named_type(name))
+                })
+        }
     }
 }
 
