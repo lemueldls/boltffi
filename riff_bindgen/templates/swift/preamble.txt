@@ -25,6 +25,14 @@ private func stringFromFfi(_ ffiString: FfiString) -> String {
 }
 
 @inline(__always)
+private func takeLastErrorMessage() -> String {
+    var out = FfiString()
+    ensureOk({{ prefix }}_last_error_message(&out))
+    defer { {{ prefix }}_free_string(out) }
+    return stringFromFfi(out)
+}
+
+@inline(__always)
 private func checkStatus(_ status: FfiStatus, context: StaticString = #function) throws {
     guard status.code == 0 else {
         throw FfiError(message: "FFI failed in \(context) with code \(status.code)")
@@ -191,17 +199,17 @@ final class FfiFutureState<T>: @unchecked Sendable {
         }
         return (arr, size)
     }
-    @inlinable func readBytes(at offset: Int) -> [UInt8] {
+    @inlinable func readBytes(at offset: Int) -> Data {
         let count = Int(readU32(at: offset))
-        guard count > 0 else { return [] }
+        guard count > 0 else { return Data() }
         let start = offset + 4
-        return Array(data[start..<(start + count)])
+        return data.subdata(in: start..<(start + count))
     }
-    @inlinable func readBytesWithSize(at offset: Int) -> (value: [UInt8], size: Int) {
+    @inlinable func readBytesWithSize(at offset: Int) -> (value: Data, size: Int) {
         let count = Int(readU32(at: offset))
-        guard count > 0 else { return ([], 4) }
+        guard count > 0 else { return (Data(), 4) }
         let start = offset + 4
-        return (Array(data[start..<(start + count)]), 4 + count)
+        return (data.subdata(in: start..<(start + count)), 4 + count)
     }
     @inlinable func readResultOrThrow<T, E: Error>(at offset: Int, ok: (Int) -> T, err: (Int) -> E) throws -> T {
         let tag = readU8(at: offset)

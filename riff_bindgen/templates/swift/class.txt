@@ -16,31 +16,43 @@ public final class {{ class_name }} {
 {%- endif %}
 {%- if ctor.is_factory && ctor.params.is_empty() %}
 
-    public static func {{ ctor.name }}() -> Self {
+    public static func {{ ctor.name }}(){% if ctor.is_failable %} throws{% endif %} -> Self {
+{%- if ctor.is_failable %}
+        let ptr = {{ ctor.ffi_name }}()
+        guard let ptr else { throw FfiError(message: takeLastErrorMessage()) }
+        return Self(handle: ptr)
+{%- else %}
         let ptr = {{ ctor.ffi_name }}()!
         return Self(handle: ptr)
+{%- endif %}
     }
 {%- else if ctor.is_factory %}
 
-    public convenience init({{ ctor.name }} {{ ctor.first_param_name }}: {{ ctor.first_param_type }}{% for param in ctor.rest_params %}, {{ param.swift_name }}: {{ param.swift_type }}{% endfor %}) {
+    public convenience init({{ ctor.name }} {{ ctor.first_param_name }}: {{ ctor.first_param_type }}{% for param in ctor.rest_params %}, {{ param.swift_name }}: {{ param.swift_type }}{% endfor %}){% if ctor.is_failable %} throws{% endif %} {
 {%- if ctor.wrappers_open.len() > 0 %}
         let ptr = {{ ctor.wrappers_open }}
-            {{ ctor.ffi_name }}({{ ctor.ffi_args }})!
+            {{ ctor.ffi_name }}({{ ctor.ffi_args }}){% if !ctor.is_failable %}!{% endif %}
         {{ ctor.wrappers_close }}
 {%- else %}
-        let ptr = {{ ctor.ffi_name }}({{ ctor.ffi_args }})!
+        let ptr = {{ ctor.ffi_name }}({{ ctor.ffi_args }}){% if !ctor.is_failable %}!{% endif %}
+{%- endif %}
+{%- if ctor.is_failable %}
+        guard let ptr else { throw FfiError(message: takeLastErrorMessage()) }
 {%- endif %}
         self.init(handle: ptr)
     }
 {%- else %}
 
-    public convenience init({% for param in ctor.params %}{{ param.swift_name }}: {{ param.swift_type }}{% if !loop.last %}, {% endif %}{% endfor %}) {
+    public convenience init({% for param in ctor.params %}{{ param.swift_name }}: {{ param.swift_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% if ctor.is_failable %} throws{% endif %} {
 {%- if ctor.wrappers_open.len() > 0 %}
         let ptr = {{ ctor.wrappers_open }}
-            {{ ctor.ffi_name }}({{ ctor.ffi_args }})!
+            {{ ctor.ffi_name }}({{ ctor.ffi_args }}){% if !ctor.is_failable %}!{% endif %}
         {{ ctor.wrappers_close }}
 {%- else %}
-        let ptr = {{ ctor.ffi_name }}({{ ctor.ffi_args }})!
+        let ptr = {{ ctor.ffi_name }}({{ ctor.ffi_args }}){% if !ctor.is_failable %}!{% endif %}
+{%- endif %}
+{%- if ctor.is_failable %}
+        guard let ptr else { throw FfiError(message: takeLastErrorMessage()) }
 {%- endif %}
         self.init(handle: ptr)
     }
@@ -48,7 +60,7 @@ public final class {{ class_name }} {
 {%- endfor %}
 
     deinit {
-        _ = {{ ffi_free }}(handle)
+        {{ ffi_free }}(handle)
     }
 {%- for method in methods %}
 {%- if let Some(doc) = method.doc %}

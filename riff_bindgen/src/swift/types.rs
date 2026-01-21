@@ -1,4 +1,4 @@
-use crate::model::{BuiltinId, Type};
+use crate::model::{BuiltinId, Primitive, Type};
 
 use super::NamingConvention;
 use super::primitives;
@@ -12,8 +12,14 @@ impl TypeMapper {
             Type::String => "String".into(),
             Type::Bytes => "Data".into(),
             Type::Builtin(id) => Self::map_builtin(*id),
+            Type::Slice(inner) if matches!(inner.as_ref(), Type::Primitive(Primitive::U8)) => {
+                "Data".into()
+            }
             Type::Slice(inner) => format!("[{}]", Self::map_type(inner)),
             Type::MutSlice(inner) => format!("[{}]", Self::map_type(inner)),
+            Type::Vec(inner) if matches!(inner.as_ref(), Type::Primitive(Primitive::U8)) => {
+                "Data".into()
+            }
             Type::Vec(inner) => format!("[{}]", Self::map_type(inner)),
             Type::Option(inner) => format!("{}?", Self::map_type(inner)),
             Type::Result { ok, err } => {
@@ -55,7 +61,7 @@ impl TypeMapper {
         match ty {
             Type::Primitive(p) => primitives::info(*p).swift_type.into(),
             Type::String => "UnsafePointer<UInt8>?, UInt".into(),
-            Type::Bytes => "UnsafePointer<UInt8>".into(),
+            Type::Bytes => "UnsafePointer<UInt8>?, UInt".into(),
             Type::Builtin(_) => "UnsafePointer<UInt8>?, UInt".into(),
             Type::Slice(inner) => format!("UnsafePointer<{}>", Self::ffi_type(inner)),
             Type::MutSlice(inner) => format!("UnsafeMutablePointer<{}>", Self::ffi_type(inner)),

@@ -1,7 +1,7 @@
 use askama::Template;
 use std::collections::HashMap;
 
-use crate::model::{BuiltinId, Module, Record, Type};
+use crate::model::{BuiltinId, Module, Primitive, Record, Type};
 
 use super::super::names::NamingConvention;
 use super::super::types::TypeMapper;
@@ -110,6 +110,9 @@ impl<'a> DefaultExprResolver<'a> {
             Type::String => Some("\"\"".to_string()),
             Type::Bytes => Some("Data()".to_string()),
             Type::Builtin(builtin) => builtin_default_expr(*builtin),
+            Type::Vec(inner) if matches!(inner.as_ref(), Type::Primitive(Primitive::U8)) => {
+                Some("Data()".to_string())
+            }
             Type::Vec(_) => Some("[]".to_string()),
             Type::Option(_) => Some("nil".to_string()),
             Type::Record(name) => self.default_record_expr(name),

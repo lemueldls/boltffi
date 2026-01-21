@@ -38,6 +38,9 @@ impl SwiftType {
             Type::String => Self::String,
             Type::Bytes => Self::Bytes,
             Type::Builtin(id) => Self::Builtin(*id),
+            Type::Slice(inner) if matches!(inner.as_ref(), Type::Primitive(Primitive::U8)) => {
+                Self::Bytes
+            }
             Type::Slice(inner) => Self::Slice {
                 inner: Box::new(Self::from_model(inner)),
                 mutable: false,
@@ -46,6 +49,7 @@ impl SwiftType {
                 inner: Box::new(Self::from_model(inner)),
                 mutable: true,
             },
+            Type::Vec(inner) if matches!(inner.as_ref(), Type::Primitive(Primitive::U8)) => Self::Bytes,
             Type::Vec(inner) => Self::Vec(Box::new(Self::from_model(inner))),
             Type::Option(inner) => Self::Option(Box::new(Self::from_model(inner))),
             Type::Result { ok, .. } => Self::Result {
@@ -141,7 +145,7 @@ impl ParamConversion {
                 )),
                 vec![
                     format!(
-                        "{}Ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)",
+                        "{}Ptr.baseAddress?.assumingMemoryBound(to: UInt8.self)",
                         swift_name
                     ),
                     format!("UInt({}.count)", swift_name),
@@ -177,7 +181,7 @@ impl ParamConversion {
                 )),
                 vec![
                     format!(
-                        "{}Ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)",
+                        "{}Ptr.baseAddress?.assumingMemoryBound(to: UInt8.self)",
                         swift_name
                     ),
                     format!("UInt({}Ptr.count)", swift_name),
@@ -202,7 +206,7 @@ impl ParamConversion {
                 )),
                 vec![
                     format!(
-                        "{}Ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)",
+                        "{}Ptr.baseAddress?.assumingMemoryBound(to: UInt8.self)",
                         swift_name
                     ),
                     format!("UInt({}Ptr.count)", swift_name),
@@ -239,7 +243,7 @@ impl ParamConversion {
                 )),
                 vec![
                     format!(
-                        "{}Ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)",
+                        "{}Ptr.baseAddress?.assumingMemoryBound(to: UInt8.self)",
                         swift_name
                     ),
                     format!("UInt({}Ptr.count)", swift_name),
@@ -253,7 +257,7 @@ impl ParamConversion {
                 )),
                 vec![
                     format!(
-                        "{}Ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)",
+                        "{}Ptr.baseAddress?.assumingMemoryBound(to: UInt8.self)",
                         swift_name
                     ),
                     format!("UInt({}Ptr.count)", swift_name),

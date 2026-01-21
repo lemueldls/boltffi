@@ -97,6 +97,29 @@ JNIEXPORT void JNICALL Java_{{ jni_prefix }}_Native_{{ prefix }}_1free_1native_1
     }
 }
 
+JNIEXPORT jstring JNICALL Java_{{ jni_prefix }}_Native_{{ prefix }}_1last_1error_1message(JNIEnv *env, jclass cls) {
+    FfiString out = { 0 };
+    FfiStatus status = {{ prefix }}_last_error_message(&out);
+    if (status.code != 0) {
+        return (*env)->NewStringUTF(env, "");
+    }
+    if (out.ptr == NULL || out.len == 0) {
+        {{ prefix }}_free_string(out);
+        return (*env)->NewStringUTF(env, "");
+    }
+    char* tmp = (char*)malloc(out.len + 1);
+    if (!tmp) {
+        {{ prefix }}_free_string(out);
+        return (*env)->NewStringUTF(env, "");
+    }
+    memcpy(tmp, out.ptr, out.len);
+    tmp[out.len] = '\0';
+    jstring result = (*env)->NewStringUTF(env, tmp);
+    free(tmp);
+    {{ prefix }}_free_string(out);
+    return result;
+}
+
 {%- for func in functions %}
 {%- if func.is_data_enum_return %}
 

@@ -42,8 +42,11 @@ impl CHeaderGenerator {
 
     fn generate_free_functions(prefix: &str) -> String {
         format!(
-            "\nvoid {}_free_string(FfiString s);\nvoid {}_free_buf_u8(FfiBuf_u8 buf);\n",
-            prefix, prefix
+            "\nvoid {}_free_string(FfiString s);\n\
+             void {}_free_buf_u8(FfiBuf_u8 buf);\n\
+             FfiStatus {}_last_error_message(FfiString *out);\n\
+             void {}_clear_last_error(void);\n",
+            prefix, prefix, prefix, prefix
         )
     }
 
@@ -706,7 +709,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             }
         }
         out.push_str(&format!(
-            "FfiStatus {}_free(struct {} * handle);\n",
+            "void {}_free(struct {} * handle);\n",
             class_prefix, class.name
         ));
 

@@ -14,25 +14,13 @@ public func {{ func_name }}({% for param in params %}{% if param.is_mut_slice %}
 {%- if is_async %}
 {#- ASYNC FUNCTION #}
     let futureHandle =
-{%- for param in params %}
-{%- if param.is_string %}
-        {{ param.swift_name }}.withCString { {{ param.swift_name }}Ptr in
-{%- else if param.is_slice %}
-        {{ param.swift_name }}.withUnsafeBufferPointer { {{ param.swift_name }}Ptr in
-{%- else if param.is_mut_slice %}
-        {{ param.swift_name }}.withUnsafeMutableBufferPointer { {{ param.swift_name }}Ptr in
-{%- else if param.is_vec_wire_encoded %}
-        withWireEncodedArray({{ param.swift_name }}) { {{ param.swift_name }}Ptr in
-{%- else if param.is_vec %}
-        {{ param.swift_name }}.withUnsafeBufferPointer { {{ param.swift_name }}Ptr in
+{%- if self.has_wrappers() %}
+        {{ wrappers_open }}
+            {{ ffi_name }}({{ ffi_args }}{% if !ffi_args.is_empty() && !callback_args.is_empty() %}, {% endif %}{{ callback_args }})
+        {{ wrappers_close }}
+{%- else %}
+        {{ ffi_name }}({{ ffi_args }}{% if !ffi_args.is_empty() && !callback_args.is_empty() %}, {% endif %}{{ callback_args }})
 {%- endif %}
-{%- endfor %}
-            {{ ffi_name }}({% for param in params %}{% if param.is_string %}UnsafeRawPointer({{ param.swift_name }}Ptr).assumingMemoryBound(to: UInt8.self), UInt({{ param.swift_name }}.utf8.count){% else if param.is_vec_wire_encoded %}{{ param.swift_name }}Ptr.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt({{ param.swift_name }}Ptr.count){% else if param.is_slice || param.is_mut_slice || param.is_vec %}{{ param.swift_name }}Ptr.baseAddress, UInt({{ param.swift_name }}Ptr.count){% else %}{{ param.ffi_conversion }}{% endif %}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- for param in params %}
-{%- if param.is_string || param.is_slice || param.is_mut_slice || param.is_vec || param.is_vec_wire_encoded %}
-        }
-{%- endif %}
-{%- endfor %}
     
     typealias FutureContext = FfiFutureState<{% match return_type %}{% when Some with (ret) %}{{ ret }}{% when None %}Void{% endmatch %}>
     let state = FutureContext(handle: futureHandle)

@@ -1069,6 +1069,7 @@ impl AsyncFunctionTemplate {
 #[derive(Template)]
 #[template(path = "kotlin/class.txt", escape = "none")]
 pub struct ClassTemplate {
+    pub prefix: String,
     pub class_name: String,
     pub doc: Option<String>,
     pub ffi_free: String,
@@ -1086,6 +1087,7 @@ pub struct ConstructorView {
     pub wire_writers: Vec<WireWriterView>,
     pub wire_writer_closes: Vec<String>,
     pub is_factory: bool,
+    pub is_fallible: bool,
 }
 
 pub struct MethodView {
@@ -1120,6 +1122,7 @@ impl ClassTemplate {
                     name: NamingConvention::method_name(&ctor.name),
                     ffi_name,
                     is_factory,
+                    is_fallible: ctor.is_fallible,
                     signature_params: plan
                         .signature_params
                         .into_iter()
@@ -1169,6 +1172,7 @@ impl ClassTemplate {
         };
 
         Self {
+            prefix: naming::ffi_prefix().to_string(),
             class_name,
             doc: class.doc.clone(),
             ffi_free: format!("{}_free", ffi_prefix),

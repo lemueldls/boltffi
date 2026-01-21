@@ -6,6 +6,7 @@ private object Native {
 
     @JvmStatic external fun {{ prefix }}_free_string(ptr: Long)
     @JvmStatic external fun {{ prefix }}_free_native_buffer(buffer: ByteBuffer)
+    @JvmStatic external fun {{ prefix }}_last_error_message(): String
 {%- for function in functions %}
 {%- if function.is_async %}
     @JvmStatic external fun {{ function.ffi_name }}({% for param in function.params %}{{ param.name }}: {{ param.jni_type }}{% if !loop.last %}, {% endif %}{% endfor %}): Long

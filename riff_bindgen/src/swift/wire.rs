@@ -429,6 +429,7 @@ fn encode_vec(inner: &Type, name: &str, module: &Module) -> TypeEncoder {
         });
 
     let encode_to_data = match inner {
+        Type::Primitive(Primitive::U8) => format!("data.appendBytes({})", name),
         Type::Primitive(_) => format!("data.appendArray({})", name),
         Type::Record(_) if is_blittable_record => format!("data.appendBlittableArray({})", name),
         _ => {
@@ -441,6 +442,7 @@ fn encode_vec(inner: &Type, name: &str, module: &Module) -> TypeEncoder {
     };
 
     let encode_to_bytes = match inner {
+        Type::Primitive(Primitive::U8) => format!("bytes.appendBytes({})", name),
         Type::Primitive(_) => format!("bytes.appendArray({})", name),
         Type::Record(_) if is_blittable_record => format!("bytes.appendBlittableArray({})", name),
         _ => {

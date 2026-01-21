@@ -9,7 +9,15 @@ class {{ class_name }} private constructor(internal val handle: Long) : AutoClos
 
     constructor({% for param in ctor.signature_params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) : this(
 {%- if ctor.wire_writers.is_empty() %}
+{%- if ctor.is_fallible %}
+        kotlin.run {
+            val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+            if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+            handle
+        }
+{%- else %}
         Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endif %}
 {%- else %}
         kotlin.run {
 {%- for binding in ctor.wire_writers %}
@@ -22,7 +30,13 @@ class {{ class_name }} private constructor(internal val handle: Long) : AutoClos
                     {{ binding.encode_expr }}
                 }
 {%- endfor %}
+{%- if ctor.is_fallible %}
+                val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+                if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+                handle
+{%- else %}
                 Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endif %}
             } finally {
 {%- for binding_name in ctor.wire_writer_closes %}
                 {{ binding_name }}.close()
@@ -35,7 +49,15 @@ class {{ class_name }} private constructor(internal val handle: Long) : AutoClos
 
     constructor({% for param in ctor.signature_params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) : this(
 {%- if ctor.wire_writers.is_empty() %}
+{%- if ctor.is_fallible %}
+        kotlin.run {
+            val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+            if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+            handle
+        }
+{%- else %}
         Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endif %}
 {%- else %}
         kotlin.run {
 {%- for binding in ctor.wire_writers %}
@@ -48,7 +70,13 @@ class {{ class_name }} private constructor(internal val handle: Long) : AutoClos
                     {{ binding.encode_expr }}
                 }
 {%- endfor %}
+{%- if ctor.is_fallible %}
+                val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+                if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+                handle
+{%- else %}
                 Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endif %}
             } finally {
 {%- for binding_name in ctor.wire_writer_closes %}
                 {{ binding_name }}.close()
@@ -69,7 +97,13 @@ class {{ class_name }} private constructor(internal val handle: Long) : AutoClos
 {%- for ctor in constructors %}{% if ctor.is_factory && (use_companion_methods || ctor.signature_params.is_empty()) %}
         fun {{ ctor.name }}({% for param in ctor.signature_params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ class_name }} {
 {%- if ctor.wire_writers.is_empty() %}
+{%- if ctor.is_fallible %}
+            val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+            if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+            return {{ class_name }}(handle)
+{%- else %}
             return {{ class_name }}(Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %}))
+{%- endif %}
 {%- else %}
 {%- for binding in ctor.wire_writers %}
             val {{ binding.binding_name }} = WireWriterPool.acquire({{ binding.size_expr }})
@@ -81,7 +115,13 @@ class {{ class_name }} private constructor(internal val handle: Long) : AutoClos
                     {{ binding.encode_expr }}
                 }
 {%- endfor %}
+{%- if ctor.is_fallible %}
+                val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+                if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+                return {{ class_name }}(handle)
+{%- else %}
                 return {{ class_name }}(Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %}))
+{%- endif %}
             } finally {
 {%- for binding_name in ctor.wire_writer_closes %}
                 {{ binding_name }}.close()

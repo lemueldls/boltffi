@@ -53,7 +53,7 @@ impl ClassTemplate {
                         } else {
                             naming::class_ffi_new(&class.name)
                         },
-                        is_failable: false,
+                        is_failable: ctor.is_fallible,
                         is_factory,
                         first_param_name: first_param
                             .map(|p| p.swift_name.clone())
