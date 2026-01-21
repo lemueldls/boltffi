@@ -44,10 +44,10 @@ extension {{ class_name }}: WireEncodable {
         case .{{ variant.swift_name }}:
             return 4
 {%- else if variant.is_single_tuple %}
-        case .{{ variant.swift_name }}:
+        case let .{{ variant.swift_name }}(value):
             return 4 + {{ variant.fields[0].wire_size }}
 {%- else %}
-        case .{{ variant.swift_name }}:
+        case let .{{ variant.swift_name }}({% for field in variant.fields %}{{ field.swift_name }}: {{ field.swift_name }}{% if !loop.last %}, {% endif %}{% endfor %}):
             return 4{% for field in variant.fields %} + {{ field.wire_size }}{% endfor %}
 {%- endif %}
 {%- endfor %}

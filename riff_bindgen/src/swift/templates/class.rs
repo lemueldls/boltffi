@@ -5,6 +5,7 @@ use crate::model::{Class, Module, StreamMode};
 
 use super::super::body::BodyRenderer;
 use super::super::conversion::{ParamInfo, ParamsInfo};
+use super::super::marshal::SyncCallBuilder;
 use super::super::names::NamingConvention;
 use super::super::types::TypeMapper;
 
@@ -37,6 +38,10 @@ impl ClassTemplate {
                         ctor.inputs.iter().map(|p| (p.name.as_str(), &p.param_type)),
                         &NamingConvention::class_name(&class.name),
                     );
+                    let call_builder = SyncCallBuilder::new(false).with_params(
+                        ctor.inputs.iter().map(|p| (p.name.as_str(), &p.param_type)),
+                        module,
+                    );
                     let is_factory = !ctor.is_default();
                     let first_param = params_info.params.first();
                     let rest_params: Vec<_> = params_info.params.iter().skip(1).cloned().collect();
@@ -58,6 +63,9 @@ impl ClassTemplate {
                             .unwrap_or_default(),
                         rest_params,
                         params: params_info.params,
+                        wrappers_open: call_builder.build_wrappers_open(),
+                        wrappers_close: call_builder.build_wrappers_close(),
+                        ffi_args: call_builder.build_ffi_args(),
                     }
                 })
                 .collect(),
@@ -123,6 +131,9 @@ pub struct ConstructorView {
     pub first_param_name: String,
     pub first_param_type: String,
     pub rest_params: Vec<ParamInfo>,
+    pub wrappers_open: String,
+    pub wrappers_close: String,
+    pub ffi_args: String,
 }
 
 pub struct MethodView {

@@ -25,6 +25,10 @@ impl KotlinBufferRead for Primitive {
     fn buffer_conversion(&self) -> &'static str {
         match self {
             Self::Bool => " != 0.toByte()",
+            Self::U8 => ".toUByte()",
+            Self::U16 => ".toUShort()",
+            Self::U32 => ".toUInt()",
+            Self::U64 | Self::Usize => ".toULong()",
             _ => "",
         }
     }

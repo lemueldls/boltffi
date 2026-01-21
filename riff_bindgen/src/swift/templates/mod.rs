@@ -31,6 +31,7 @@ use super::marshal::SyncCallBuilder;
 pub(crate) struct MethodContext {
     pub ffi_name: String,
     pub wrappers_open: String,
+    pub wrappers_open_throwing: String,
     pub wrappers_close: String,
     pub ffi_args: String,
 }
@@ -51,6 +52,7 @@ impl MethodContext {
         Self {
             ffi_name: naming::method_ffi_name(&class.name, &method.name),
             wrappers_open: call_builder.build_wrappers_open(),
+            wrappers_open_throwing: call_builder.build_wrappers_open_throwing(),
             wrappers_close: call_builder.build_wrappers_close(),
             ffi_args: call_builder.build_ffi_args(),
         }
@@ -67,6 +69,7 @@ impl MethodContext {
         Self {
             ffi_name: naming::method_ffi_name(&class.name, &method.name),
             wrappers_open: call_builder.build_wrappers_open(),
+            wrappers_open_throwing: call_builder.build_wrappers_open_throwing(),
             wrappers_close: call_builder.build_wrappers_close(),
             ffi_args: call_builder.build_ffi_args(),
         }

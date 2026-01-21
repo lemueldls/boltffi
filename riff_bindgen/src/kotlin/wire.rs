@@ -1,5 +1,5 @@
 use super::names::NamingConvention;
-use crate::model::{Module, Primitive, Type};
+use crate::model::{BuiltinId, Module, Primitive, Type};
 
 const OFFSET_PLACEHOLDER: &str = "OFFSET";
 
@@ -86,6 +86,7 @@ pub fn decode_type(ty: &Type, module: &Module) -> KotlinCodec {
         Type::Record(name) => decode_record(name, module),
         Type::Enum(name) => decode_enum(name, module),
         Type::Custom { name, .. } => decode_custom(name),
+        Type::Builtin(id) => decode_builtin(*id),
         Type::Vec(inner) => decode_vec(inner, module),
         Type::Option(inner) => decode_option(inner, module),
         Type::Result { ok, err } => decode_result(ok, err, module),
@@ -113,6 +114,24 @@ fn decode_custom(name: &str) -> KotlinCodec {
         "{}.decode(wire, {})",
         class_name, OFFSET_PLACEHOLDER
     ))
+}
+
+fn decode_builtin(id: BuiltinId) -> KotlinCodec {
+    match id {
+        BuiltinId::Duration => KotlinCodec::fixed(
+            format!("wire.readDuration({})", OFFSET_PLACEHOLDER),
+            12,
+        ),
+        BuiltinId::SystemTime => KotlinCodec::fixed(
+            format!("wire.readInstant({})", OFFSET_PLACEHOLDER),
+            12,
+        ),
+        BuiltinId::Uuid => KotlinCodec::fixed(
+            format!("wire.readUuid({})", OFFSET_PLACEHOLDER),
+            16,
+        ),
+        BuiltinId::Url => KotlinCodec::variable(format!("wire.readUri({})", OFFSET_PLACEHOLDER)),
+    }
 }
 
 fn decode_enum(name: &str, module: &Module) -> KotlinCodec {
@@ -213,6 +232,7 @@ pub fn encode_type(ty: &Type, name: &str, module: &Module) -> KotlinEncoder {
         Type::Record(record_name) => encode_record(record_name, name, module),
         Type::Enum(enum_name) => encode_enum(enum_name, name, module),
         Type::Custom { .. } => encode_custom(name),
+        Type::Builtin(id) => encode_builtin(*id, name),
         Type::Vec(inner) => encode_vec(inner, name, module),
         Type::Option(inner) => encode_option(inner, name, module),
         Type::Result { ok, err } => encode_result(ok, err, name, module),
@@ -257,6 +277,27 @@ fn encode_custom(field_name: &str) -> KotlinEncoder {
     }
 }
 
+fn encode_builtin(id: BuiltinId, name: &str) -> KotlinEncoder {
+    match id {
+        BuiltinId::Duration => KotlinEncoder {
+            size_expr: "12".into(),
+            encode_expr: format!("wire.writeDuration({})", name),
+        },
+        BuiltinId::SystemTime => KotlinEncoder {
+            size_expr: "12".into(),
+            encode_expr: format!("wire.writeInstant({})", name),
+        },
+        BuiltinId::Uuid => KotlinEncoder {
+            size_expr: "16".into(),
+            encode_expr: format!("wire.writeUuid({})", name),
+        },
+        BuiltinId::Url => KotlinEncoder {
+            size_expr: format!("(4 + Utf8Codec.maxBytes({}.toString()))", name),
+            encode_expr: format!("wire.writeUri({})", name),
+        },
+    }
+}
+
 fn encode_enum(enum_name: &str, field_name: &str, module: &Module) -> KotlinEncoder {
     let is_data = module.is_data_enum(enum_name);
 
@@ -289,6 +330,11 @@ fn encode_vec(inner: &Type, name: &str, module: &Module) -> KotlinEncoder {
 
     let size_expr = match inner {
         Type::Primitive(p) => format!("(4 + {}.size * {})", name, p.size_bytes()),
+        Type::Builtin(id) if id.fixed_wire_size().is_some() => format!(
+            "(4 + {}.size * {})",
+            name,
+            id.fixed_wire_size().unwrap()
+        ),
         Type::Record(_) if record_struct_size.is_some() => {
             format!("(4 + {}.size * {})", name, record_struct_size.unwrap())
         }

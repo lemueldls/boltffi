@@ -5,9 +5,9 @@ use heck::ToShoutySnakeCase;
 use riff_ffi_rules::naming;
 
 use crate::model::{
-    CallbackTrait, Class, ClosureSignature, CustomType, DataEnumLayout, Enumeration, Function,
-    Method, Module, Primitive, Record, RecordField, ReturnType, TraitMethod, TraitMethodParam,
-    Type,
+    BuiltinId, CallbackTrait, Class, ClosureSignature, CustomType, DataEnumLayout, Enumeration,
+    Function, Method, Module, Primitive, Record, RecordField, ReturnType, TraitMethod,
+    TraitMethodParam, Type,
 };
 
 use super::call_plan::{AsyncCallPlan, ConstructorCallPlan, WireFunctionPlan};
@@ -68,19 +68,143 @@ impl PreambleTemplate {
     }
 
     fn collect_imports(module: &Module) -> Vec<String> {
+        let builtin_imports = Self::collect_builtin_imports(module);
         let has_async_callbacks = module
             .callback_traits
             .iter()
             .any(|t| t.async_methods().count() > 0);
 
-        if has_async_callbacks {
-            vec![
-                "kotlinx.coroutines.DelicateCoroutinesApi".to_string(),
-                "kotlinx.coroutines.GlobalScope".to_string(),
-                "kotlinx.coroutines.launch".to_string(),
-            ]
-        } else {
-            Vec::new()
+        let coroutine_imports = has_async_callbacks
+            .then(|| {
+                vec![
+                    "kotlinx.coroutines.DelicateCoroutinesApi".to_string(),
+                    "kotlinx.coroutines.GlobalScope".to_string(),
+                    "kotlinx.coroutines.launch".to_string(),
+                ]
+            })
+            .unwrap_or_default();
+
+        builtin_imports
+            .into_iter()
+            .chain(coroutine_imports)
+            .collect()
+    }
+
+    fn collect_builtin_imports(module: &Module) -> Vec<String> {
+        let mut used = HashSet::<BuiltinId>::new();
+
+        module.functions.iter().for_each(|function| {
+            function
+                .inputs
+                .iter()
+                .for_each(|param| Self::collect_builtins_from_type(&param.param_type, &mut used));
+            Self::collect_builtins_from_return(&function.returns, &mut used);
+        });
+
+        module.classes.iter().for_each(|class| {
+            class.constructors.iter().for_each(|constructor| {
+                constructor.inputs.iter().for_each(|param| {
+                    Self::collect_builtins_from_type(&param.param_type, &mut used);
+                })
+            });
+
+            class.methods.iter().for_each(|method| {
+                method
+                    .inputs
+                    .iter()
+                    .for_each(|param| Self::collect_builtins_from_type(&param.param_type, &mut used));
+                Self::collect_builtins_from_return(&method.returns, &mut used);
+            });
+
+            class.streams.iter().for_each(|stream| {
+                Self::collect_builtins_from_type(&stream.item_type, &mut used);
+            });
+        });
+
+        module
+            .records
+            .iter()
+            .for_each(|record| record.fields.iter().for_each(|f| Self::collect_builtins_from_type(&f.field_type, &mut used)));
+
+        module.enums.iter().for_each(|enumeration| {
+            enumeration.variants.iter().for_each(|variant| {
+                variant
+                    .fields
+                    .iter()
+                    .for_each(|field| Self::collect_builtins_from_type(&field.field_type, &mut used));
+            });
+        });
+
+        module.custom_types.iter().for_each(|custom_type| {
+            Self::collect_builtins_from_type(&custom_type.repr, &mut used);
+        });
+
+        module.callback_traits.iter().for_each(|trait_| {
+            trait_.methods.iter().for_each(|method| {
+                method.inputs.iter().for_each(|param| {
+                    Self::collect_builtins_from_type(&param.param_type, &mut used);
+                });
+                Self::collect_builtins_from_return(&method.returns, &mut used);
+            });
+        });
+
+        [
+            (BuiltinId::Duration, "java.time.Duration"),
+            (BuiltinId::SystemTime, "java.time.Instant"),
+            (BuiltinId::Uuid, "java.util.UUID"),
+            (BuiltinId::Url, "java.net.URI"),
+        ]
+        .into_iter()
+        .filter(|(id, _)| used.contains(id))
+        .map(|(_, import)| import.to_string())
+        .filter(|import| {
+            !matches!(
+                import.as_str(),
+                "java.net.URI" | "java.time.Duration" | "java.time.Instant" | "java.util.UUID"
+            )
+        })
+        .collect()
+    }
+
+    fn collect_builtins_from_return(returns: &ReturnType, out: &mut HashSet<BuiltinId>) {
+        match returns {
+            ReturnType::Void => {}
+            ReturnType::Value(ty) => Self::collect_builtins_from_type(ty, out),
+            ReturnType::Fallible { ok, err } => {
+                Self::collect_builtins_from_type(ok, out);
+                Self::collect_builtins_from_type(err, out);
+            }
+        }
+    }
+
+    fn collect_builtins_from_type(ty: &Type, out: &mut HashSet<BuiltinId>) {
+        match ty {
+            Type::Builtin(id) => {
+                out.insert(*id);
+            }
+            Type::Vec(inner)
+            | Type::Option(inner)
+            | Type::Slice(inner)
+            | Type::MutSlice(inner) => Self::collect_builtins_from_type(inner, out),
+            Type::Result { ok, err } => {
+                Self::collect_builtins_from_type(ok, out);
+                Self::collect_builtins_from_type(err, out);
+            }
+            Type::Custom { repr, .. } => Self::collect_builtins_from_type(repr, out),
+            Type::Closure(sig) => {
+                sig.params
+                    .iter()
+                    .for_each(|param| Self::collect_builtins_from_type(param, out));
+                Self::collect_builtins_from_type(&sig.returns, out);
+            }
+            Type::Primitive(_)
+            | Type::String
+            | Type::Bytes
+            | Type::Record(_)
+            | Type::Enum(_)
+            | Type::Object(_)
+            | Type::BoxedTrait(_)
+            | Type::Void => {}
         }
     }
 }
@@ -350,6 +474,33 @@ impl SealedEnumTemplate {
     }
 
     pub fn from_enum_with_module(enumeration: &Enumeration, module: &Module) -> Self {
+        let reserved_type_names = module
+            .records
+            .iter()
+            .map(|record| NamingConvention::class_name(&record.name))
+            .chain(
+                module
+                    .enums
+                    .iter()
+                    .map(|enumeration| NamingConvention::class_name(&enumeration.name)),
+            )
+            .chain(
+                module
+                    .classes
+                    .iter()
+                    .map(|class| NamingConvention::class_name(&class.name)),
+            )
+            .chain(
+                module
+                    .custom_types
+                    .iter()
+                    .map(|custom| NamingConvention::class_name(&custom.name)),
+            )
+            .chain(["Duration", "Instant", "UUID", "URI"].into_iter().map(str::to_string))
+            .collect::<HashSet<_>>();
+
+        let mut used_variant_names = HashSet::<String>::new();
+
         let variants = enumeration
             .variants
             .iter()
@@ -359,8 +510,22 @@ impl SealedEnumTemplate {
                     f.name.starts_with('_')
                         && f.name.chars().nth(1).map_or(false, |c| c.is_ascii_digit())
                 });
+
+                let base_variant_name = NamingConvention::class_name(&variant.name);
+                let mut variant_name = if reserved_type_names.contains(&base_variant_name) {
+                    format!("{base_variant_name}Value")
+                } else {
+                    base_variant_name
+                };
+
+                if used_variant_names.contains(&variant_name) {
+                    variant_name = format!("{variant_name}{tag}");
+                }
+
+                used_variant_names.insert(variant_name.clone());
+
                 SealedVariantView {
-                    name: NamingConvention::class_name(&variant.name),
+                    name: variant_name,
                     tag,
                     is_tuple,
                     fields: variant
@@ -576,6 +741,7 @@ impl<'a> KotlinDefaults<'a> {
             Type::Primitive(_)
             | Type::String
             | Type::Bytes
+            | Type::Builtin(_)
             | Type::Vec(_)
             | Type::Slice(_)
             | Type::MutSlice(_)
@@ -1037,6 +1203,7 @@ pub struct WireMethodTemplate {
     pub throws: bool,
     pub err_type: String,
     pub is_blittable_return: bool,
+    pub include_handle: bool,
 }
 
 impl WireMethodTemplate {
@@ -1072,6 +1239,7 @@ impl WireMethodTemplate {
             throws: plan.throws,
             err_type: plan.err_type,
             is_blittable_return: plan.is_blittable_return,
+            include_handle: !method.is_static(),
         }
     }
 }
@@ -1095,6 +1263,7 @@ pub struct AsyncMethodTemplate {
     pub throws: bool,
     pub err_type: String,
     pub is_blittable_return: bool,
+    pub include_handle: bool,
 }
 
 impl AsyncMethodTemplate {
@@ -1132,6 +1301,7 @@ impl AsyncMethodTemplate {
             throws: plan.throws,
             err_type: plan.err_type,
             is_blittable_return: plan.is_blittable_return,
+            include_handle: !method.is_static(),
         }
     }
 }
@@ -1194,6 +1364,7 @@ pub struct NativeSyncMethodView {
     pub ffi_name: String,
     pub params: Vec<NativeParamView>,
     pub return_jni_type: String,
+    pub include_handle: bool,
 }
 
 pub struct NativeAsyncMethodView {
@@ -1207,6 +1378,7 @@ pub struct NativeAsyncMethodView {
     pub ffi_complete: String,
     pub ffi_cancel: String,
     pub ffi_free: String,
+    pub include_handle: bool,
 }
 
 impl NativeTemplate {
@@ -1354,6 +1526,7 @@ impl NativeTemplate {
                             ffi_complete: naming::method_ffi_complete(&class.name, &method.name),
                             ffi_cancel: naming::method_ffi_cancel(&class.name, &method.name),
                             ffi_free: naming::method_ffi_free(&class.name, &method.name),
+                            include_handle: !method.is_static(),
                         }
                     })
                     .collect();
@@ -1380,6 +1553,7 @@ impl NativeTemplate {
                                 })
                                 .collect(),
                             return_jni_type: Self::wire_return_jni_type(&return_abi),
+                            include_handle: !method.is_static(),
                         }
                     })
                     .collect();

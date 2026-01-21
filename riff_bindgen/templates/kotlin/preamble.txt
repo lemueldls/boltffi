@@ -11,6 +11,10 @@ import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.jvm.JvmInline
+import java.net.URI
+import java.time.Duration
+import java.time.Instant
+import java.util.UUID
 {%- for import in extra_imports %}
 import {{ import }}
 {%- endfor %}
@@ -116,6 +120,36 @@ class WireBuffer private constructor(private val buffer: ByteBuffer) {
     fun readU64(offset: Int): ULong = buffer.getLong(offset).toULong()
     fun readF32(offset: Int): Float = buffer.getFloat(offset)
     fun readF64(offset: Int): Double = buffer.getDouble(offset)
+
+    fun readDuration(offset: Int): Duration {
+        val seconds = readI64(offset)
+        val nanos = readI32(offset + 8).toLong()
+        require(seconds >= 0L) { "Duration out of range" }
+        require(nanos >= 0L) { "Duration nanos out of range" }
+        return Duration.ofSeconds(seconds, nanos)
+    }
+
+    fun readInstant(offset: Int): Instant {
+        val seconds = readI64(offset)
+        val nanos = readI32(offset + 8).toLong()
+        require(nanos >= 0L) { "Instant nanos out of range" }
+        if (seconds >= 0L) {
+            return Instant.EPOCH.plus(Duration.ofSeconds(seconds, nanos))
+        }
+        require(seconds != Long.MIN_VALUE) { "Instant out of range" }
+        return Instant.EPOCH.minus(Duration.ofSeconds(-seconds, nanos))
+    }
+
+    fun readUuid(offset: Int): UUID {
+        val msb = readI64(offset)
+        val lsb = readI64(offset + 8)
+        return UUID(msb, lsb)
+    }
+
+    fun readUri(offset: Int): Pair<URI, Int> {
+        val (value, size) = readString(offset)
+        return URI.create(value) to size
+    }
 
     fun readString(offset: Int): Pair<String, Int> {
         val len = readU32(offset).toInt()
@@ -323,6 +357,34 @@ class WireWriter(initialCapacity: Int = 256) {
 
     fun writeF32(v: Float) = writeI32(java.lang.Float.floatToRawIntBits(v))
     fun writeF64(v: Double) = writeI64(java.lang.Double.doubleToRawLongBits(v))
+
+    fun writeDuration(v: Duration) {
+        require(v.seconds >= 0L) { "Invalid duration, must be non-negative" }
+        require(v.nano >= 0) { "Invalid duration nanos" }
+        writeI64(v.seconds)
+        writeI32(v.nano)
+    }
+
+    fun writeInstant(v: Instant) {
+        var epochOffset = Duration.between(Instant.EPOCH, v)
+        var sign = 1L
+        if (epochOffset.isNegative) {
+            sign = -1L
+            epochOffset = epochOffset.negated()
+        }
+        require(epochOffset.nano >= 0) { "Invalid instant nanos" }
+        writeI64(sign * epochOffset.seconds)
+        writeI32(epochOffset.nano)
+    }
+
+    fun writeUuid(v: UUID) {
+        writeI64(v.mostSignificantBits)
+        writeI64(v.leastSignificantBits)
+    }
+
+    fun writeUri(v: URI) {
+        writeString(v.toString())
+    }
 
     fun writeString(v: String) {
         val bytes = v.toByteArray(Charsets.UTF_8)

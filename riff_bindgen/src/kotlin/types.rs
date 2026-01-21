@@ -1,4 +1,4 @@
-use crate::model::{Primitive, Type};
+use crate::model::{BuiltinId, Primitive, Type};
 
 use super::NamingConvention;
 use super::primitives;
@@ -11,6 +11,7 @@ impl TypeMapper {
             Type::Primitive(primitive) => Self::map_primitive(primitive),
             Type::String => "String".into(),
             Type::Bytes => "ByteArray".into(),
+            Type::Builtin(id) => Self::map_builtin(*id),
             Type::Slice(inner) | Type::Vec(inner) => Self::map_sequence(inner),
             Type::MutSlice(inner) => Self::map_mutable_sequence(inner),
             Type::Option(inner) => format!("{}?", Self::map_type(inner)),
@@ -35,6 +36,15 @@ impl TypeMapper {
             Type::Enum(name) => NamingConvention::class_name(name),
             Type::BoxedTrait(name) => NamingConvention::class_name(name),
             Type::Void => "Unit".into(),
+        }
+    }
+
+    fn map_builtin(id: BuiltinId) -> String {
+        match id {
+            BuiltinId::Duration => "Duration".to_string(),
+            BuiltinId::SystemTime => "Instant".to_string(),
+            BuiltinId::Uuid => "UUID".to_string(),
+            BuiltinId::Url => "URI".to_string(),
         }
     }
 
@@ -74,6 +84,7 @@ impl TypeMapper {
             Type::Primitive(primitive) => Self::jni_primitive(primitive),
             Type::String => "String".into(),
             Type::Bytes => "ByteArray".into(),
+            Type::Builtin(id) => Self::map_builtin(*id),
             Type::Object(_) | Type::BoxedTrait(_) => "Long".into(),
             Type::Record(name) => NamingConvention::class_name(name),
             Type::Custom { name, .. } => NamingConvention::class_name(name),
@@ -115,6 +126,7 @@ impl TypeMapper {
             Type::Primitive(primitive) => Self::c_jni_primitive(primitive),
             Type::String => "jstring".into(),
             Type::Bytes => "jbyteArray".into(),
+            Type::Builtin(_) => "jobject".into(),
             Type::Object(_) | Type::BoxedTrait(_) => "jlong".into(),
             Type::Record(_) => "jlong".into(),
             Type::Custom { .. } => "jlong".into(),
@@ -140,6 +152,12 @@ impl TypeMapper {
             Type::Primitive(primitive) => Self::primitive_default(primitive),
             Type::String => "\"\"".into(),
             Type::Bytes => "byteArrayOf()".into(),
+            Type::Builtin(id) => match id {
+                BuiltinId::Duration => "Duration.ZERO".into(),
+                BuiltinId::SystemTime => "Instant.EPOCH".into(),
+                BuiltinId::Uuid => "UUID(0L, 0L)".into(),
+                BuiltinId::Url => "URI.create(\"about:blank\")".into(),
+            },
             Type::Vec(inner) | Type::Slice(inner) | Type::MutSlice(inner) => {
                 if matches!(inner.as_ref(), Type::Primitive(_)) {
                     match inner.as_ref() {

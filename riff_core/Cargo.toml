@@ -8,11 +8,12 @@ authors = ["Ali A. Hilal <me@alihilal.com>"]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
-default = []
+default = ["uuid", "url"]
 fast-alloc = ["mimalloc"]
 uuid = ["dep:uuid"]
 chrono = ["dep:chrono"]
 uom = ["dep:uom"]
+url = ["dep:url"]
 
 [dependencies]
 riff_macros = { path = "../riff_macros" }
@@ -20,6 +21,7 @@ mimalloc = { version = "0.1", default-features = false, optional = true }
 uuid = { version = "1.10.0", default-features = false, features = ["std"], optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
 uom = { version = "0.36", default-features = false, features = ["si", "f64"], optional = true }
+url = { version = "2.5.4", default-features = false, features = ["std"], optional = true }
 
 [lints]
 workspace = true

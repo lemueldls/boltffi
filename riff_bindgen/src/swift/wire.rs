@@ -1,5 +1,5 @@
 use super::names::NamingConvention;
-use crate::model::{Module, Primitive, Type};
+use crate::model::{BuiltinId, Module, Primitive, Type};
 
 const OFFSET_PLACEHOLDER: &str = "OFFSET";
 
@@ -92,6 +92,7 @@ pub fn decode_type(ty: &Type, module: &Module) -> TypeCodec {
     match ty {
         Type::Primitive(p) => decode_primitive(*p),
         Type::String => TypeCodec::variable(format!("wire.readString(at: {})", OFFSET_PLACEHOLDER)),
+        Type::Builtin(id) => decode_builtin(*id),
         Type::Custom { name, .. } => decode_custom(name),
         Type::Record(name) => decode_record(name, module),
         Type::Enum(name) => decode_enum(name, module),
@@ -151,6 +152,27 @@ fn decode_custom(name: &str) -> TypeCodec {
         "{}.decode(wireBuffer: wire, at: {})",
         class_name, OFFSET_PLACEHOLDER
     ))
+}
+
+fn decode_builtin(id: BuiltinId) -> TypeCodec {
+    match id {
+        BuiltinId::Duration => TypeCodec::fixed(
+            format!("wire.readDuration(at: {})", OFFSET_PLACEHOLDER),
+            12,
+        ),
+        BuiltinId::SystemTime => TypeCodec::fixed(
+            format!("wire.readTimestamp(at: {})", OFFSET_PLACEHOLDER),
+            12,
+        ),
+        BuiltinId::Uuid => TypeCodec::fixed(
+            format!("wire.readUuid(at: {})", OFFSET_PLACEHOLDER),
+            16,
+        ),
+        BuiltinId::Url => TypeCodec::variable(format!(
+            "wire.readUrl(at: {})",
+            OFFSET_PLACEHOLDER
+        )),
+    }
 }
 
 fn decode_enum(name: &str, module: &Module) -> TypeCodec {
@@ -257,6 +279,7 @@ pub fn encode_type(ty: &Type, name: &str, module: &Module) -> TypeEncoder {
     match ty {
         Type::Primitive(p) => encode_primitive(*p, name),
         Type::String => encode_string(name),
+        Type::Builtin(id) => encode_builtin(*id, name),
         Type::Record(name_str) => encode_record(name_str, name, module),
         Type::Enum(enum_name) => encode_enum(enum_name, name, module),
         Type::Custom { .. } => encode_custom(name),
@@ -298,6 +321,31 @@ fn encode_string(name: &str) -> TypeEncoder {
         size_expr: format!("(4 + {}.utf8.count)", name),
         encode_to_data: format!("data.appendString({})", name),
         encode_to_bytes: format!("bytes.appendString({})", name),
+    }
+}
+
+fn encode_builtin(id: BuiltinId, name: &str) -> TypeEncoder {
+    match id {
+        BuiltinId::Duration => TypeEncoder {
+            size_expr: "12".into(),
+            encode_to_data: format!("data.appendDuration({})", name),
+            encode_to_bytes: format!("bytes.appendDuration({})", name),
+        },
+        BuiltinId::SystemTime => TypeEncoder {
+            size_expr: "12".into(),
+            encode_to_data: format!("data.appendTimestamp({})", name),
+            encode_to_bytes: format!("bytes.appendTimestamp({})", name),
+        },
+        BuiltinId::Uuid => TypeEncoder {
+            size_expr: "16".into(),
+            encode_to_data: format!("data.appendUuid({})", name),
+            encode_to_bytes: format!("bytes.appendUuid({})", name),
+        },
+        BuiltinId::Url => TypeEncoder {
+            size_expr: format!("(4 + {}.absoluteString.utf8.count)", name),
+            encode_to_data: format!("data.appendString({}.absoluteString)", name),
+            encode_to_bytes: format!("bytes.appendString({}.absoluteString)", name),
+        },
     }
 }
 
@@ -364,20 +412,21 @@ fn encode_vec(inner: &Type, name: &str, module: &Module) -> TypeEncoder {
         .map(|r| r.is_blittable())
         .unwrap_or(false));
 
-    let size_expr = match inner {
-        Type::Primitive(p) => format!("(4 + {}.count * {})", name, p.size_bytes()),
-        Type::Record(_) if is_blittable_record => {
-            format!(
-                "(4 + {}.count * {})",
-                name,
-                inner_encoder.size_expr.replace("ITEM", "")
-            )
-        }
-        _ => {
+    let fixed_item_size = match inner {
+        Type::Primitive(p) => Some(p.size_bytes().to_string()),
+        Type::Record(_) if is_blittable_record => Some(inner_encoder.size_expr.replace("ITEM", "")),
+        Type::Enum(enum_name) if !module.is_data_enum(enum_name) => Some("4".to_string()),
+        Type::Builtin(BuiltinId::Duration | BuiltinId::SystemTime) => Some("12".to_string()),
+        Type::Builtin(BuiltinId::Uuid) => Some("16".to_string()),
+        _ => None,
+    };
+
+    let size_expr = fixed_item_size
+        .map(|fixed| format!("(4 + {}.count * {})", name, fixed))
+        .unwrap_or_else(|| {
             let inner_size = inner_encoder.size_expr.replace("ITEM", "$1");
             format!("(4 + {}.reduce(0) {{ $0 + {} }})", name, inner_size)
-        }
-    };
+        });
 
     let encode_to_data = match inner {
         Type::Primitive(_) => format!("data.appendArray({})", name),

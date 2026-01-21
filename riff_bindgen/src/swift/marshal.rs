@@ -1,4 +1,4 @@
-use crate::model::{Module, Primitive, ReturnType, Type};
+use crate::model::{BuiltinId, Module, Primitive, ReturnType, Type};
 
 use super::names::NamingConvention;
 use super::primitives;
@@ -10,6 +10,7 @@ pub enum SwiftType {
     Primitive(Primitive),
     String,
     Bytes,
+    Builtin(BuiltinId),
     Slice {
         inner: Box<SwiftType>,
         mutable: bool,
@@ -36,6 +37,7 @@ impl SwiftType {
             Type::Primitive(p) => Self::Primitive(*p),
             Type::String => Self::String,
             Type::Bytes => Self::Bytes,
+            Type::Builtin(id) => Self::Builtin(*id),
             Type::Slice(inner) => Self::Slice {
                 inner: Box::new(Self::from_model(inner)),
                 mutable: false,
@@ -67,6 +69,12 @@ impl SwiftType {
             Self::Primitive(p) => primitives::info(*p).swift_type.into(),
             Self::String => "String".into(),
             Self::Bytes => "Data".into(),
+            Self::Builtin(id) => match id {
+                BuiltinId::Duration => "TimeInterval".into(),
+                BuiltinId::SystemTime => "Date".into(),
+                BuiltinId::Uuid => "UUID".into(),
+                BuiltinId::Url => "URL".into(),
+            },
             Self::Slice { inner, .. } | Self::Vec(inner) => format!("[{}]", inner.swift_type()),
             Self::Option(inner) => format!("{}?", inner.swift_type()),
             Self::Result { ok } => ok.swift_type(),
@@ -210,7 +218,35 @@ impl ParamConversion {
                 )],
                 None,
             ),
+            SwiftType::Option(inner) if matches!(inner.as_ref(), SwiftType::BoxedTrait(_)) => {
+                let SwiftType::BoxedTrait(trait_name) = inner.as_ref() else {
+                    unreachable!()
+                };
+                (
+                    None,
+                    vec![format!(
+                        "{}.map {{ {}Bridge.create($0) }}",
+                        swift_name,
+                        NamingConvention::class_name(trait_name)
+                    )],
+                    None,
+                )
+            }
             SwiftType::Record(_) => (
+                Some(format!(
+                    "{}.wireEncode().withUnsafeBytes {{ {}Ptr in",
+                    swift_name, swift_name
+                )),
+                vec![
+                    format!(
+                        "{}Ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)",
+                        swift_name
+                    ),
+                    format!("UInt({}Ptr.count)", swift_name),
+                ],
+                Some("}".into()),
+            ),
+            SwiftType::Builtin(_) => (
                 Some(format!(
                     "{}.wireEncode().withUnsafeBytes {{ {}Ptr in",
                     swift_name, swift_name
@@ -227,7 +263,7 @@ impl ParamConversion {
             SwiftType::Option(inner)
                 if matches!(
                     inner.as_ref(),
-                    SwiftType::Record(_) | SwiftType::Enum(_) | SwiftType::Vec(_)
+                    SwiftType::Builtin(_) | SwiftType::Record(_) | SwiftType::Enum(_) | SwiftType::Vec(_)
                 ) =>
             {
                 (
@@ -293,6 +329,15 @@ impl SyncCallBuilder {
             .join("\n")
     }
 
+    pub fn build_wrappers_open_throwing(&self) -> String {
+        self.params
+            .iter()
+            .filter_map(|p| p.wrapper_pre.as_ref())
+            .map(|line| format!("try {}", line))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn build_wrappers_close(&self) -> String {
         self.params
             .iter()
@@ -349,6 +394,7 @@ impl ReturnAbi {
                 conversion: None,
             },
             Type::String
+            | Type::Builtin(_)
             | Type::Record(_)
             | Type::Custom { .. }
             | Type::Enum(_)
@@ -413,8 +459,10 @@ impl ReturnAbi {
     fn error_decode_expr(err: &Type, err_swift: &str) -> String {
         match err {
             Type::String => "FfiError(message: wire.readString(at: $0).value)".into(),
-            Type::Enum(_) => format!("{}.decode(wireBuffer: wire, at: $0).value", err_swift),
-            _ => "FfiError(message: \"unknown error\")".into(),
+            Type::Enum(_) if err_swift != "FfiError" => {
+                format!("{}.decode(wireBuffer: wire, at: $0).value", err_swift)
+            }
+            _ => "({ _ in FfiError(message: \"unknown error\") })($0)".into(),
         }
     }
 

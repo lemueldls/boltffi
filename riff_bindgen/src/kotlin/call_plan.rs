@@ -164,6 +164,7 @@ impl WireFunctionPlan {
     fn supports_wire_type(ty: &Type, module: &Module) -> bool {
         match ty {
             Type::Primitive(_) | Type::String | Type::Bytes | Type::Void => true,
+            Type::Builtin(_) => true,
             Type::Vec(inner) | Type::Option(inner) => Self::supports_wire_type(inner, module),
             Type::Result { ok, err } => {
                 Self::supports_wire_type(ok, module) && Self::supports_wire_type(err, module)
@@ -409,6 +410,7 @@ impl AsyncCallPlan {
     fn supports_value_type(ty: &Type, module: &Module) -> bool {
         match ty {
             Type::Void | Type::Primitive(_) | Type::String | Type::Bytes => true,
+            Type::Builtin(_) => true,
             Type::Vec(inner) | Type::Option(inner) => Self::supports_value_type(inner, module),
             Type::Result { ok, err } => {
                 Self::supports_value_type(ok, module) && Self::supports_value_type(err, module)

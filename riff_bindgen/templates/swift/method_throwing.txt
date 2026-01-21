@@ -1,13 +1,13 @@
 {%- if self.has_wrappers() %}
-        {{ wrappers_open }}
+        return {% if return_abi.throws() %}{{ wrappers_open_throwing }}{% else %}{{ wrappers_open }}{% endif %}
             let buf = {{ ffi_name }}({{ ffi_args }})
             defer { {{ prefix }}_free_buf_u8(buf) }
             let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
-            return {{ decode_expr }}
+            return {{ return_abi.decode_expr() }}
         {{ wrappers_close }}
 {%- else %}
         let buf = {{ ffi_name }}({{ ffi_args }})
         defer { {{ prefix }}_free_buf_u8(buf) }
         let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
-        return {{ decode_expr }}
+        return {{ return_abi.decode_expr() }}
 {%- endif %}

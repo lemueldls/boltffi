@@ -1046,6 +1046,7 @@ impl JniParamInfo {
 
     fn needs_wire_encoding(ty: &Type, _module: &Module) -> bool {
         match ty {
+            Type::Builtin(_) => true,
             Type::Record(_) => true,
             Type::Enum(_) => true,
             Type::Vec(inner) | Type::Slice(inner) | Type::MutSlice(inner) => {

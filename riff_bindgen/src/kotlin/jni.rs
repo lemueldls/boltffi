@@ -70,6 +70,7 @@ pub struct JniWireMethodTemplate {
     pub jni_params: String,
     pub params: Vec<JniParamInfo>,
     pub return_abi: ReturnAbi,
+    pub include_handle: bool,
 }
 
 impl JniWireMethodTemplate {
@@ -106,6 +107,7 @@ impl JniWireMethodTemplate {
             jni_params,
             params,
             return_abi,
+            include_handle: !method.is_static(),
         }
     }
 }

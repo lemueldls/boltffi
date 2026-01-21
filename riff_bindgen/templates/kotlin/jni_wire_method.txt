@@ -1,10 +1,12 @@
-JNIEXPORT {{ return_abi.jni_return_type() }} JNICALL {{ jni_name }}(JNIEnv *env, jclass cls, jlong handle{{ jni_params }}) {
+JNIEXPORT {{ return_abi.jni_return_type() }} JNICALL {{ jni_name }}(JNIEnv *env, jclass cls{% if include_handle %}, jlong handle{% endif %}{{ jni_params }}) {
+{%- if include_handle %}
 {%- if return_abi.is_unit() %}
     if (handle == 0) return;
 {%- else if return_abi.is_direct() %}
     if (handle == 0) return 0;
 {%- else %}
     if (handle == 0) return NULL;
+{%- endif %}
 {%- endif %}
 {%- for param in params %}
 {%- if param.is_string %}
@@ -24,11 +26,11 @@ JNIEXPORT {{ return_abi.jni_return_type() }} JNICALL {{ jni_name }}(JNIEnv *env,
 {%- endif %}
 {%- endfor %}
 {%- if return_abi.is_unit() %}
-    {{ ffi_name }}((void*)handle{% if params.len() > 0 %}, {% endif %}{% for param in params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
+    {{ ffi_name }}({% if include_handle %}(void*)handle{% if params.len() > 0 %}, {% endif %}{% endif %}{% for param in params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
 {%- else if return_abi.is_direct() %}
-    {{ return_abi.jni_c_return_type() }} _result = {{ ffi_name }}((void*)handle{% if params.len() > 0 %}, {% endif %}{% for param in params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
+    {{ return_abi.jni_c_return_type() }} _result = {{ ffi_name }}({% if include_handle %}(void*)handle{% if params.len() > 0 %}, {% endif %}{% endif %}{% for param in params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
 {%- else if return_abi.is_wire_encoded() %}
-    FfiBuf_u8 _buf = {{ ffi_name }}((void*)handle{% if params.len() > 0 %}, {% endif %}{% for param in params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
+    FfiBuf_u8 _buf = {{ ffi_name }}({% if include_handle %}(void*)handle{% if params.len() > 0 %}, {% endif %}{% endif %}{% for param in params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
 {%- endif %}
 {%- for param in params %}
 {%- if param.is_primitive_array() %}

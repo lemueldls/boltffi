@@ -528,6 +528,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             Type::String
             | Type::Vec(_)
             | Type::Option(_)
+            | Type::Builtin(_)
             | Type::Record(_)
             | Type::Enum(_)
             | Type::Custom { .. } => true,
@@ -733,8 +734,10 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
     ) -> String {
         let ffi_name = format!("{}_{}", class_prefix, method.name);
 
-        let mut params: Vec<(String, String)> =
-            vec![("handle".to_string(), format!("struct {} *", class_name))];
+        let mut params: Vec<(String, String)> = method
+            .is_static()
+            .then_some(Vec::new())
+            .unwrap_or_else(|| vec![("handle".to_string(), format!("struct {} *", class_name))]);
 
         for p in &method.inputs {
             params.extend(Self::param_to_c(&p.name, &p.param_type, module));
@@ -774,8 +777,12 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                 (format!("{}_ptr", name), "const uint8_t*".to_string()),
                 (format!("{}_len", name), "uintptr_t".to_string()),
             ],
+            Type::Builtin(_) => vec![
+                (format!("{}_ptr", name), "const uint8_t*".to_string()),
+                (format!("{}_len", name), "uintptr_t".to_string()),
+            ],
             Type::Slice(inner) => {
-                if matches!(inner.as_ref(), Type::Record(_)) {
+                if matches!(inner.as_ref(), Type::Record(_) | Type::Builtin(_)) {
                     vec![
                         (format!("{}_ptr", name), "const uint8_t*".to_string()),
                         (format!("{}_len", name), "uintptr_t".to_string()),
@@ -791,7 +798,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                 }
             }
             Type::MutSlice(inner) => {
-                if matches!(inner.as_ref(), Type::Record(_)) {
+                if matches!(inner.as_ref(), Type::Record(_) | Type::Builtin(_)) {
                     vec![
                         (format!("{}_ptr", name), "uint8_t*".to_string()),
                         (format!("{}_len", name), "uintptr_t".to_string()),
@@ -809,7 +816,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             Type::Vec(inner) => {
                 if matches!(
                     inner.as_ref(),
-                    Type::Record(_) | Type::Vec(_) | Type::Enum(_)
+                    Type::Builtin(_) | Type::Record(_) | Type::Vec(_) | Type::Enum(_)
                 ) {
                     vec![
                         (format!("{}_ptr", name), "const uint8_t*".to_string()),
@@ -828,9 +835,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             Type::Option(inner) => {
                 if matches!(
                     inner.as_ref(),
-                    Type::Record(_)
-                        | Type::Enum(_)
-                        | Type::Vec(_)
+                    Type::Builtin(_) | Type::Record(_) | Type::Enum(_) | Type::Vec(_)
                 ) {
                     vec![
                         (format!("{}_ptr", name), "const uint8_t*".to_string()),
@@ -878,6 +883,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         match ty {
             Type::Record(_) => vec!["const uint8_t*".to_string(), "uintptr_t".to_string()],
             Type::String => vec!["const uint8_t*".to_string(), "uintptr_t".to_string()],
+            Type::Builtin(_) => vec!["const uint8_t*".to_string(), "uintptr_t".to_string()],
             _ => vec![Self::type_to_c(ty)],
         }
     }
@@ -943,6 +949,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             Type::Primitive(p) => p.c_type_name().to_string(),
             Type::String => "FfiString".to_string(),
             Type::Bytes => "uint8_t*".to_string(),
+            Type::Builtin(_) => "uint8_t".to_string(),
             Type::Record(name) | Type::Enum(name) => name.clone(),
             Type::Custom { repr, .. } => Self::type_to_c(repr),
             Type::Object(name) => format!("struct {}*", name),

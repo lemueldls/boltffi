@@ -9,19 +9,33 @@
         }
 {%- endfor %}
 {%- if self.has_wrappers() %}
-        {% if has_return %}return {% endif %}{{ wrappers_open }}
-            {%- if has_return %}
-            let result = {{ ffi_name }}({{ ffi_args }}{% if callback_args.len() > 0 %}, {{ callback_args }}{% endif %})
-            result
-            {%- else %}
+        {%- if return_abi.is_unit() %}
+        _ = {{ wrappers_open }}
             let status = {{ ffi_name }}({{ ffi_args }}{% if callback_args.len() > 0 %}, {{ callback_args }}{% endif %})
             ensureOk(status)
-            {%- endif %}
         {{ wrappers_close }}
-{%- else if has_return %}
-        let result = {{ ffi_name }}({{ ffi_args }}{% if callback_args.len() > 0 %}, {{ callback_args }}{% endif %})
-        return result
+        {%- else if return_abi.is_direct() %}
+        return {{ wrappers_open }}
+            {{ ffi_name }}({{ ffi_args }}{% if callback_args.len() > 0 %}, {{ callback_args }}{% endif %})
+        {{ wrappers_close }}
+        {%- else if return_abi.is_wire_encoded() %}
+        return {% if return_abi.throws() %}{{ wrappers_open_throwing }}{% else %}{{ wrappers_open }}{% endif %}
+            let buf = {{ ffi_name }}({{ ffi_args }}{% if callback_args.len() > 0 %}, {{ callback_args }}{% endif %})
+            defer { {{ prefix }}_free_buf_u8(buf) }
+            let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
+            return {{ return_abi.decode_expr() }}
+        {{ wrappers_close }}
+        {%- endif %}
 {%- else %}
+        {%- if return_abi.is_unit() %}
         let status = {{ ffi_name }}({{ ffi_args }}{% if callback_args.len() > 0 %}, {{ callback_args }}{% endif %})
         ensureOk(status)
+        {%- else if return_abi.is_direct() %}
+        return {{ ffi_name }}({{ ffi_args }}{% if callback_args.len() > 0 %}, {{ callback_args }}{% endif %})
+        {%- else if return_abi.is_wire_encoded() %}
+        let buf = {{ ffi_name }}({{ ffi_args }}{% if callback_args.len() > 0 %}, {{ callback_args }}{% endif %})
+        defer { {{ prefix }}_free_buf_u8(buf) }
+        let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
+        return {{ return_abi.decode_expr() }}
+        {%- endif %}
 {%- endif %}

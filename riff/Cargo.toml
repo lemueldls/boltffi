@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
+default = ["uuid", "url"]
 fast-alloc = ["riff_core/fast-alloc"]
 uuid = ["riff_core/uuid"]
 chrono = ["riff_core/chrono"]
 uom = ["riff_core/uom"]
+url = ["riff_core/url"]
 
 [dependencies]
 riff_core = { path = "../riff_core" }

@@ -13,21 +13,25 @@ use super::MethodContext;
 #[template(path = "swift/method_sync.txt", escape = "none")]
 pub struct SyncMethodBodyTemplate {
     pub ffi_name: String,
-    pub has_return: bool,
     pub wrappers_open: String,
+    pub wrappers_open_throwing: String,
     pub wrappers_close: String,
     pub ffi_args: String,
+    pub prefix: String,
+    pub return_abi: ReturnAbi,
 }
 
 impl SyncMethodBodyTemplate {
     pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
-        let ctx = MethodContext::from_method(method, class, module, true);
+        let ctx = MethodContext::from_method(method, class, module, !method.is_static());
         Self {
             ffi_name: ctx.ffi_name,
-            has_return: method.returns.has_return_value(),
             wrappers_open: ctx.wrappers_open,
+            wrappers_open_throwing: ctx.wrappers_open_throwing,
             wrappers_close: ctx.wrappers_close,
             ffi_args: ctx.ffi_args,
+            prefix: naming::ffi_prefix().to_string(),
+            return_abi: ReturnAbi::from_return_type(&method.returns, module),
         }
     }
 
@@ -40,17 +44,19 @@ impl SyncMethodBodyTemplate {
 #[template(path = "swift/method_callback.txt", escape = "none")]
 pub struct CallbackMethodBodyTemplate {
     pub ffi_name: String,
-    pub has_return: bool,
     pub callbacks: Vec<CallbackInfo>,
     pub wrappers_open: String,
+    pub wrappers_open_throwing: String,
     pub wrappers_close: String,
     pub ffi_args: String,
     pub callback_args: String,
+    pub prefix: String,
+    pub return_abi: ReturnAbi,
 }
 
 impl CallbackMethodBodyTemplate {
     pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
-        let ctx = MethodContext::from_method(method, class, module, true);
+        let ctx = MethodContext::from_method(method, class, module, !method.is_static());
         let params_info = ParamsInfo::from_inputs(
             method
                 .inputs
@@ -67,12 +73,14 @@ impl CallbackMethodBodyTemplate {
 
         Self {
             ffi_name: ctx.ffi_name,
-            has_return: method.returns.has_return_value(),
             callbacks: params_info.callbacks,
             wrappers_open: ctx.wrappers_open,
+            wrappers_open_throwing: ctx.wrappers_open_throwing,
             wrappers_close: ctx.wrappers_close,
             ffi_args: ctx.ffi_args,
             callback_args,
+            prefix: naming::ffi_prefix().to_string(),
+            return_abi: ReturnAbi::from_return_type(&method.returns, module),
         }
     }
 
@@ -87,22 +95,24 @@ pub struct ThrowingMethodBodyTemplate {
     pub ffi_name: String,
     pub prefix: String,
     pub wrappers_open: String,
+    pub wrappers_open_throwing: String,
     pub wrappers_close: String,
     pub ffi_args: String,
-    pub decode_expr: String,
+    pub return_abi: ReturnAbi,
 }
 
 impl ThrowingMethodBodyTemplate {
     pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
-        let ctx = MethodContext::from_method_all_params(method, class, module);
         let return_abi = ReturnAbi::from_return_type(&method.returns, module);
+        let ctx = MethodContext::from_method(method, class, module, !method.is_static());
         Self {
             ffi_name: ctx.ffi_name,
             prefix: naming::ffi_prefix().to_string(),
             wrappers_open: ctx.wrappers_open,
+            wrappers_open_throwing: ctx.wrappers_open_throwing,
             wrappers_close: ctx.wrappers_close,
             ffi_args: ctx.ffi_args,
-            decode_expr: return_abi.decode_expr().to_string(),
+            return_abi,
         }
     }
 
@@ -124,13 +134,13 @@ pub struct AsyncMethodBodyTemplate {
     pub wrappers_close: String,
     pub ffi_args: String,
     pub return_type: String,
-    pub decode_expr: String,
+    pub return_abi: ReturnAbi,
 }
 
 impl AsyncMethodBodyTemplate {
     pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
-        let ctx = MethodContext::from_method(method, class, module, true);
         let return_abi = ReturnAbi::from_return_type(&method.returns, module);
+        let ctx = MethodContext::from_method(method, class, module, !method.is_static());
         Self {
             ffi_name: ctx.ffi_name,
             ffi_poll: naming::method_ffi_poll(&class.name, &method.name),
@@ -146,7 +156,7 @@ impl AsyncMethodBodyTemplate {
                 .ok_type()
                 .map(TypeMapper::map_type)
                 .unwrap_or_else(|| "Void".into()),
-            decode_expr: return_abi.decode_expr().to_string(),
+            return_abi,
         }
     }
 
@@ -168,13 +178,13 @@ pub struct AsyncThrowingMethodBodyTemplate {
     pub wrappers_close: String,
     pub ffi_args: String,
     pub return_type: String,
-    pub decode_expr: String,
+    pub return_abi: ReturnAbi,
 }
 
 impl AsyncThrowingMethodBodyTemplate {
     pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
-        let ctx = MethodContext::from_method(method, class, module, true);
         let return_abi = ReturnAbi::from_return_type(&method.returns, module);
+        let ctx = MethodContext::from_method(method, class, module, !method.is_static());
         Self {
             ffi_name: ctx.ffi_name,
             ffi_poll: naming::method_ffi_poll(&class.name, &method.name),
@@ -190,7 +200,7 @@ impl AsyncThrowingMethodBodyTemplate {
                 .ok_type()
                 .map(TypeMapper::map_type)
                 .unwrap_or_else(|| "Void".into()),
-            decode_expr: return_abi.decode_expr().to_string(),
+            return_abi,
         }
     }
 

@@ -1,6 +1,6 @@
 use super::names::NamingConvention;
 use super::types::TypeMapper;
-use crate::model::{ReturnType, Type};
+use crate::model::{BuiltinId, ReturnType, Type};
 
 #[derive(Debug, Clone, Default)]
 pub struct ReturnInfo {
@@ -77,6 +77,14 @@ impl ParamInfo {
                     swift_name
                 )
             }
+            Type::Option(inner) => match inner.as_ref() {
+                Type::BoxedTrait(trait_name) => format!(
+                    "{}.map {{ {}Bridge.create($0) }}",
+                    swift_name,
+                    NamingConvention::class_name(trait_name)
+                ),
+                _ => swift_name.clone(),
+            },
             _ => swift_name.clone(),
         };
 
@@ -139,32 +147,35 @@ impl CallbackInfo {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let mut arg_names = Vec::new();
-        let mut call_conversions = Vec::new();
-        let mut arg_idx = 0;
-
-        for param_ty in &sig.params {
-            if matches!(param_ty, Type::Record(_)) {
-                let ptr_name = format!("ptr{}", arg_idx);
-                let len_name = format!("len{}", arg_idx);
-                arg_names.push(ptr_name.clone());
-                arg_names.push(len_name.clone());
-                let record_name = if let Type::Record(n) = param_ty {
-                    NamingConvention::class_name(n)
-                } else {
-                    "Unknown".to_string()
+        let (arg_names, call_conversions) = sig
+            .params
+            .iter()
+            .enumerate()
+            .fold((Vec::new(), Vec::new()), |(mut arg_names, mut call_conversions), (index, ty)| {
+                let wire_expr = match ty {
+                    Type::Record(name) => Some(format!(
+                        "{class_name}.decode(wireBuffer: WireBuffer(ptr: ptr{index}!, len: Int(len{index})), at: 0).value",
+                        class_name = NamingConvention::class_name(name),
+                        index = index
+                    )),
+                    Type::String => Some(format!(
+                        "WireBuffer(ptr: ptr{index}!, len: Int(len{index})).readString(at: 0).value",
+                        index = index
+                    )),
+                    Type::Builtin(id) => Some(decode_builtin_callback(*id, index)),
+                    _ => None,
                 };
-                call_conversions.push(format!(
-                    "{}.decode(wireBuffer: WireBuffer(ptr: {}!, len: Int({})), at: 0).value",
-                    record_name, ptr_name, len_name
-                ));
-            } else {
-                let val_name = format!("val{}", arg_idx);
-                arg_names.push(val_name.clone());
-                call_conversions.push(val_name);
-            }
-            arg_idx += 1;
-        }
+
+                if let Some(expr) = wire_expr {
+                    arg_names.extend([format!("ptr{}", index), format!("len{}", index)]);
+                    call_conversions.push(expr);
+                    return (arg_names, call_conversions);
+                }
+
+                arg_names.push(format!("val{}", index));
+                call_conversions.push(format!("val{}", index));
+                (arg_names, call_conversions)
+            });
 
         let trampoline_args = arg_names.join(", ");
         let trampoline_call_args = call_conversions.join(", ");
@@ -181,6 +192,27 @@ impl CallbackInfo {
             trampoline_args,
             trampoline_call_args,
         })
+    }
+}
+
+fn decode_builtin_callback(id: BuiltinId, index: usize) -> String {
+    match id {
+        BuiltinId::Duration => format!(
+            "WireBuffer(ptr: ptr{0}!, len: Int(len{0})).readDuration(at: 0)",
+            index
+        ),
+        BuiltinId::SystemTime => format!(
+            "WireBuffer(ptr: ptr{0}!, len: Int(len{0})).readTimestamp(at: 0)",
+            index
+        ),
+        BuiltinId::Uuid => format!(
+            "WireBuffer(ptr: ptr{0}!, len: Int(len{0})).readUuid(at: 0)",
+            index
+        ),
+        BuiltinId::Url => format!(
+            "WireBuffer(ptr: ptr{0}!, len: Int(len{0})).readUrl(at: 0).value",
+            index
+        ),
     }
 }
 

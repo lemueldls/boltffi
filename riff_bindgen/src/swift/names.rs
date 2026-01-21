@@ -14,7 +14,7 @@ impl NamingConvention {
     }
 
     pub fn param_name(name: &str) -> String {
-        let converted = name.to_lower_camel_case();
+        let converted = Self::tuple_field_name(name).unwrap_or_else(|| name.to_lower_camel_case());
         Self::escape_keyword(&converted)
     }
 
@@ -26,6 +26,12 @@ impl NamingConvention {
     pub fn enum_case_name(name: &str) -> String {
         let converted = name.to_lower_camel_case();
         Self::escape_keyword(&converted)
+    }
+
+    fn tuple_field_name(name: &str) -> Option<String> {
+        name.strip_prefix('_')
+            .and_then(|rest| rest.parse::<usize>().ok())
+            .map(|index| format!("value{}", index))
     }
 
     pub fn escape_keyword(name: &str) -> String {

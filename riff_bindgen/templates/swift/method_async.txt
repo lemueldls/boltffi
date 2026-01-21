@@ -24,6 +24,33 @@
                             let decision = ctx.decideFinish()
                             if case .alreadyFinished = decision { return }
                             var status = FfiStatus()
+{%- if return_abi.is_unit() %}
+                            _ = {{ ffi_complete }}(ctx.handle, &status)
+                            {{ ffi_free }}(ctx.handle)
+                            switch decision {
+                            case .finishWithContinuation(let continuation):
+                                if status.code != 0 {
+                                    continuation.resume(throwing: FfiError(message: "ffi call failed"))
+                                } else {
+                                    continuation.resume(returning: ())
+                                }
+                            case .finishWithoutContinuation, .alreadyFinished:
+                                break
+                            }
+{%- else if return_abi.is_direct() %}
+                            let result = {{ ffi_complete }}(ctx.handle, &status)
+                            {{ ffi_free }}(ctx.handle)
+                            switch decision {
+                            case .finishWithContinuation(let continuation):
+                                if status.code != 0 {
+                                    continuation.resume(throwing: FfiError(message: "ffi call failed"))
+                                } else {
+                                    continuation.resume(returning: result)
+                                }
+                            case .finishWithoutContinuation, .alreadyFinished:
+                                break
+                            }
+{%- else if return_abi.is_wire_encoded() %}
                             let buf = {{ ffi_complete }}(ctx.handle, &status)
                             {{ ffi_free }}(ctx.handle)
                             switch decision {
@@ -34,7 +61,7 @@
                                 } else {
                                     let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
                                     {{ prefix }}_free_buf_u8(buf)
-                                    let value = {{ decode_expr }}
+                                    let value = {{ return_abi.decode_expr() }}
                                     continuation.resume(returning: value)
                                 }
                             case .finishWithoutContinuation:
@@ -42,6 +69,7 @@
                             case .alreadyFinished:
                                 break
                             }
+{%- endif %}
                         } else {
                             poll(ctx: ctx)
                         }

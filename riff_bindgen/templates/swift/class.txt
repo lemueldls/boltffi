@@ -23,13 +23,25 @@ public final class {{ class_name }} {
 {%- else if ctor.is_factory %}
 
     public convenience init({{ ctor.name }} {{ ctor.first_param_name }}: {{ ctor.first_param_type }}{% for param in ctor.rest_params %}, {{ param.swift_name }}: {{ param.swift_type }}{% endfor %}) {
-        let ptr = {{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.swift_name }}{% if !loop.last %}, {% endif %}{% endfor %})!
+{%- if ctor.wrappers_open.len() > 0 %}
+        let ptr = {{ ctor.wrappers_open }}
+            {{ ctor.ffi_name }}({{ ctor.ffi_args }})!
+        {{ ctor.wrappers_close }}
+{%- else %}
+        let ptr = {{ ctor.ffi_name }}({{ ctor.ffi_args }})!
+{%- endif %}
         self.init(handle: ptr)
     }
 {%- else %}
 
     public convenience init({% for param in ctor.params %}{{ param.swift_name }}: {{ param.swift_type }}{% if !loop.last %}, {% endif %}{% endfor %}) {
-        let ptr = {{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.swift_name }}{% if !loop.last %}, {% endif %}{% endfor %})!
+{%- if ctor.wrappers_open.len() > 0 %}
+        let ptr = {{ ctor.wrappers_open }}
+            {{ ctor.ffi_name }}({{ ctor.ffi_args }})!
+        {{ ctor.wrappers_close }}
+{%- else %}
+        let ptr = {{ ctor.ffi_name }}({{ ctor.ffi_args }})!
+{%- endif %}
         self.init(handle: ptr)
     }
 {%- endif %}

@@ -1,15 +1,31 @@
 {%- if self.has_wrappers() %}
-        {% if has_return %}return {% endif %}{{ wrappers_open }}
-            {%- if has_return %}
-            {{ ffi_name }}({{ ffi_args }})
-            {%- else %}
+        {%- if return_abi.is_unit() %}
+        _ = {{ wrappers_open }}
             let status = {{ ffi_name }}({{ ffi_args }})
             ensureOk(status)
-            {%- endif %}
         {{ wrappers_close }}
-{%- else if has_return %}
-        return {{ ffi_name }}({{ ffi_args }})
+        {%- else if return_abi.is_direct() %}
+        return {{ wrappers_open }}
+            {{ ffi_name }}({{ ffi_args }})
+        {{ wrappers_close }}
+        {%- else if return_abi.is_wire_encoded() %}
+        return {{ wrappers_open }}
+            let buf = {{ ffi_name }}({{ ffi_args }})
+            defer { {{ prefix }}_free_buf_u8(buf) }
+            let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
+            return {{ return_abi.decode_expr() }}
+        {{ wrappers_close }}
+        {%- endif %}
 {%- else %}
+        {%- if return_abi.is_unit() %}
         let status = {{ ffi_name }}({{ ffi_args }})
         ensureOk(status)
+        {%- else if return_abi.is_direct() %}
+        return {{ ffi_name }}({{ ffi_args }})
+        {%- else if return_abi.is_wire_encoded() %}
+        let buf = {{ ffi_name }}({{ ffi_args }})
+        defer { {{ prefix }}_free_buf_u8(buf) }
+        let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
+        return {{ return_abi.decode_expr() }}
+        {%- endif %}
 {%- endif %}
