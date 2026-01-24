@@ -62,9 +62,10 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         quote! { pub clone: extern "C" fn(handle: u64) -> u64 },
     ];
 
-    let has_async_methods = item_trait.items.iter().any(|item| {
-        matches!(item, syn::TraitItem::Fn(method) if method.sig.asyncness.is_some())
-    });
+    let has_async_methods = item_trait
+        .items
+        .iter()
+        .any(|item| matches!(item, syn::TraitItem::Fn(method) if method.sig.asyncness.is_some()));
 
     let is_object_safe = !has_async_methods || has_async_trait_attr;
 

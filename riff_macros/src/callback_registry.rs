@@ -127,9 +127,7 @@ impl<'a> CallbackTraitCollector<'a> {
             module_path: next_path,
             entries: self.entries,
         };
-        items
-            .iter()
-            .try_for_each(|item| nested.collect_item(item))
+        items.iter().try_for_each(|item| nested.collect_item(item))
     }
 }
 

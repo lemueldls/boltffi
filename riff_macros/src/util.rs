@@ -111,8 +111,7 @@ fn is_non_callback_bound(modifier: syn::TraitBoundModifier, name: &str) -> bool 
     }
     matches!(
         name,
-        "Fn"
-            | "FnMut"
+        "Fn" | "FnMut"
             | "FnOnce"
             | "Send"
             | "Sync"
@@ -252,13 +251,15 @@ impl AliasResolver {
                 let rest = segments.iter().skip(1).cloned();
                 prefix.iter().cloned().chain(rest).collect::<Vec<_>>()
             })
-            .or_else(|| is_single.then(|| self.type_aliases.get(&first_name).cloned()).flatten())?;
+            .or_else(|| {
+                is_single
+                    .then(|| self.type_aliases.get(&first_name).cloned())
+                    .flatten()
+            })?;
 
         let original_args = first.arguments.clone();
         let mut adjusted = resolved;
-        if is_single
-            && let Some(last) = adjusted.last_mut()
-        {
+        if is_single && let Some(last) = adjusted.last_mut() {
             last.arguments = original_args;
         }
 
@@ -280,8 +281,7 @@ impl AliasResolver {
             UseTree::Rename(rename) => {
                 let mut target = prefix;
                 target.push(path_segment(&rename.ident));
-                self.use_aliases
-                    .insert(rename.rename.to_string(), target);
+                self.use_aliases.insert(rename.rename.to_string(), target);
             }
             UseTree::Group(group) => group
                 .items
