@@ -115,6 +115,7 @@ pub struct ClassDef {
 pub struct ConstructorDef {
     pub name: Option<MethodId>,
     pub params: Vec<ParamDef>,
+    pub is_fallible: bool,
     pub doc: Option<String>,
     pub deprecated: Option<DeprecationInfo>,
 }

@@ -3,6 +3,7 @@ use crate::ir::types::PrimitiveType;
 
 #[derive(Debug, Clone)]
 pub enum CodecPlan {
+    Void,
     Primitive(PrimitiveType),
     String,
     Bytes,

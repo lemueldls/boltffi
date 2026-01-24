@@ -1,3 +1,4 @@
+pub mod build;
 pub mod callback_plan;
 pub mod codec;
 pub mod contract;
@@ -8,6 +9,7 @@ pub mod plan;
 pub mod types;
 pub mod validate;
 
+pub use build::build_contract;
 pub use callback_plan::*;
 pub use codec::*;
 pub use contract::*;

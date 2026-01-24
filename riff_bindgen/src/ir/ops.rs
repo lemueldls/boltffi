@@ -4,6 +4,7 @@ use crate::ir::types::PrimitiveType;
 
 #[derive(Debug, Clone)]
 pub enum ReadOp {
+    Void,
     Primitive {
         primitive: PrimitiveType,
         offset: OffsetExpr,
@@ -48,6 +49,7 @@ pub enum ReadOp {
 
 #[derive(Debug, Clone)]
 pub enum WriteOp {
+    Void,
     Primitive {
         primitive: PrimitiveType,
     },

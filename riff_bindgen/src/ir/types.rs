@@ -42,6 +42,7 @@ impl PrimitiveType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeExpr {
+    Void,
     Primitive(PrimitiveType),
     String,
     Bytes,

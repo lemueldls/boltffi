@@ -286,7 +286,7 @@ fn validate_field_type(
 
 fn validate_type_expr(expr: &TypeExpr, catalog: &TypeCatalog) -> Result<(), String> {
     match expr {
-        TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Bytes => Ok(()),
+        TypeExpr::Void | TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Bytes => Ok(()),
         TypeExpr::Record(id) => catalog
             .resolve_record(id)
             .map(|_| ())

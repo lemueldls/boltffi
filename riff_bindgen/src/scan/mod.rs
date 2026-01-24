@@ -1399,6 +1399,7 @@ impl SourceScanner {
             module = module.with_callback_trait(ct);
         }
 
+        module.collect_derived_types();
         module
     }
 }

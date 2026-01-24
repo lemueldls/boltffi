@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use serde::{Deserialize, Serialize};
 
 use super::callback_trait::CallbackTrait;
@@ -7,6 +9,7 @@ use super::enum_layout::DataEnumLayout;
 use super::enumeration::Enumeration;
 use super::function::Function;
 use super::record::Record;
+use super::types::{BuiltinId, ClosureSignature, ReturnType, Type};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Module {
@@ -18,6 +21,10 @@ pub struct Module {
     pub callback_traits: Vec<CallbackTrait>,
     #[serde(default)]
     pub custom_types: Vec<CustomType>,
+    #[serde(default)]
+    pub used_builtins: HashSet<BuiltinId>,
+    #[serde(default)]
+    pub closures: HashMap<String, ClosureSignature>,
 }
 
 impl Module {
@@ -30,6 +37,8 @@ impl Module {
             functions: Vec::new(),
             callback_traits: Vec::new(),
             custom_types: Vec::new(),
+            used_builtins: HashSet::new(),
+            closures: HashMap::new(),
         }
     }
 
@@ -129,5 +138,120 @@ impl Module {
             .iter()
             .find(|e| e.name == name)
             .is_some_and(|e| e.is_data_enum())
+    }
+
+    pub fn collect_derived_types(&mut self) {
+        let mut collector = DerivedTypeCollector::new();
+
+        self.records
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| &f.field_type))
+            .for_each(|ty| collector.visit(ty));
+
+        self.enums
+            .iter()
+            .flat_map(|e| e.variants.iter())
+            .flat_map(|v| v.fields.iter().map(|f| &f.field_type))
+            .for_each(|ty| collector.visit(ty));
+
+        self.functions.iter().for_each(|f| {
+            f.inputs
+                .iter()
+                .map(|p| &p.param_type)
+                .for_each(|ty| collector.visit(ty));
+            collector.visit_return_type(&f.returns);
+        });
+
+        self.classes.iter().for_each(|c| {
+            c.constructors.iter().for_each(|ctor| {
+                ctor.inputs
+                    .iter()
+                    .map(|p| &p.param_type)
+                    .for_each(|ty| collector.visit(ty));
+            });
+            c.methods.iter().for_each(|m| {
+                m.inputs
+                    .iter()
+                    .map(|p| &p.param_type)
+                    .for_each(|ty| collector.visit(ty));
+                collector.visit_return_type(&m.returns);
+            });
+            c.streams.iter().for_each(|s| collector.visit(&s.item_type));
+        });
+
+        self.callback_traits.iter().for_each(|cb| {
+            cb.methods.iter().for_each(|m| {
+                m.inputs
+                    .iter()
+                    .map(|p| &p.param_type)
+                    .for_each(|ty| collector.visit(ty));
+                collector.visit_return_type(&m.returns);
+            });
+        });
+
+        self.custom_types
+            .iter()
+            .map(|ct| &ct.repr)
+            .for_each(|ty| collector.visit(ty));
+
+        self.used_builtins = collector.builtins;
+        self.closures = collector.closures;
+    }
+}
+
+struct DerivedTypeCollector {
+    builtins: HashSet<BuiltinId>,
+    closures: HashMap<String, ClosureSignature>,
+}
+
+impl DerivedTypeCollector {
+    fn new() -> Self {
+        Self {
+            builtins: HashSet::new(),
+            closures: HashMap::new(),
+        }
+    }
+
+    fn visit(&mut self, ty: &Type) {
+        match ty {
+            Type::Builtin(id) => {
+                self.builtins.insert(*id);
+            }
+            Type::Closure(sig) => {
+                let sig_id = format!("__Closure_{}", sig.signature_id());
+                self.closures.entry(sig_id).or_insert_with(|| sig.clone());
+                sig.params.iter().for_each(|p| self.visit(p));
+                self.visit(&sig.returns);
+            }
+            Type::Vec(inner) | Type::Option(inner) | Type::Slice(inner) | Type::MutSlice(inner) => {
+                self.visit(inner);
+            }
+            Type::Result { ok, err } => {
+                self.visit(ok);
+                self.visit(err);
+            }
+            Type::Custom { repr, .. } => {
+                self.visit(repr);
+            }
+            Type::Primitive(_)
+            | Type::String
+            | Type::Bytes
+            | Type::Record(_)
+            | Type::Enum(_)
+            | Type::Object(_)
+            | Type::BoxedTrait(_)
+            | Type::Void => {}
+        }
+    }
+
+    fn visit_return_type(&mut self, ret: &ReturnType) {
+        match ret {
+            ReturnType::Void => {}
+            ReturnType::Value(ty) => self.visit(ty),
+            ReturnType::Fallible { ok, err } => {
+                self.visit(ok);
+                self.visit(err);
+            }
+        }
     }
 }
