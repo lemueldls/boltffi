@@ -1,8 +1,17 @@
+//! Legacy callback plan types for non-ABI backends.
+//!
+//! DEPRECATED: Use `AbiCallbackInvocation` from `ir::abi` instead.
+//! This module exists only for backends that haven't migrated to AbiContract yet.
+//! TODO: Remove after Kotlin backend migrates to AbiContract.
+
 use crate::ir::codec::CodecPlan;
 use crate::ir::ids::{CallbackId, MethodId, ParamName};
 use crate::ir::plan::DirectPlan;
 use riff_ffi_rules::naming::{CreateFn, Name, RegisterFn, VtableField, VtableType};
 
+/// Legacy callback invocation plan.
+///
+/// DEPRECATED: Use `AbiCallbackInvocation` instead.
 #[derive(Debug, Clone)]
 pub struct CallbackInvocationPlan {
     pub callback_id: CallbackId,

@@ -17,6 +17,7 @@ pub use model::{
 
 pub use kotlin::{FactoryStyle, JniGenerator, Kotlin, KotlinApiStyle, KotlinOptions};
 pub use render::{Renderer, swift::SwiftLowerer};
+pub use riff_ffi_rules::naming::ffi_prefix;
 pub use scan::{SourceScanner, scan_crate};
 pub use swift::Swift;
 

@@ -1,6 +1,110 @@
-{{ func.signature() }} {
-{%- if func.is_async %}
-    fatalError("async functions not yet implemented in IR backend")
+public func {{ func.name }}({% for p in func.params %}{{ p.signature() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if func.mode.is_async() %} async throws{% if let Some(result) = func.mode.async_result() %}{% if let Some(ret) = result.swift_type() %} -> {{ ret }}{% endif %}{% endif %}{% else %}{% if func.returns.is_throws() %} throws{% endif %}{% if let Some(ret) = func.returns.swift_type() %} -> {{ ret }}{% endif %}{% endif %} {
+{%- if let Some((start, poll, complete, cancel, free)) = func.mode.async_symbols() %}
+{%- let result = func.mode.async_result().unwrap() %}
+{%- for param in func.params %}
+{%- if let Some(wrapper) = param.wrapper_code() %}
+    {{ wrapper }}
+{%- endif %}
+{%- endfor %}
+    let futureHandle = {{ start }}({% for p in func.params %}{{ p.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %})
+
+    typealias FutureContext = FfiFutureState<{{ result.future_type() }}>
+    let state = FutureContext(handle: futureHandle)
+
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            guard state.installContinuation(continuation) else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+
+            func poll(ctx: FutureContext) {
+                guard ctx.canPoll() else { return }
+                {{ poll }}(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
+                    let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
+                    if pollResult == 0 {
+                        let decision = ctx.decideFinish()
+                        if case .alreadyFinished = decision { return }
+                        var status = FfiStatus()
+{%- if result.is_unit() %}
+                        _ = {{ complete }}(ctx.handle, &status)
+                        {{ free }}(ctx.handle)
+                        switch decision {
+                        case .finishWithContinuation(let continuation):
+                            if status.code != 0 {
+                                continuation.resume(throwing: FfiError(message: "ffi call failed"))
+                            } else {
+                                continuation.resume(returning: ())
+                            }
+                        case .finishWithoutContinuation, .alreadyFinished:
+                            break
+                        }
+{%- elif result.is_direct() %}
+                        let result = {{ complete }}(ctx.handle, &status)
+                        {{ free }}(ctx.handle)
+                        switch decision {
+                        case .finishWithContinuation(let continuation):
+                            if status.code != 0 {
+                                continuation.resume(throwing: FfiError(message: "ffi call failed"))
+                            } else {
+                                continuation.resume(returning: result)
+                            }
+                        case .finishWithoutContinuation, .alreadyFinished:
+                            break
+                        }
+{%- elif result.is_wire_encoded() %}
+                        let buf = {{ complete }}(ctx.handle, &status)
+                        {{ free }}(ctx.handle)
+                        switch decision {
+                        case .finishWithContinuation(let continuation):
+                            if status.code != 0 {
+                                {{ prefix }}_free_buf_u8(buf)
+                                continuation.resume(throwing: FfiError(message: "ffi call failed"))
+                            } else {
+                                let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
+                                {{ prefix }}_free_buf_u8(buf)
+{%- if result.throws() %}
+                                do {
+                                    let value = {{ result.decode_expr().unwrap() }}
+                                    continuation.resume(returning: value)
+                                } catch {
+                                    continuation.resume(throwing: error)
+                                }
+{%- else %}
+                                continuation.resume(returning: {{ result.decode_expr().unwrap() }})
+{%- endif %}
+                            }
+                        case .finishWithoutContinuation:
+                            {{ prefix }}_free_buf_u8(buf)
+                        case .alreadyFinished:
+                            break
+                        }
+{%- endif %}
+                    } else {
+                        guard ctx.canPoll() else { return }
+                        Task { [ctx] in
+                            await Task.yield()
+                            poll(ctx: ctx)
+                        }
+                    }
+                }
+            }
+            poll(ctx: state)
+        }
+    } onCancel: {
+        let decision = state.decideFinish()
+        switch decision {
+        case .alreadyFinished:
+            break
+        case .finishWithoutContinuation:
+            {{ cancel }}(state.handle)
+            {{ free }}(state.handle)
+        case .finishWithContinuation(let continuation):
+            {{ cancel }}(state.handle)
+            {{ free }}(state.handle)
+            continuation.resume(throwing: CancellationError())
+        }
+    }
 {%- else %}
 {%- for param in func.params %}
 {%- if let Some(wrapper) = param.wrapper_code() %}
@@ -8,9 +112,9 @@
 {%- endif %}
 {%- endfor %}
 {%- if func.returns.is_void() %}
-    {{ func.ffi_symbol }}({{ func.ffi_args() }})
+    {{ func.ffi_symbol() }}({% for p in func.params %}{{ p.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- elif func.returns.is_wire_encoded() %}
-    let buf = {{ func.ffi_symbol }}({{ func.ffi_args() }})
+    let buf = {{ func.ffi_symbol() }}({% for p in func.params %}{{ p.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %})
     defer { {{ prefix }}_free_buf_u8(buf) }
     let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
 {%- if let Some(ret_type) = func.returns.swift_type() %}
@@ -20,14 +124,14 @@
     fatalError("throwing functions not yet implemented in IR backend")
 {%- elif let Some((class_name, nullable)) = func.returns.handle_info() %}
 {%- if nullable %}
-    guard let ptr = {{ func.ffi_symbol }}({{ func.ffi_args() }}) else { return nil }
+    guard let ptr = {{ func.ffi_symbol() }}({% for p in func.params %}{{ p.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %}) else { return nil }
     return {{ class_name }}(handle: ptr)
 {%- else %}
-    let ptr = {{ func.ffi_symbol }}({{ func.ffi_args() }})!
+    let ptr = {{ func.ffi_symbol() }}({% for p in func.params %}{{ p.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %})!
     return {{ class_name }}(handle: ptr)
 {%- endif %}
 {%- else %}
-    return {{ func.ffi_symbol }}({{ func.ffi_args() }})
+    return {{ func.ffi_symbol() }}({% for p in func.params %}{{ p.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- endif %}
 {%- endif %}
 }

@@ -63,6 +63,15 @@ pub fn decode_inline(codec: &CodecPlan) -> String {
     }
 }
 
+pub fn decode_value_at(codec: &CodecPlan, offset_expr: &str) -> String {
+    let (reader, size_kind) = decode_expr(codec);
+    let expr = reader.replace(OFFSET_VAR, offset_expr);
+    match size_kind {
+        SizeKind::Fixed(_) => expr,
+        SizeKind::Variable => format!("{}.value", expr),
+    }
+}
+
 pub fn size_expr(codec: &CodecPlan, name: &str) -> String {
     encode_info(codec, name).0
 }

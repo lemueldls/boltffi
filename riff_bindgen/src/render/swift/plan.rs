@@ -2,6 +2,112 @@ use crate::ir::codec::CodecPlan;
 use crate::render::swift::codec;
 
 #[derive(Debug, Clone)]
+pub enum SwiftCallMode {
+    Sync {
+        symbol: String,
+    },
+    Async {
+        start: String,
+        poll: String,
+        complete: String,
+        cancel: String,
+        free: String,
+        result: SwiftAsyncResult,
+    },
+}
+
+impl SwiftCallMode {
+    pub fn is_async(&self) -> bool {
+        matches!(self, Self::Async { .. })
+    }
+
+    pub fn symbol(&self) -> &str {
+        match self {
+            Self::Sync { symbol } => symbol,
+            Self::Async { start, .. } => start,
+        }
+    }
+
+    pub fn async_symbols(&self) -> Option<(&str, &str, &str, &str, &str)> {
+        match self {
+            Self::Async { start, poll, complete, cancel, free, .. } => {
+                Some((start, poll, complete, cancel, free))
+            }
+            Self::Sync { .. } => None,
+        }
+    }
+
+    pub fn async_result(&self) -> Option<&SwiftAsyncResult> {
+        match self {
+            Self::Async { result, .. } => Some(result),
+            Self::Sync { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum SwiftAsyncResult {
+    Void,
+    Direct {
+        swift_type: String,
+        conversion: SwiftAsyncConversion,
+    },
+    Encoded {
+        swift_type: String,
+        decode_expr: String,
+        throws: bool,
+    },
+}
+
+impl SwiftAsyncResult {
+    pub fn is_unit(&self) -> bool {
+        matches!(self, Self::Void)
+    }
+
+    pub fn is_direct(&self) -> bool {
+        matches!(self, Self::Direct { .. })
+    }
+
+    pub fn is_wire_encoded(&self) -> bool {
+        matches!(self, Self::Encoded { .. })
+    }
+
+    pub fn swift_type(&self) -> Option<&str> {
+        match self {
+            Self::Void => None,
+            Self::Direct { swift_type, .. } => Some(swift_type),
+            Self::Encoded { swift_type, .. } => Some(swift_type),
+        }
+    }
+
+    pub fn future_type(&self) -> &str {
+        match self {
+            Self::Void => "Void",
+            Self::Direct { swift_type, .. } => swift_type,
+            Self::Encoded { swift_type, .. } => swift_type,
+        }
+    }
+
+    pub fn throws(&self) -> bool {
+        matches!(self, Self::Encoded { throws: true, .. })
+    }
+
+    pub fn decode_expr(&self) -> Option<&str> {
+        match self {
+            Self::Encoded { decode_expr, .. } => Some(decode_expr),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum SwiftAsyncConversion {
+    None,
+    Handle { class_name: String, nullable: bool },
+    Callback { protocol: String, nullable: bool },
+}
+
+#[derive(Debug, Clone)]
 pub struct SwiftModule {
     pub imports: Vec<String>,
     pub records: Vec<SwiftRecord>,
@@ -9,6 +115,15 @@ pub struct SwiftModule {
     pub classes: Vec<SwiftClass>,
     pub callbacks: Vec<SwiftCallback>,
     pub functions: Vec<SwiftFunction>,
+}
+
+impl SwiftModule {
+    pub fn has_async(&self) -> bool {
+        self.functions.iter().any(|f| f.mode.is_async())
+            || self.classes
+                .iter()
+                .any(|c| c.methods.iter().any(|m| m.mode.is_async()))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -142,22 +257,6 @@ pub struct SwiftConstructor {
 }
 
 impl SwiftConstructor {
-    pub fn params_signature(&self) -> String {
-        self.params
-            .iter()
-            .map(|p| p.signature())
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    pub fn ffi_args(&self) -> String {
-        self.params
-            .iter()
-            .map(|p| p.ffi_arg())
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
     pub fn has_wrappers(&self) -> bool {
         self.params.iter().any(|p| p.needs_wrapper())
     }
@@ -166,60 +265,24 @@ impl SwiftConstructor {
 #[derive(Debug, Clone)]
 pub struct SwiftMethod {
     pub name: String,
-    pub ffi_symbol: String,
+    pub mode: SwiftCallMode,
     pub params: Vec<SwiftParam>,
     pub returns: SwiftReturn,
     pub is_static: bool,
-    pub is_async: bool,
     pub doc: Option<String>,
 }
 
 impl SwiftMethod {
-    pub fn signature(&self) -> String {
-        let params_str: String = self
-            .params
-            .iter()
-            .map(|p| p.signature())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let mut sig = format!(
-            "public{} func {}({})",
-            if self.is_static { " static" } else { "" },
-            self.name,
-            params_str
-        );
-
-        if self.is_async {
-            sig.push_str(" async");
-        }
-        if self.returns.is_throws() {
-            sig.push_str(" throws");
-        }
-        if let Some(ret_type) = self.returns.swift_type() {
-            sig.push_str(&format!(" -> {}", ret_type));
-        }
-
-        sig
-    }
-
-    pub fn ffi_args_with_handle(&self) -> String {
-        std::iter::once("handle".to_string())
-            .chain(self.params.iter().map(|p| p.ffi_arg()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    pub fn ffi_args(&self) -> String {
-        self.params
-            .iter()
-            .map(|p| p.ffi_arg())
-            .collect::<Vec<_>>()
-            .join(", ")
+    pub fn ffi_symbol(&self) -> &str {
+        self.mode.symbol()
     }
 
     pub fn needs_handle(&self) -> bool {
         !self.is_static
+    }
+
+    pub fn is_async(&self) -> bool {
+        self.mode.is_async()
     }
 }
 
@@ -298,43 +361,19 @@ impl SwiftCallbackMethod {
 #[derive(Debug, Clone)]
 pub struct SwiftFunction {
     pub name: String,
-    pub ffi_symbol: String,
+    pub mode: SwiftCallMode,
     pub params: Vec<SwiftParam>,
     pub returns: SwiftReturn,
-    pub is_async: bool,
     pub doc: Option<String>,
 }
 
 impl SwiftFunction {
-    pub fn signature(&self) -> String {
-        let params_str: String = self
-            .params
-            .iter()
-            .map(|p| p.signature())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let mut sig = format!("public func {}({})", self.name, params_str);
-
-        if self.is_async {
-            sig.push_str(" async");
-        }
-        if self.returns.is_throws() {
-            sig.push_str(" throws");
-        }
-        if let Some(ret_type) = self.returns.swift_type() {
-            sig.push_str(&format!(" -> {}", ret_type));
-        }
-
-        sig
+    pub fn ffi_symbol(&self) -> &str {
+        self.mode.symbol()
     }
 
-    pub fn ffi_args(&self) -> String {
-        self.params
-            .iter()
-            .map(|p| p.ffi_arg())
-            .collect::<Vec<_>>()
-            .join(", ")
+    pub fn is_async(&self) -> bool {
+        self.mode.is_async()
     }
 }
 

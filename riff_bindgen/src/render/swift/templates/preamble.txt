@@ -1,0 +1,486 @@
+import Foundation
+{%- if let Some(ffi_module) = ffi_module_name %}
+import {{ ffi_module }}
+typealias RiffCallbackHandle = {{ ffi_module }}.RiffCallbackHandle
+{%- endif %}
+
+public struct FfiError: Error {
+    public let message: String
+    public init(message: String) { self.message = message }
+{%- if let Some(ffi_module) = ffi_module_name %}
+    public init(fromC c: {{ ffi_module }}.FfiError) {
+        self.message = stringFromFfi(c.message)
+    }
+{%- endif %}
+}
+
+@inline(__always)
+private func stringFromFfi(_ ffiString: FfiString) -> String {
+    guard ffiString.len > 0, let pointer = ffiString.ptr else { return "" }
+    return String(decoding: UnsafeBufferPointer(start: pointer, count: Int(ffiString.len)), as: UTF8.self)
+}
+
+@inline(__always)
+private func takeLastErrorMessage() -> String {
+    var out = FfiString()
+    ensureOk({{ prefix }}_last_error_message(&out))
+    defer { {{ prefix }}_free_string(out) }
+    return stringFromFfi(out)
+}
+
+@inline(__always)
+private func checkStatus(_ status: FfiStatus, context: StaticString = #function) throws {
+    guard status.code == 0 else {
+        throw FfiError(message: "FFI failed in \(context) with code \(status.code)")
+    }
+}
+
+@inline(__always)
+private func ensureOk(_ status: FfiStatus, context: StaticString = #function) {
+    guard status.code == 0 else {
+        fatalError("FFI failed in \(context) [\(status.code)]")
+    }
+}
+{%- if has_async %}
+
+final class FfiFutureState<T>: @unchecked Sendable {
+    typealias Continuation = CheckedContinuation<T, Error>
+
+    enum FinishDecision {
+        case alreadyFinished
+        case finishWithoutContinuation
+        case finishWithContinuation(Continuation)
+    }
+
+    final class ContinuationBox {
+        let continuation: Continuation
+        init(_ continuation: Continuation) { self.continuation = continuation }
+    }
+
+    let handle: RustFutureHandle?
+    private var continuationSlot: UInt64 = 0
+
+    init(handle: RustFutureHandle?) {
+        self.handle = handle
+    }
+
+    func installContinuation(_ continuation: Continuation) -> Bool {
+        let box = ContinuationBox(continuation)
+        let raw = UInt64(UInt(bitPattern: Unmanaged.passRetained(box).toOpaque()))
+        let prior = withUnsafeMutablePointer(to: &continuationSlot) { {{ prefix }}_atomic_u64_exchange($0, raw) }
+
+        if prior == 0 { return true }
+        if prior == 1 {
+            Unmanaged.passUnretained(box).release()
+            return false
+        }
+        withUnsafeMutablePointer(to: &continuationSlot) { _ = {{ prefix }}_atomic_u64_exchange($0, prior) }
+        Unmanaged.passUnretained(box).release()
+        return false
+    }
+
+    @inline(__always)
+    func canPoll() -> Bool {
+        withUnsafeMutablePointer(to: &continuationSlot) { {{ prefix }}_atomic_u64_load($0) } != 1
+    }
+
+    func decideFinish() -> FinishDecision {
+        let prior = withUnsafeMutablePointer(to: &continuationSlot) { {{ prefix }}_atomic_u64_exchange($0, 1) }
+        if prior == 1 { return .alreadyFinished }
+        if prior == 0 { return .finishWithoutContinuation }
+        let box = Unmanaged<ContinuationBox>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(prior))!).takeRetainedValue()
+        return .finishWithContinuation(box.continuation)
+    }
+}
+{%- endif %}
+
+@usableFromInline struct WireBuffer {
+    @usableFromInline let data: Data
+    @inlinable init(ptr: UnsafePointer<UInt8>, len: Int) {
+        self.data = Data(bytes: ptr, count: len)
+    }
+    @inlinable init(data: Data) { self.data = data }
+    @inlinable func readU8(at offset: Int) -> UInt8 { data[offset] }
+    @inlinable func readI8(at offset: Int) -> Int8 { Int8(bitPattern: data[offset]) }
+    @inlinable func readU16(at offset: Int) -> UInt16 { data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt16.self) } }
+    @inlinable func readI16(at offset: Int) -> Int16 { Int16(bitPattern: readU16(at: offset)) }
+    @inlinable func readU32(at offset: Int) -> UInt32 { data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self) } }
+    @inlinable func readI32(at offset: Int) -> Int32 { Int32(bitPattern: readU32(at: offset)) }
+    @inlinable func readU64(at offset: Int) -> UInt64 { data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt64.self) } }
+    @inlinable func readI64(at offset: Int) -> Int64 { Int64(bitPattern: readU64(at: offset)) }
+    @inlinable func readF32(at offset: Int) -> Float { Float(bitPattern: readU32(at: offset)) }
+    @inlinable func readF64(at offset: Int) -> Double { Double(bitPattern: readU64(at: offset)) }
+    @inlinable func readBool(at offset: Int) -> Bool { data[offset] != 0 }
+    @inlinable func readDuration(at offset: Int) -> TimeInterval {
+        let seconds = readU64(at: offset)
+        let nanoseconds = readU32(at: offset + 8)
+        return Double(seconds) + (Double(nanoseconds) / 1.0e9)
+    }
+    @inlinable func readTimestamp(at offset: Int) -> Date {
+        let seconds = readI64(at: offset)
+        let nanoseconds = readU32(at: offset + 8)
+        let delta = seconds >= 0
+            ? (Double(seconds) + (Double(nanoseconds) / 1.0e9))
+            : (Double(seconds) - (Double(nanoseconds) / 1.0e9))
+        return Date(timeIntervalSince1970: delta)
+    }
+    @inlinable func readUuid(at offset: Int) -> UUID {
+        let hi = readU64(at: offset)
+        let lo = readU64(at: offset + 8)
+        var uuid: uuid_t = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        var hiBe = hi.bigEndian
+        var loBe = lo.bigEndian
+        withUnsafeMutableBytes(of: &uuid) { uuidBytes in
+            Swift.withUnsafeBytes(of: &hiBe) { uuidBytes[0..<8].copyBytes(from: $0) }
+            Swift.withUnsafeBytes(of: &loBe) { uuidBytes[8..<16].copyBytes(from: $0) }
+        }
+        return UUID(uuid: uuid)
+    }
+    @inlinable func readUrl(at offset: Int) -> (value: URL, size: Int) {
+        let (value, size) = readString(at: offset)
+        guard let url = URL(string: value) else { fatalError("Invalid URL") }
+        return (url, size)
+    }
+    @inlinable func readString(at offset: Int) -> (value: String, size: Int) {
+        let len = Int(readU32(at: offset))
+        guard len > 0 else { return ("", 4) }
+        let start = offset + 4
+        return (String(decoding: data[start..<(start + len)], as: UTF8.self), 4 + len)
+    }
+    @inlinable func readOptional<T>(at offset: Int, reader: (Int) -> (value: T, size: Int)) -> (value: T?, size: Int) {
+        guard data[offset] != 0 else { return (nil, 1) }
+        let (value, size) = reader(offset + 1)
+        return (value, 1 + size)
+    }
+    @inlinable func readResult<T, E: Error>(at offset: Int, okReader: (Int) -> (value: T, size: Int), errReader: (Int) -> (value: E, size: Int)) -> (value: Result<T, E>, size: Int) {
+        if data[offset] == 0 {
+            let (value, size) = okReader(offset + 1)
+            return (.success(value), 1 + size)
+        } else {
+            let (value, size) = errReader(offset + 1)
+            return (.failure(value), 1 + size)
+        }
+    }
+    @inlinable func readArray<T>(at offset: Int, reader: (Int) -> (value: T, size: Int)) -> (value: [T], size: Int) {
+        let count = Int(readU32(at: offset))
+        guard count > 0 else { return ([], 4) }
+        var result = [T]()
+        result.reserveCapacity(count)
+        var pos = offset + 4
+        for _ in 0..<count {
+            let (value, size) = reader(pos)
+            result.append(value)
+            pos += size
+        }
+        return (result, pos - offset)
+    }
+    @inlinable func readBlittable<T>(at offset: Int, as type: T.Type) -> T {
+        data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: T.self) }
+    }
+    @inlinable func readBlittableArray<T>(at offset: Int, as type: T.Type) -> [T] {
+        let count = Int(readU32(at: offset))
+        guard count > 0 else { return [] }
+        let byteCount = count * MemoryLayout<T>.stride
+        let start = offset + 4
+        let end = start + byteCount
+        guard end <= data.count else { fatalError("WireBuffer out of bounds") }
+        return Array<T>(unsafeUninitializedCapacity: count) { buffer, initializedCount in
+            let dest = UnsafeMutableRawBufferPointer(
+                start: UnsafeMutableRawPointer(buffer.baseAddress!),
+                count: byteCount
+            )
+            data.copyBytes(to: dest, from: start..<end)
+            initializedCount = count
+        }
+    }
+    @inlinable func readBlittableArrayWithSize<T>(at offset: Int, as type: T.Type) -> (value: [T], size: Int) {
+        let count = Int(readU32(at: offset))
+        guard count > 0 else { return ([], 4) }
+        let byteCount = count * MemoryLayout<T>.stride
+        let start = offset + 4
+        let size = 4 + byteCount
+        let end = start + byteCount
+        guard end <= data.count else { fatalError("WireBuffer out of bounds") }
+        let arr = Array<T>(unsafeUninitializedCapacity: count) { buffer, initializedCount in
+            let dest = UnsafeMutableRawBufferPointer(
+                start: UnsafeMutableRawPointer(buffer.baseAddress!),
+                count: byteCount
+            )
+            data.copyBytes(to: dest, from: start..<end)
+            initializedCount = count
+        }
+        return (arr, size)
+    }
+    @inlinable func readBytes(at offset: Int) -> Data {
+        let count = Int(readU32(at: offset))
+        guard count > 0 else { return Data() }
+        let start = offset + 4
+        return data.subdata(in: start..<(start + count))
+    }
+    @inlinable func readBytesWithSize(at offset: Int) -> (value: Data, size: Int) {
+        let count = Int(readU32(at: offset))
+        guard count > 0 else { return (Data(), 4) }
+        let start = offset + 4
+        return (data.subdata(in: start..<(start + count)), 4 + count)
+    }
+    @inlinable func readResultOrThrow<T, E: Error>(at offset: Int, ok: (Int) -> T, err: (Int) -> E) throws -> T {
+        let tag = readU8(at: offset)
+        let payloadOffset = offset + 1
+        if tag == 0 { return ok(payloadOffset) }
+        throw err(payloadOffset)
+    }
+}
+
+@usableFromInline protocol WireEncodable {
+    static var isBlittable: Bool { get }
+    func wireEncodedSize() -> Int
+    func wireEncodeTo(_ data: inout Data)
+    func wireEncodeToBytes(_ bytes: inout [UInt8])
+}
+
+extension WireEncodable {
+    @inlinable func wireEncode() -> Data {
+        var data = Data(capacity: wireEncodedSize())
+        wireEncodeTo(&data)
+        return data
+    }
+}
+
+extension TimeInterval: WireEncodable {
+    @usableFromInline static var isBlittable: Bool { false }
+    @inlinable func wireEncodedSize() -> Int { 12 }
+    @inlinable func wireEncodeTo(_ data: inout Data) { data.appendDuration(self) }
+    @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) { bytes.appendDuration(self) }
+}
+
+extension Date: WireEncodable {
+    @usableFromInline static var isBlittable: Bool { false }
+    @inlinable func wireEncodedSize() -> Int { 12 }
+    @inlinable func wireEncodeTo(_ data: inout Data) { data.appendTimestamp(self) }
+    @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) { bytes.appendTimestamp(self) }
+}
+
+extension UUID: WireEncodable {
+    @usableFromInline static var isBlittable: Bool { false }
+    @inlinable func wireEncodedSize() -> Int { 16 }
+    @inlinable func wireEncodeTo(_ data: inout Data) { data.appendUuid(self) }
+    @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) { bytes.appendUuid(self) }
+}
+
+extension URL: WireEncodable {
+    @usableFromInline static var isBlittable: Bool { false }
+    @inlinable func wireEncodedSize() -> Int { 4 + absoluteString.utf8.count }
+    @inlinable func wireEncodeTo(_ data: inout Data) { data.appendString(absoluteString) }
+    @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) { bytes.appendString(absoluteString) }
+}
+
+extension Array: WireEncodable where Element: WireEncodable {
+    @usableFromInline static var isBlittable: Bool { false }
+    @inlinable func wireEncodedSize() -> Int {
+        4 + reduce(0) { $0 + $1.wireEncodedSize() }
+    }
+    @inlinable func wireEncodeTo(_ data: inout Data) {
+        data.appendU32(UInt32(count))
+        for item in self { item.wireEncodeTo(&data) }
+    }
+    @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) {
+        bytes.appendU32(UInt32(count))
+        for item in self { item.wireEncodeToBytes(&bytes) }
+    }
+}
+
+@inlinable func wireEncodeArray<T: WireEncodable>(_ items: [T]) -> Data {
+    if T.isBlittable, let first = items.first {
+        let itemSize = first.wireEncodedSize()
+        var data = Data(capacity: 4 + items.count * itemSize)
+        withUnsafeBytes(of: UInt32(items.count).littleEndian) { data.append(contentsOf: $0) }
+        items.withUnsafeBytes { data.append(contentsOf: $0) }
+        return data
+    } else if T.isBlittable {
+        var data = Data(capacity: 4)
+        data.appendU32(0)
+        return data
+    } else {
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(4 + items.count * 128)
+        var len = UInt32(items.count).littleEndian
+        withUnsafeBytes(of: &len) { bytes.append(contentsOf: $0) }
+        for item in items {
+            item.wireEncodeToBytes(&bytes)
+        }
+        return Data(bytes)
+    }
+}
+
+@inlinable func withWireEncodedArray<T: WireEncodable, R>(_ items: [T], body: (UnsafeRawBufferPointer) throws -> R) rethrows -> R {
+    if T.isBlittable {
+        var header = UInt32(items.count).littleEndian
+        if items.isEmpty {
+            return try withUnsafeBytes(of: &header) { try body($0) }
+        }
+        let itemSize = items[0].wireEncodedSize()
+        var data = Data(capacity: 4 + items.count * itemSize)
+        withUnsafeBytes(of: &header) { data.append(contentsOf: $0) }
+        items.withUnsafeBytes { data.append(contentsOf: $0) }
+        return try data.withUnsafeBytes { try body($0) }
+    } else {
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(4 + items.count * 128)
+        var len = UInt32(items.count).littleEndian
+        withUnsafeBytes(of: &len) { bytes.append(contentsOf: $0) }
+        for item in items {
+            item.wireEncodeToBytes(&bytes)
+        }
+        return try bytes.withUnsafeBytes { try body($0) }
+    }
+}
+
+@inlinable func withWireEncodedOptional<T: WireEncodable, R>(_ item: T?, body: (UnsafeRawBufferPointer?) throws -> R) rethrows -> R {
+    guard let value = item else {
+        return try body(nil)
+    }
+    var bytes = [UInt8]()
+    bytes.reserveCapacity(1 + value.wireEncodedSize())
+    bytes.append(1)
+    value.wireEncodeToBytes(&bytes)
+    return try bytes.withUnsafeBytes { try body($0) }
+}
+
+extension Data {
+    @inlinable mutating func appendBool(_ value: Bool) { append(value ? 1 : 0) }
+    @inlinable mutating func appendU8(_ value: UInt8) { append(value) }
+    @inlinable mutating func appendI8(_ value: Int8) { append(UInt8(bitPattern: value)) }
+    @inlinable mutating func appendU16(_ value: UInt16) { var v = value; Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) } }
+    @inlinable mutating func appendI16(_ value: Int16) { appendU16(UInt16(bitPattern: value)) }
+    @inlinable mutating func appendU32(_ value: UInt32) { var v = value; Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) } }
+    @inlinable mutating func appendI32(_ value: Int32) { appendU32(UInt32(bitPattern: value)) }
+    @inlinable mutating func appendU64(_ value: UInt64) { var v = value; Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) } }
+    @inlinable mutating func appendI64(_ value: Int64) { appendU64(UInt64(bitPattern: value)) }
+    @inlinable mutating func appendF32(_ value: Float) { appendU32(value.bitPattern) }
+    @inlinable mutating func appendF64(_ value: Double) { appendU64(value.bitPattern) }
+    @inlinable mutating func appendDuration(_ value: TimeInterval) {
+        if value.rounded(.down) > Double(Int64.max) { fatalError("Duration overflow") }
+        if value < 0 { fatalError("Invalid duration") }
+        let seconds = UInt64(value)
+        let nanoseconds = UInt32((value - Double(seconds)) * 1.0e9)
+        appendU64(seconds)
+        appendU32(nanoseconds)
+    }
+    @inlinable mutating func appendTimestamp(_ value: Date) {
+        var delta = value.timeIntervalSince1970
+        var sign: Int64 = 1
+        if delta < 0 { sign = -1; delta = -delta }
+        if delta.rounded(.down) > Double(Int64.max) { fatalError("Timestamp overflow") }
+        let seconds = Int64(delta)
+        let nanoseconds = UInt32((delta - Double(seconds)) * 1.0e9)
+        appendI64(sign * seconds)
+        appendU32(nanoseconds)
+    }
+    @inlinable mutating func appendUuid(_ value: UUID) {
+        var uuid = value.uuid
+        let (hi, lo) = Swift.withUnsafeBytes(of: &uuid) { raw -> (UInt64, UInt64) in
+            let hiBe = raw.loadUnaligned(fromByteOffset: 0, as: UInt64.self)
+            let loBe = raw.loadUnaligned(fromByteOffset: 8, as: UInt64.self)
+            return (UInt64(bigEndian: hiBe), UInt64(bigEndian: loBe))
+        }
+        appendU64(hi)
+        appendU64(lo)
+    }
+    @inlinable mutating func appendString(_ value: String) {
+        var s = value
+        s.withUTF8 { utf8 in
+            appendU32(UInt32(utf8.count))
+            append(contentsOf: utf8)
+        }
+    }
+    @inlinable mutating func appendArray<T>(_ value: [T]) where T: FixedWidthInteger {
+        appendU32(UInt32(value.count))
+        value.withUnsafeBytes { append(contentsOf: $0) }
+    }
+    @inlinable mutating func appendBlittableArray<T>(_ value: [T]) {
+        appendU32(UInt32(value.count))
+        value.withUnsafeBytes { append(contentsOf: $0) }
+    }
+    @inlinable mutating func appendStringArray(_ value: [String]) {
+        appendU32(UInt32(value.count))
+        for s in value { appendString(s) }
+    }
+    @inlinable mutating func appendBytes(_ value: Data) {
+        appendU32(UInt32(value.count))
+        append(contentsOf: value)
+    }
+    @inlinable mutating func appendBytes(_ value: [UInt8]) {
+        appendU32(UInt32(value.count))
+        append(contentsOf: value)
+    }
+}
+
+extension Array where Element == UInt8 {
+    @inlinable mutating func appendBool(_ value: Bool) { append(value ? 1 : 0) }
+    @inlinable mutating func appendU8(_ value: UInt8) { append(value) }
+    @inlinable mutating func appendI8(_ value: Int8) { append(UInt8(bitPattern: value)) }
+    @inlinable mutating func appendU16(_ value: UInt16) { var v = value; Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) } }
+    @inlinable mutating func appendI16(_ value: Int16) { appendU16(UInt16(bitPattern: value)) }
+    @inlinable mutating func appendU32(_ value: UInt32) { var v = value; Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) } }
+    @inlinable mutating func appendI32(_ value: Int32) { appendU32(UInt32(bitPattern: value)) }
+    @inlinable mutating func appendU64(_ value: UInt64) { var v = value; Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) } }
+    @inlinable mutating func appendI64(_ value: Int64) { appendU64(UInt64(bitPattern: value)) }
+    @inlinable mutating func appendF32(_ value: Float) { appendU32(value.bitPattern) }
+    @inlinable mutating func appendF64(_ value: Double) { appendU64(value.bitPattern) }
+    @inlinable mutating func appendDuration(_ value: TimeInterval) {
+        if value.rounded(.down) > Double(Int64.max) { fatalError("Duration overflow") }
+        if value < 0 { fatalError("Invalid duration") }
+        let seconds = UInt64(value)
+        let nanoseconds = UInt32((value - Double(seconds)) * 1.0e9)
+        appendU64(seconds)
+        appendU32(nanoseconds)
+    }
+    @inlinable mutating func appendTimestamp(_ value: Date) {
+        var delta = value.timeIntervalSince1970
+        var sign: Int64 = 1
+        if delta < 0 { sign = -1; delta = -delta }
+        if delta.rounded(.down) > Double(Int64.max) { fatalError("Timestamp overflow") }
+        let seconds = Int64(delta)
+        let nanoseconds = UInt32((delta - Double(seconds)) * 1.0e9)
+        appendI64(sign * seconds)
+        appendU32(nanoseconds)
+    }
+    @inlinable mutating func appendUuid(_ value: UUID) {
+        var uuid = value.uuid
+        let (hi, lo) = Swift.withUnsafeBytes(of: &uuid) { raw -> (UInt64, UInt64) in
+            let hiBe = raw.loadUnaligned(fromByteOffset: 0, as: UInt64.self)
+            let loBe = raw.loadUnaligned(fromByteOffset: 8, as: UInt64.self)
+            return (UInt64(bigEndian: hiBe), UInt64(bigEndian: loBe))
+        }
+        appendU64(hi)
+        appendU64(lo)
+    }
+    @inlinable mutating func appendString(_ value: String) {
+        var s = value
+        s.withUTF8 { utf8 in
+            appendU32(UInt32(utf8.count))
+            append(contentsOf: utf8)
+        }
+    }
+    @inlinable mutating func appendArray<T>(_ value: [T]) where T: FixedWidthInteger {
+        appendU32(UInt32(value.count))
+        value.withUnsafeBytes { append(contentsOf: $0) }
+    }
+    @inlinable mutating func appendBlittableArray<T>(_ value: [T]) {
+        appendU32(UInt32(value.count))
+        value.withUnsafeBytes { append(contentsOf: $0) }
+    }
+    @inlinable mutating func appendStringArray(_ value: [String]) {
+        appendU32(UInt32(value.count))
+        for s in value { appendString(s) }
+    }
+    @inlinable mutating func appendBytes(_ value: Data) {
+        appendU32(UInt32(value.count))
+        append(contentsOf: value)
+    }
+    @inlinable mutating func appendBytes(_ value: [UInt8]) {
+        appendU32(UInt32(value.count))
+        append(contentsOf: value)
+    }
+}
+

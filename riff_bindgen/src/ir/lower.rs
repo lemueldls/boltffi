@@ -3,6 +3,10 @@ use std::collections::{HashMap, HashSet};
 
 use riff_ffi_rules::naming;
 
+use crate::ir::abi::{
+    AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiContract, AbiParam, AsyncCall,
+    AsyncResultTransport, CallId, CallMode, ErrorTransport, ParamRole, ReturnTransport,
+};
 use crate::ir::callback_plan::{
     CallbackInvocationPlan, CallbackMethodPlan, CallbackParamPlan, CallbackParamStrategy,
     CallbackReturnPlan,
@@ -13,8 +17,8 @@ use crate::ir::codec::{
 };
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{
-    CallbackTraitDef, ClassDef, ConstructorDef, EnumRepr, FunctionDef, MethodDef, ParamDef,
-    ParamPassing, Receiver, RecordDef, ReturnDef, VariantPayload,
+    CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef, EnumRepr, FunctionDef,
+    MethodDef, ParamDef, ParamPassing, Receiver, RecordDef, ReturnDef, VariantPayload,
 };
 use crate::ir::ids::{
     CallbackId, ClassId, EnumId, FieldName, FunctionId, MethodId, ParamName, RecordId,
@@ -32,6 +36,10 @@ pub struct Lowerer<'c> {
     enum_stack: RefCell<HashSet<EnumId>>,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Construction
+// ─────────────────────────────────────────────────────────────────────────────
+
 impl<'c> Lowerer<'c> {
     pub fn new(contract: &'c FfiContract) -> Self {
         Self {
@@ -40,8 +48,643 @@ impl<'c> Lowerer<'c> {
             enum_stack: RefCell::new(HashSet::new()),
         }
     }
+}
 
-    pub fn lower_function(&self, func: &FunctionDef) -> CallPlan {
+// ─────────────────────────────────────────────────────────────────────────────
+// ABI Contract Generation
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl<'c> Lowerer<'c> {
+    pub fn to_abi_contract(&self) -> AbiContract {
+        let function_calls = self
+            .contract
+            .functions
+            .iter()
+            .map(|func| self.abi_call_for_function(func));
+
+        let class_calls = self.contract.catalog.all_classes().flat_map(|class| {
+            let ctor_calls = class
+                .constructors
+                .iter()
+                .enumerate()
+                .map(|(index, ctor)| self.abi_call_for_constructor(class, ctor, index));
+            let method_calls = class
+                .methods
+                .iter()
+                .map(|method| self.abi_call_for_method(class, method));
+            ctor_calls.chain(method_calls)
+        });
+
+        let calls = function_calls.chain(class_calls).collect();
+
+        let callbacks = self
+            .contract
+            .catalog
+            .all_callbacks()
+            .map(|callback| self.abi_callback_invocation(callback))
+            .collect();
+
+        let record_codecs = self
+            .contract
+            .catalog
+            .all_records()
+            .map(|record| {
+                (
+                    record.id.clone(),
+                    self.build_codec(&TypeExpr::Record(record.id.clone())),
+                )
+            })
+            .collect();
+
+        let enum_codecs = self
+            .contract
+            .catalog
+            .all_enums()
+            .map(|enumeration| {
+                (
+                    enumeration.id.clone(),
+                    self.build_codec(&TypeExpr::Enum(enumeration.id.clone())),
+                )
+            })
+            .collect();
+
+        AbiContract {
+            package: self.contract.package.clone(),
+            calls,
+            callbacks,
+            record_codecs,
+            enum_codecs,
+        }
+    }
+
+    fn abi_call_for_function(&self, func: &FunctionDef) -> AbiCall {
+        let plan = self.lower_function(func);
+        let symbol = self.call_symbol(&plan);
+        let params = self.abi_params_from_plan(&plan.params);
+        let (mode, return_, error) = self.abi_mode_return_error_for_function(func, &plan.kind);
+
+        AbiCall {
+            id: CallId::Function(func.id.clone()),
+            symbol,
+            mode,
+            params,
+            return_,
+            error,
+        }
+    }
+
+    fn abi_call_for_method(&self, class: &ClassDef, method: &MethodDef) -> AbiCall {
+        let plan = self.lower_method(class, method);
+        let symbol = self.call_symbol(&plan);
+        let params = self.abi_params_from_plan(&plan.params);
+        let (mode, return_, error) =
+            self.abi_mode_return_error_for_method(class, method, &plan.kind);
+
+        AbiCall {
+            id: CallId::Method {
+                class_id: class.id.clone(),
+                method_id: method.id.clone(),
+            },
+            symbol,
+            mode,
+            params,
+            return_,
+            error,
+        }
+    }
+
+    fn abi_call_for_constructor(
+        &self,
+        class: &ClassDef,
+        ctor: &ConstructorDef,
+        index: usize,
+    ) -> AbiCall {
+        let plan = self.lower_constructor(class, ctor);
+        let symbol = self.call_symbol(&plan);
+        let params = self.abi_params_from_plan(&plan.params);
+        let (return_, error) = self.sync_return_and_error(match &plan.kind {
+            CallPlanKind::Sync { returns } => returns,
+            CallPlanKind::Async { .. } => panic!("constructors cannot be async"),
+        });
+
+        AbiCall {
+            id: CallId::Constructor {
+                class_id: class.id.clone(),
+                index,
+            },
+            symbol,
+            mode: CallMode::Sync,
+            params,
+            return_,
+            error,
+        }
+    }
+
+    fn abi_callback_invocation(&self, callback: &CallbackTraitDef) -> AbiCallbackInvocation {
+        let methods = callback
+            .methods
+            .iter()
+            .map(|method| {
+                let params = self.abi_callback_params(callback, method).collect();
+                let (return_, error) = self.callback_return_and_error(&method.returns);
+
+                AbiCallbackMethod {
+                    id: method.id.clone(),
+                    vtable_field: naming::vtable_field_name(method.id.as_str()),
+                    is_async: method.is_async,
+                    params,
+                    return_,
+                    error,
+                }
+            })
+            .collect();
+
+        AbiCallbackInvocation {
+            callback_id: callback.id.clone(),
+            vtable_type: naming::callback_vtable_name(callback.id.as_str()),
+            register_fn: naming::callback_register_fn(callback.id.as_str()),
+            create_fn: naming::callback_create_fn(callback.id.as_str()),
+            methods,
+        }
+    }
+
+    fn abi_mode_return_error_for_function(
+        &self,
+        func: &FunctionDef,
+        kind: &CallPlanKind,
+    ) -> (CallMode, ReturnTransport, ErrorTransport) {
+        match kind {
+            CallPlanKind::Sync { returns } => {
+                let (return_, error) = self.sync_return_and_error(returns);
+                (CallMode::Sync, return_, error)
+            }
+            CallPlanKind::Async { async_plan } => {
+                let mode = CallMode::Async(Box::new(self.async_call_for_function(func, async_plan)));
+                (
+                    mode,
+                    ReturnTransport::Direct(AbiType::Pointer),
+                    ErrorTransport::None,
+                )
+            }
+        }
+    }
+
+    fn abi_mode_return_error_for_method(
+        &self,
+        class: &ClassDef,
+        method: &MethodDef,
+        kind: &CallPlanKind,
+    ) -> (CallMode, ReturnTransport, ErrorTransport) {
+        match kind {
+            CallPlanKind::Sync { returns } => {
+                let (return_, error) = self.sync_return_and_error(returns);
+                (CallMode::Sync, return_, error)
+            }
+            CallPlanKind::Async { async_plan } => {
+                let mode = CallMode::Async(Box::new(self.async_call_for_method(class, method, async_plan)));
+                (
+                    mode,
+                    ReturnTransport::Direct(AbiType::Pointer),
+                    ErrorTransport::None,
+                )
+            }
+        }
+    }
+
+    fn async_call_for_function(&self, func: &FunctionDef, plan: &AsyncPlan) -> AsyncCall {
+        let result = self.async_result_transport(&plan.result);
+
+        AsyncCall {
+            poll: naming::function_ffi_poll(func.id.as_str()),
+            complete: naming::function_ffi_complete(func.id.as_str()),
+            cancel: naming::function_ffi_cancel(func.id.as_str()),
+            free: naming::function_ffi_free(func.id.as_str()),
+            result,
+            error: ErrorTransport::StatusCode,
+        }
+    }
+
+    fn async_call_for_method(
+        &self,
+        class: &ClassDef,
+        method: &MethodDef,
+        plan: &AsyncPlan,
+    ) -> AsyncCall {
+        let result = self.async_result_transport(&plan.result);
+
+        AsyncCall {
+            poll: naming::method_ffi_poll(class.id.as_str(), method.id.as_str()),
+            complete: naming::method_ffi_complete(class.id.as_str(), method.id.as_str()),
+            cancel: naming::method_ffi_cancel(class.id.as_str(), method.id.as_str()),
+            free: naming::method_ffi_free(class.id.as_str(), method.id.as_str()),
+            result,
+            error: ErrorTransport::StatusCode,
+        }
+    }
+
+    fn async_result_transport(&self, result: &AsyncResult) -> AsyncResultTransport {
+        match result {
+            AsyncResult::Void => AsyncResultTransport::Void,
+            AsyncResult::Value(value) => match self.return_transport_from_value(value) {
+                ReturnTransport::Void => AsyncResultTransport::Void,
+                ReturnTransport::Direct(abi) => AsyncResultTransport::Direct(abi),
+                ReturnTransport::Encoded { codec } => AsyncResultTransport::Encoded { codec },
+                ReturnTransport::Handle { class_id, nullable } => {
+                    AsyncResultTransport::Handle { class_id, nullable }
+                }
+                ReturnTransport::Callback {
+                    callback_id,
+                    nullable,
+                } => AsyncResultTransport::Callback {
+                    callback_id,
+                    nullable,
+                },
+            },
+            AsyncResult::Fallible { ok, err_codec } => {
+                let ok_codec = self.codec_from_return_value(ok);
+                let codec = CodecPlan::Result {
+                    ok: Box::new(ok_codec),
+                    err: Box::new(err_codec.clone()),
+                };
+                AsyncResultTransport::Encoded { codec }
+            }
+        }
+    }
+
+    fn sync_return_and_error(&self, returns: &ReturnPlan) -> (ReturnTransport, ErrorTransport) {
+        match returns {
+            ReturnPlan::Value(v) => (self.return_transport_from_value(v), ErrorTransport::None),
+            ReturnPlan::Fallible { ok, err_codec } => {
+                let ok_codec = self.codec_from_return_value(ok);
+                let codec = CodecPlan::Result {
+                    ok: Box::new(ok_codec),
+                    err: Box::new(err_codec.clone()),
+                };
+                (
+                    ReturnTransport::Encoded { codec },
+                    ErrorTransport::Encoded {
+                        codec: err_codec.clone(),
+                    },
+                )
+            }
+        }
+    }
+
+    fn return_transport_from_value(&self, value: &ReturnValuePlan) -> ReturnTransport {
+        match value {
+            ReturnValuePlan::Void => ReturnTransport::Void,
+            ReturnValuePlan::Direct(d) => ReturnTransport::Direct(d.abi_type),
+            ReturnValuePlan::Encoded { codec } => ReturnTransport::Encoded {
+                codec: codec.clone(),
+            },
+            ReturnValuePlan::Handle { class_id, nullable } => ReturnTransport::Handle {
+                class_id: class_id.clone(),
+                nullable: *nullable,
+            },
+            ReturnValuePlan::Callback {
+                callback_id,
+                nullable,
+            } => ReturnTransport::Callback {
+                callback_id: callback_id.clone(),
+                nullable: *nullable,
+            },
+        }
+    }
+
+    fn codec_from_return_value(&self, value: &ReturnValuePlan) -> CodecPlan {
+        match value {
+            ReturnValuePlan::Void => CodecPlan::Void,
+            ReturnValuePlan::Direct(d) => CodecPlan::Primitive(self.primitive_from_abi(d.abi_type)),
+            ReturnValuePlan::Encoded { codec } => codec.clone(),
+            ReturnValuePlan::Handle { .. } | ReturnValuePlan::Callback { .. } => {
+                panic!("Handle and Callback types cannot be wire-encoded")
+            }
+        }
+    }
+
+    fn primitive_from_abi(&self, abi: AbiType) -> PrimitiveType {
+        match abi {
+            AbiType::Bool => PrimitiveType::Bool,
+            AbiType::I8 => PrimitiveType::I8,
+            AbiType::U8 => PrimitiveType::U8,
+            AbiType::I16 => PrimitiveType::I16,
+            AbiType::U16 => PrimitiveType::U16,
+            AbiType::I32 => PrimitiveType::I32,
+            AbiType::U32 => PrimitiveType::U32,
+            AbiType::I64 => PrimitiveType::I64,
+            AbiType::U64 => PrimitiveType::U64,
+            AbiType::F32 => PrimitiveType::F32,
+            AbiType::F64 => PrimitiveType::F64,
+            AbiType::Void | AbiType::Pointer => {
+                panic!("unsupported ABI primitive for wire encoding")
+            }
+        }
+    }
+
+    fn abi_params_from_plan(&self, params: &[ParamPlan]) -> Vec<AbiParam> {
+        params
+            .iter()
+            .flat_map(|param| self.abi_param_from_plan(param))
+            .collect()
+    }
+
+    fn abi_param_from_plan(&self, param: &ParamPlan) -> Vec<AbiParam> {
+        let base_name = param.name.as_str();
+        let len_name = ParamName::new(format!("{}_len", base_name));
+
+        match &param.strategy {
+            ParamStrategy::Direct(d) => vec![AbiParam {
+                name: param.name.clone(),
+                ffi_type: d.abi_type,
+                role: ParamRole::InDirect,
+            }],
+            ParamStrategy::Buffer {
+                mutability,
+                element_abi,
+            } => vec![
+                AbiParam {
+                    name: param.name.clone(),
+                    ffi_type: AbiType::Pointer,
+                    role: ParamRole::InBuffer {
+                        len_param: len_name.clone(),
+                        mutability: *mutability,
+                        element_abi: *element_abi,
+                    },
+                },
+                AbiParam {
+                    name: len_name,
+                    ffi_type: AbiType::U64,
+                    role: ParamRole::InDirect,
+                },
+            ],
+            ParamStrategy::Encoded { codec } => vec![
+                AbiParam {
+                    name: param.name.clone(),
+                    ffi_type: AbiType::Pointer,
+                    role: ParamRole::InEncoded {
+                        len_param: len_name.clone(),
+                        codec: codec.clone(),
+                    },
+                },
+                AbiParam {
+                    name: len_name,
+                    ffi_type: AbiType::U64,
+                    role: ParamRole::InDirect,
+                },
+            ],
+            ParamStrategy::Handle { class_id, nullable } => vec![AbiParam {
+                name: param.name.clone(),
+                ffi_type: AbiType::Pointer,
+                role: ParamRole::InHandle {
+                    class_id: class_id.clone(),
+                    nullable: *nullable,
+                },
+            }],
+            ParamStrategy::Callback {
+                callback_id,
+                nullable,
+                style,
+            } => vec![AbiParam {
+                name: param.name.clone(),
+                ffi_type: AbiType::Pointer,
+                role: ParamRole::InCallback {
+                    callback_id: callback_id.clone(),
+                    nullable: *nullable,
+                    style: *style,
+                },
+            }],
+        }
+    }
+
+    fn callback_return_and_error(
+        &self,
+        returns: &ReturnDef,
+    ) -> (ReturnTransport, ErrorTransport) {
+        match returns {
+            ReturnDef::Void => (ReturnTransport::Void, ErrorTransport::None),
+            ReturnDef::Value(ty) => {
+                let plan = self.lower_value_type(ty);
+                (
+                    self.return_transport_from_value(&plan),
+                    ErrorTransport::None,
+                )
+            }
+            ReturnDef::Result { ok, err } => {
+                let ok_codec = self.build_codec(ok);
+                let err_codec = self.build_codec(err);
+                let codec = CodecPlan::Result {
+                    ok: Box::new(ok_codec),
+                    err: Box::new(err_codec.clone()),
+                };
+                (
+                    ReturnTransport::Encoded { codec },
+                    ErrorTransport::Encoded { codec: err_codec },
+                )
+            }
+        }
+    }
+
+    fn abi_callback_params<'a>(
+        &'a self,
+        callback: &'a CallbackTraitDef,
+        method: &'a CallbackMethodDef,
+    ) -> impl Iterator<Item = AbiParam> + 'a {
+        let handle_param = AbiParam {
+            name: ParamName::new("handle"),
+            ffi_type: AbiType::Pointer,
+            role: ParamRole::InCallback {
+                callback_id: callback.id.clone(),
+                nullable: false,
+                style: CallbackStyle::BoxedDyn,
+            },
+        };
+
+        let method_params = method
+            .params
+            .iter()
+            .map(|param| self.lower_callback_param(param))
+            .flat_map(|param| self.abi_callback_param_from_plan(param));
+
+        let out_params = self.abi_callback_out_params(&method.returns, method.is_async);
+
+        std::iter::once(handle_param)
+            .chain(method_params)
+            .chain(out_params)
+    }
+
+    fn abi_callback_param_from_plan(&self, param: CallbackParamPlan) -> Vec<AbiParam> {
+        let base_name = param.name.as_str();
+        let len_name = ParamName::new(format!("{}_len", base_name));
+
+        match param.strategy {
+            CallbackParamStrategy::Direct(d) => vec![AbiParam {
+                name: param.name,
+                ffi_type: d.abi_type,
+                role: ParamRole::InDirect,
+            }],
+            CallbackParamStrategy::Encoded { codec } => vec![
+                AbiParam {
+                    name: param.name.clone(),
+                    ffi_type: AbiType::Pointer,
+                    role: ParamRole::InEncoded {
+                        len_param: len_name.clone(),
+                        codec,
+                    },
+                },
+                AbiParam {
+                    name: len_name,
+                    ffi_type: AbiType::U64,
+                    role: ParamRole::InDirect,
+                },
+            ],
+        }
+    }
+
+    fn abi_callback_out_params(&self, returns: &ReturnDef, is_async: bool) -> Vec<AbiParam> {
+        let has_return = !matches!(returns, ReturnDef::Void) && !is_async;
+        let out_ptr_name = ParamName::new("out_ptr");
+        let out_len_name = ParamName::new("out_len");
+
+        if !has_return {
+            return Vec::new();
+        }
+
+        let (return_transport, _) = self.callback_return_and_error(returns);
+
+        match return_transport {
+            ReturnTransport::Encoded { codec } => vec![
+                AbiParam {
+                    name: out_ptr_name.clone(),
+                    ffi_type: AbiType::Pointer,
+                    role: ParamRole::OutBuffer {
+                        len_param: out_len_name.clone(),
+                        codec,
+                    },
+                },
+                AbiParam {
+                    name: out_len_name,
+                    ffi_type: AbiType::U64,
+                    role: ParamRole::OutLen {
+                        for_param: out_ptr_name,
+                    },
+                },
+            ],
+            ReturnTransport::Direct(abi) => std::iter::once(AbiParam {
+                name: out_ptr_name,
+                ffi_type: abi,
+                role: ParamRole::OutDirect,
+            })
+            .collect(),
+            ReturnTransport::Handle { .. }
+            | ReturnTransport::Callback { .. }
+            | ReturnTransport::Void => std::iter::once(AbiParam {
+                name: out_ptr_name,
+                ffi_type: AbiType::Pointer,
+                role: ParamRole::OutDirect,
+            })
+            .collect(),
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CallPlan Generation (Legacy)
+// TODO: Remove after Kotlin backend migrates to AbiContract
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl<'c> Lowerer<'c> {
+    /// Lowers the contract to the legacy CallPlan-based representation.
+    ///
+    /// DEPRECATED: Use `to_abi_contract()` instead. This method exists only for
+    /// backends that haven't migrated to AbiContract yet (e.g., Kotlin).
+    /// Remove after all backends use AbiContract.
+    pub fn to_lowered_contract(&self) -> LoweredContract {
+        let functions = self
+            .contract
+            .functions
+            .iter()
+            .map(|func| (func.id.clone(), self.lower_function(func)))
+            .collect();
+
+        let methods = self
+            .contract
+            .catalog
+            .all_classes()
+            .flat_map(|class| {
+                class.methods.iter().map(|method| {
+                    (
+                        (class.id.clone(), method.id.clone()),
+                        self.lower_method(class, method),
+                    )
+                })
+            })
+            .collect();
+
+        let constructors = self
+            .contract
+            .catalog
+            .all_classes()
+            .flat_map(|class| {
+                class
+                    .constructors
+                    .iter()
+                    .enumerate()
+                    .map(|(index, ctor)| {
+                        ((class.id.clone(), index), self.lower_constructor(class, ctor))
+                    })
+            })
+            .collect();
+
+        let callbacks = self
+            .contract
+            .catalog
+            .all_callbacks()
+            .map(|callback| (callback.id.clone(), self.lower_callback(callback)))
+            .collect();
+
+        let callback_invocations = self
+            .contract
+            .catalog
+            .all_callbacks()
+            .map(|callback| (callback.id.clone(), self.lower_callback_invocation(callback)))
+            .collect();
+
+        let record_codecs = self
+            .contract
+            .catalog
+            .all_records()
+            .map(|record| {
+                (
+                    record.id.clone(),
+                    self.build_codec(&TypeExpr::Record(record.id.clone())),
+                )
+            })
+            .collect();
+
+        let enum_codecs = self
+            .contract
+            .catalog
+            .all_enums()
+            .map(|enumeration| {
+                (
+                    enumeration.id.clone(),
+                    self.build_codec(&TypeExpr::Enum(enumeration.id.clone())),
+                )
+            })
+            .collect();
+
+        LoweredContract {
+            functions,
+            methods,
+            constructors,
+            callbacks,
+            callback_invocations,
+            record_codecs,
+            enum_codecs,
+        }
+    }
+
+    fn lower_function(&self, func: &FunctionDef) -> CallPlan {
         let params = func.params.iter().map(|p| self.lower_param(p)).collect();
 
         let kind = if func.is_async {
@@ -61,7 +704,7 @@ impl<'c> Lowerer<'c> {
         }
     }
 
-    pub fn lower_method(&self, class: &ClassDef, method: &MethodDef) -> CallPlan {
+    fn lower_method(&self, class: &ClassDef, method: &MethodDef) -> CallPlan {
         let mut params: Vec<ParamPlan> =
             method.params.iter().map(|p| self.lower_param(p)).collect();
 
@@ -95,7 +738,7 @@ impl<'c> Lowerer<'c> {
         }
     }
 
-    pub fn lower_constructor(&self, class: &ClassDef, ctor: &ConstructorDef) -> CallPlan {
+    fn lower_constructor(&self, class: &ClassDef, ctor: &ConstructorDef) -> CallPlan {
         let params = ctor.params.iter().map(|p| self.lower_param(p)).collect();
 
         let returns = if ctor.is_fallible {
@@ -122,7 +765,7 @@ impl<'c> Lowerer<'c> {
         }
     }
 
-    pub fn lower_callback(&self, callback: &CallbackTraitDef) -> Vec<CallPlan> {
+    fn lower_callback(&self, callback: &CallbackTraitDef) -> Vec<CallPlan> {
         callback
             .methods
             .iter()
@@ -161,10 +804,7 @@ impl<'c> Lowerer<'c> {
             .collect()
     }
 
-    pub fn lower_callback_invocation(
-        &self,
-        callback: &CallbackTraitDef,
-    ) -> CallbackInvocationPlan {
+    fn lower_callback_invocation(&self, callback: &CallbackTraitDef) -> CallbackInvocationPlan {
         let vtable_type = naming::callback_vtable_name(callback.id.as_str());
         let register_fn = naming::callback_register_fn(callback.id.as_str());
         let create_fn = naming::callback_create_fn(callback.id.as_str());
@@ -199,95 +839,13 @@ impl<'c> Lowerer<'c> {
             methods,
         }
     }
+}
 
-    fn lower_callback_param(&self, param: &ParamDef) -> CallbackParamPlan {
-        let strategy = match &param.type_expr {
-            TypeExpr::Primitive(p) => CallbackParamStrategy::Direct(DirectPlan {
-                abi_type: primitive_to_abi(*p),
-            }),
-            _ => CallbackParamStrategy::Encoded {
-                codec: self.build_codec(&param.type_expr),
-            },
-        };
+// ─────────────────────────────────────────────────────────────────────────────
+// Param/Return Lowering
+// ─────────────────────────────────────────────────────────────────────────────
 
-        CallbackParamPlan {
-            name: param.name.clone(),
-            strategy,
-        }
-    }
-
-    fn lower_callback_return(&self, returns: &ReturnDef, is_async: bool) -> CallbackReturnPlan {
-        match returns {
-            ReturnDef::Void => {
-                if is_async {
-                    CallbackReturnPlan::Async {
-                        completion_codec: None,
-                    }
-                } else {
-                    CallbackReturnPlan::Void
-                }
-            }
-            ReturnDef::Value(ty) => {
-                if is_async {
-                    CallbackReturnPlan::Async {
-                        completion_codec: Some(self.build_codec(ty)),
-                    }
-                } else if matches!(ty, TypeExpr::Primitive(_)) {
-                    CallbackReturnPlan::Direct(DirectPlan {
-                        abi_type: self.type_to_abi(ty),
-                    })
-                } else {
-                    CallbackReturnPlan::Encoded {
-                        codec: self.build_codec(ty),
-                    }
-                }
-            }
-            ReturnDef::Result { ok, err } => {
-                if is_async {
-                    CallbackReturnPlan::Async {
-                        completion_codec: Some(CodecPlan::Result {
-                            ok: Box::new(self.build_codec(ok)),
-                            err: Box::new(self.build_codec(err)),
-                        }),
-                    }
-                } else {
-                    CallbackReturnPlan::Encoded {
-                        codec: CodecPlan::Result {
-                            ok: Box::new(self.build_codec(ok)),
-                            err: Box::new(self.build_codec(err)),
-                        },
-                    }
-                }
-            }
-        }
-    }
-
-    fn type_to_abi(&self, ty: &TypeExpr) -> AbiType {
-        match ty {
-            TypeExpr::Primitive(p) => primitive_to_abi(*p),
-            _ => AbiType::Pointer,
-        }
-    }
-
-    fn build_async_plan(&self, returns: &ReturnDef) -> AsyncPlan {
-        let result = match returns {
-            ReturnDef::Void => AsyncResult::Void,
-            ReturnDef::Value(ty) => AsyncResult::Value(self.lower_value_type(ty)),
-            ReturnDef::Result { ok, err } => AsyncResult::Fallible {
-                ok: self.lower_value_type(ok),
-                err_codec: self.build_codec(err),
-            },
-        };
-
-        AsyncPlan {
-            completion_callback: CompletionCallback {
-                param_name: ParamName::new("completion"),
-                ffi_type: AbiType::Pointer,
-            },
-            result,
-        }
-    }
-
+impl<'c> Lowerer<'c> {
     fn lower_param(&self, param: &ParamDef) -> ParamPlan {
         ParamPlan {
             name: param.name.clone(),
@@ -421,6 +979,106 @@ impl<'c> Lowerer<'c> {
         }
     }
 
+    fn build_async_plan(&self, returns: &ReturnDef) -> AsyncPlan {
+        let result = match returns {
+            ReturnDef::Void => AsyncResult::Void,
+            ReturnDef::Value(ty) => AsyncResult::Value(self.lower_value_type(ty)),
+            ReturnDef::Result { ok, err } => AsyncResult::Fallible {
+                ok: self.lower_value_type(ok),
+                err_codec: self.build_codec(err),
+            },
+        };
+
+        AsyncPlan {
+            completion_callback: CompletionCallback {
+                param_name: ParamName::new("completion"),
+                ffi_type: AbiType::Pointer,
+            },
+            result,
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Callback Lowering
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl<'c> Lowerer<'c> {
+    fn lower_callback_param(&self, param: &ParamDef) -> CallbackParamPlan {
+        let strategy = match &param.type_expr {
+            TypeExpr::Primitive(p) => CallbackParamStrategy::Direct(DirectPlan {
+                abi_type: primitive_to_abi(*p),
+            }),
+            _ => CallbackParamStrategy::Encoded {
+                codec: self.build_codec(&param.type_expr),
+            },
+        };
+
+        CallbackParamPlan {
+            name: param.name.clone(),
+            strategy,
+        }
+    }
+
+    fn lower_callback_return(&self, returns: &ReturnDef, is_async: bool) -> CallbackReturnPlan {
+        match returns {
+            ReturnDef::Void => {
+                if is_async {
+                    CallbackReturnPlan::Async {
+                        completion_codec: None,
+                    }
+                } else {
+                    CallbackReturnPlan::Void
+                }
+            }
+            ReturnDef::Value(ty) => {
+                if is_async {
+                    CallbackReturnPlan::Async {
+                        completion_codec: Some(self.build_codec(ty)),
+                    }
+                } else if matches!(ty, TypeExpr::Primitive(_)) {
+                    CallbackReturnPlan::Direct(DirectPlan {
+                        abi_type: self.type_to_abi(ty),
+                    })
+                } else {
+                    CallbackReturnPlan::Encoded {
+                        codec: self.build_codec(ty),
+                    }
+                }
+            }
+            ReturnDef::Result { ok, err } => {
+                if is_async {
+                    CallbackReturnPlan::Async {
+                        completion_codec: Some(CodecPlan::Result {
+                            ok: Box::new(self.build_codec(ok)),
+                            err: Box::new(self.build_codec(err)),
+                        }),
+                    }
+                } else {
+                    CallbackReturnPlan::Encoded {
+                        codec: CodecPlan::Result {
+                            ok: Box::new(self.build_codec(ok)),
+                            err: Box::new(self.build_codec(err)),
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+    fn type_to_abi(&self, ty: &TypeExpr) -> AbiType {
+        match ty {
+            TypeExpr::Primitive(p) => primitive_to_abi(*p),
+            _ => AbiType::Pointer,
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Codec Building
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl<'c> Lowerer<'c> {
     pub fn build_codec(&self, type_expr: &TypeExpr) -> CodecPlan {
         match type_expr {
             TypeExpr::Void => CodecPlan::Void,
@@ -600,7 +1258,13 @@ impl<'c> Lowerer<'c> {
         let (size, _) = compute_blittable_layout(def);
         size
     }
+}
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Symbol Generation
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl<'c> Lowerer<'c> {
     fn function_symbol(&self, id: &FunctionId) -> naming::Name<naming::GlobalSymbol> {
         naming::function_ffi_name(id.as_str())
     }
@@ -623,7 +1287,18 @@ impl<'c> Lowerer<'c> {
             None => naming::class_ffi_new(class_id.as_str()),
         }
     }
+
+    fn call_symbol(&self, plan: &CallPlan) -> naming::Name<naming::GlobalSymbol> {
+        match &plan.target {
+            CallTarget::GlobalSymbol(symbol) => symbol.clone(),
+            CallTarget::VtableField(_) => panic!("expected global symbol"),
+        }
+    }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper Functions
+// ─────────────────────────────────────────────────────────────────────────────
 
 fn primitive_to_abi(p: PrimitiveType) -> AbiType {
     match p {
@@ -679,85 +1354,15 @@ fn compute_blittable_layout(def: &RecordDef) -> (usize, Vec<BlittableField>) {
     (size, fields)
 }
 
-pub fn lower_contract(contract: &FfiContract) -> LoweredContract {
-    let lowerer = Lowerer::new(contract);
+// ─────────────────────────────────────────────────────────────────────────────
+// Types (Legacy)
+// TODO: Remove after Kotlin backend migrates to AbiContract
+// ─────────────────────────────────────────────────────────────────────────────
 
-    let functions = contract
-        .functions
-        .iter()
-        .map(|f| (f.id.clone(), lowerer.lower_function(f)))
-        .collect();
-
-    let methods = contract
-        .catalog
-        .all_classes()
-        .flat_map(|class| {
-            class.methods.iter().map(|m| {
-                (
-                    (class.id.clone(), m.id.clone()),
-                    lowerer.lower_method(class, m),
-                )
-            })
-        })
-        .collect();
-
-    let constructors = contract
-        .catalog
-        .all_classes()
-        .flat_map(|class| {
-            class
-                .constructors
-                .iter()
-                .enumerate()
-                .map(|(idx, c)| ((class.id.clone(), idx), lowerer.lower_constructor(class, c)))
-        })
-        .collect();
-
-    let callbacks = contract
-        .catalog
-        .all_callbacks()
-        .map(|cb| (cb.id.clone(), lowerer.lower_callback(cb)))
-        .collect();
-
-    let callback_invocations = contract
-        .catalog
-        .all_callbacks()
-        .map(|cb| (cb.id.clone(), lowerer.lower_callback_invocation(cb)))
-        .collect();
-
-    let record_codecs = contract
-        .catalog
-        .all_records()
-        .map(|r| {
-            (
-                r.id.clone(),
-                lowerer.build_codec(&TypeExpr::Record(r.id.clone())),
-            )
-        })
-        .collect();
-
-    let enum_codecs = contract
-        .catalog
-        .all_enums()
-        .map(|e| {
-            (
-                e.id.clone(),
-                lowerer.build_codec(&TypeExpr::Enum(e.id.clone())),
-            )
-        })
-        .collect();
-
-    LoweredContract {
-        functions,
-        methods,
-        constructors,
-        callbacks,
-        callback_invocations,
-        record_codecs,
-        enum_codecs,
-    }
-}
-
+/// Legacy lowered contract using CallPlan-based representation.
+///
+/// DEPRECATED: Use `AbiContract` instead. This type exists only for backends
+/// that haven't migrated yet (e.g., Kotlin). Remove after all backends use AbiContract.
 pub struct LoweredContract {
     pub functions: HashMap<FunctionId, CallPlan>,
     pub methods: HashMap<(ClassId, MethodId), CallPlan>,
@@ -768,6 +1373,10 @@ pub struct LoweredContract {
     pub enum_codecs: HashMap<EnumId, CodecPlan>,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -776,11 +1385,11 @@ mod tests {
         CallbackMethodDef, ClassDef, ConstructorDef, FieldDef, FunctionDef, MethodDef, ParamDef,
         ParamPassing, Receiver, RecordDef, ReturnDef,
     };
-    use riff_ffi_rules::naming;
     use crate::ir::ids::{
         CallbackId, ClassId, FieldName, FunctionId, MethodId, ParamName, RecordId,
     };
     use crate::ir::types::{PrimitiveType, TypeExpr};
+    use riff_ffi_rules::naming;
 
     fn test_contract() -> FfiContract {
         FfiContract {

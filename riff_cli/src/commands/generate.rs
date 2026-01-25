@@ -121,10 +121,17 @@ fn generate_swift_ir(config: &Config, output: Option<PathBuf>) -> Result<()> {
         status: None,
     })?;
 
+    let ffi_module_name = config
+        .apple_swift_ffi_module_name()
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| format!("{}FFI", config.xcframework_name()));
+
     let contract = ir::build_contract(&mut module);
-    let lowered = ir::lower_contract(&contract);
-    let swift_module = render::swift::SwiftLowerer::new(&contract, &lowered).lower();
-    let swift_code = render::swift::SwiftEmitter::with_prefix(crate_name).emit(&swift_module);
+    let abi_contract = ir::Lowerer::new(&contract).to_abi_contract();
+    let swift_module = render::swift::SwiftLowerer::new(&contract, &abi_contract).lower();
+    let swift_code = render::swift::SwiftEmitter::with_prefix(riff_bindgen::ffi_prefix())
+        .with_ffi_module(&ffi_module_name)
+        .emit(&swift_module);
 
     std::fs::write(&output_path, &swift_code).map_err(|source| CliError::WriteFailed {
         path: output_path.clone(),
