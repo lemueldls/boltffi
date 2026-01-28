@@ -1027,7 +1027,16 @@ impl<'a> KotlinLowerer<'a> {
                 jni_type: "ByteBuffer".to_string(),
                 conversion: self.callback_encoded_conversion(decode_ops, &name),
             },
-            _ => panic!("unsupported callback param role"),
+            ParamRole::InString { .. }
+            | ParamRole::InBuffer { .. }
+            | ParamRole::InHandle { .. }
+            | ParamRole::InCallback { .. }
+            | ParamRole::OutBuffer { .. }
+            | ParamRole::OutDirect
+            | ParamRole::OutLen { .. }
+            | ParamRole::StatusOut => {
+                panic!("unsupported callback param role: {:?}", param.role)
+            }
         }
     }
 
@@ -1042,8 +1051,13 @@ impl<'a> KotlinLowerer<'a> {
             ReturnDef::Value(TypeExpr::Record(_))
             | ReturnDef::Value(TypeExpr::Vec(_))
             | ReturnDef::Value(TypeExpr::Option(_))
-            | ReturnDef::Value(TypeExpr::Bytes) => Some("ByteBuffer".to_string()),
-            _ => None,
+            | ReturnDef::Value(TypeExpr::Bytes)
+            | ReturnDef::Value(TypeExpr::Custom(_))
+            | ReturnDef::Value(TypeExpr::Builtin(_)) => Some("ByteBuffer".to_string()),
+            ReturnDef::Void
+            | ReturnDef::Result { .. }
+            | ReturnDef::Value(TypeExpr::Void)
+            | ReturnDef::Value(TypeExpr::Result { .. }) => None,
         };
         KotlinAsyncCallbackInvoker {
             name: format!("invokeAsyncCallback{}", self.invoker_suffix(returns)),
@@ -1069,7 +1083,18 @@ impl<'a> KotlinLowerer<'a> {
             ReturnDef::Value(TypeExpr::Handle(_)) | ReturnDef::Value(TypeExpr::Callback(_)) => {
                 "I64".to_string()
             }
-            _ => "Void".to_string(),
+            ReturnDef::Void
+            | ReturnDef::Result { .. }
+            | ReturnDef::Value(TypeExpr::Void)
+            | ReturnDef::Value(TypeExpr::String)
+            | ReturnDef::Value(TypeExpr::Bytes)
+            | ReturnDef::Value(TypeExpr::Enum(_))
+            | ReturnDef::Value(TypeExpr::Record(_))
+            | ReturnDef::Value(TypeExpr::Vec(_))
+            | ReturnDef::Value(TypeExpr::Option(_))
+            | ReturnDef::Value(TypeExpr::Result { .. })
+            | ReturnDef::Value(TypeExpr::Custom(_))
+            | ReturnDef::Value(TypeExpr::Builtin(_)) => "Void".to_string(),
         }
     }
 
@@ -1209,17 +1234,14 @@ impl<'a> KotlinLowerer<'a> {
             .filter(|call| !declared_symbols.contains(call.symbol.as_str()))
             .map(|call| KotlinNativeWireFunction {
                 ffi_name: call.symbol.as_str().to_string(),
-                params: {
-                    let len_params = self.len_param_names(call);
-                    call.params
-                        .iter()
-                        .filter(|param| self.include_native_param(param, &len_params))
-                        .map(|param| KotlinNativeParam {
-                            name: param.name.as_str().to_string(),
-                            jni_type: self.jni_type_for_param(param),
-                        })
-                        .collect()
-                },
+                params: self
+                    .visible_native_params(call)
+                    .into_iter()
+                    .map(|param| KotlinNativeParam {
+                        name: param.name.as_str().to_string(),
+                        jni_type: self.jni_type_for_param(param),
+                    })
+                    .collect(),
                 return_jni_type: "ByteBuffer?".to_string(),
             })
             .collect::<Vec<_>>();
@@ -1286,17 +1308,14 @@ impl<'a> KotlinLowerer<'a> {
         };
         KotlinNativeFunction {
             ffi_name: call.symbol.as_str().to_string(),
-            params: {
-                let len_params = self.len_param_names(call);
-                call.params
-                    .iter()
-                    .filter(|param| self.include_native_param(param, &len_params))
-                    .map(|param| KotlinNativeParam {
-                        name: param.name.as_str().to_string(),
-                        jni_type: self.jni_type_for_param(param),
-                    })
-                    .collect()
-            },
+            params: self
+                .visible_native_params(call)
+                .into_iter()
+                .map(|param| KotlinNativeParam {
+                    name: param.name.as_str().to_string(),
+                    jni_type: self.jni_type_for_param(param),
+                })
+                .collect(),
             return_jni_type,
             async_ffi,
         }
@@ -1311,17 +1330,14 @@ impl<'a> KotlinLowerer<'a> {
                 let call = self.abi_call_for_constructor(class, index);
                 KotlinNativeCtor {
                     ffi_name: call.symbol.as_str().to_string(),
-                    params: {
-                        let len_params = self.len_param_names(call);
-                        call.params
-                            .iter()
-                            .filter(|param| self.include_native_param(param, &len_params))
-                            .map(|param| KotlinNativeParam {
-                                name: param.name.as_str().to_string(),
-                                jni_type: self.jni_type_for_param(param),
-                            })
-                            .collect()
-                    },
+                    params: self
+                        .visible_native_params(call)
+                        .into_iter()
+                        .map(|param| KotlinNativeParam {
+                            name: param.name.as_str().to_string(),
+                            jni_type: self.jni_type_for_param(param),
+                        })
+                        .collect(),
                 }
             })
             .collect();
@@ -1342,17 +1358,14 @@ impl<'a> KotlinLowerer<'a> {
                     ffi_cancel: async_call.cancel.as_str().to_string(),
                     ffi_free: async_call.free.as_str().to_string(),
                     include_handle: true,
-                    params: {
-                        let len_params = self.len_param_names(&call);
-                        call.params
-                            .iter()
-                            .filter(|param| self.include_native_param(param, &len_params))
-                            .map(|param| KotlinNativeParam {
-                                name: param.name.as_str().to_string(),
-                                jni_type: self.jni_type_for_param(param),
-                            })
-                            .collect()
-                    },
+                    params: self
+                        .visible_native_params(&call)
+                        .into_iter()
+                        .map(|param| KotlinNativeParam {
+                            name: param.name.as_str().to_string(),
+                            jni_type: self.jni_type_for_param(param),
+                        })
+                        .collect(),
                     return_jni_type: match &async_call.result {
                         AsyncResultTransport::Void => "Unit".to_string(),
                         AsyncResultTransport::Direct(abi) => self.jni_type_for_abi(abi),
@@ -1372,17 +1385,14 @@ impl<'a> KotlinLowerer<'a> {
                 KotlinNativeSyncMethod {
                     ffi_name: call.symbol.as_str().to_string(),
                     include_handle: true,
-                    params: {
-                        let len_params = self.len_param_names(&call);
-                        call.params
-                            .iter()
-                            .filter(|param| self.include_native_param(param, &len_params))
-                            .map(|param| KotlinNativeParam {
-                                name: param.name.as_str().to_string(),
-                                jni_type: self.jni_type_for_param(param),
-                            })
-                            .collect()
-                    },
+                    params: self
+                        .visible_native_params(&call)
+                        .into_iter()
+                        .map(|param| KotlinNativeParam {
+                            name: param.name.as_str().to_string(),
+                            jni_type: self.jni_type_for_param(param),
+                        })
+                        .collect(),
                     return_jni_type: self.jni_type_for_return(&call.return_),
                 }
             })
@@ -1440,17 +1450,76 @@ impl<'a> KotlinLowerer<'a> {
         }
     }
 
-    fn jni_type_for_param(&self, param: &AbiParam) -> String {
+    fn jni_param_mapping(&self, param: &AbiParam) -> JniParamMapping {
         match &param.role {
-            ParamRole::InDirect => self.jni_type_for_abi(&param.ffi_type),
-            ParamRole::InString { .. } => "String".to_string(),
-            ParamRole::InBuffer { element_abi, .. } => self.jni_buffer_type(element_abi),
-            ParamRole::InEncoded { .. } => "ByteBuffer".to_string(),
-            ParamRole::InHandle { .. } => "Long".to_string(),
-            ParamRole::InCallback { .. } => "Long".to_string(),
-            ParamRole::OutBuffer { .. } => "ByteBuffer".to_string(),
-            _ => self.jni_type_for_abi(&param.ffi_type),
+            ParamRole::InDirect => JniParamMapping {
+                role: JniParamRole::Direct {
+                    jni_type: self.jni_type_for_abi(&param.ffi_type),
+                },
+                has_len_param: None,
+            },
+            ParamRole::InString { len_param } => JniParamMapping {
+                role: JniParamRole::StringParam,
+                has_len_param: Some(len_param.clone()),
+            },
+            ParamRole::InBuffer {
+                element_abi,
+                len_param,
+                ..
+            } => JniParamMapping {
+                role: JniParamRole::Buffer {
+                    jni_type: self.jni_buffer_type(element_abi),
+                },
+                has_len_param: Some(len_param.clone()),
+            },
+            ParamRole::InEncoded { len_param, .. } => JniParamMapping {
+                role: JniParamRole::Encoded,
+                has_len_param: Some(len_param.clone()),
+            },
+            ParamRole::InHandle { nullable, .. } => JniParamMapping {
+                role: JniParamRole::Handle {
+                    nullable: *nullable,
+                },
+                has_len_param: None,
+            },
+            ParamRole::InCallback {
+                callback_id,
+                nullable,
+                ..
+            } => JniParamMapping {
+                role: JniParamRole::Callback {
+                    callback_id: callback_id.clone(),
+                    nullable: *nullable,
+                },
+                has_len_param: None,
+            },
+            ParamRole::OutBuffer { len_param, .. } => JniParamMapping {
+                role: JniParamRole::OutBuffer,
+                has_len_param: Some(len_param.clone()),
+            },
+            ParamRole::OutDirect | ParamRole::OutLen { .. } | ParamRole::StatusOut => {
+                JniParamMapping {
+                    role: JniParamRole::Hidden,
+                    has_len_param: None,
+                }
+            }
         }
+    }
+
+    fn jni_type_for_mapping(&self, mapping: &JniParamMapping) -> String {
+        match &mapping.role {
+            JniParamRole::Direct { jni_type } | JniParamRole::Buffer { jni_type } => {
+                jni_type.clone()
+            }
+            JniParamRole::StringParam => "String".to_string(),
+            JniParamRole::Encoded | JniParamRole::OutBuffer => "ByteBuffer".to_string(),
+            JniParamRole::Handle { .. } | JniParamRole::Callback { .. } => "Long".to_string(),
+            JniParamRole::Hidden => "Unit".to_string(),
+        }
+    }
+
+    fn jni_type_for_param(&self, param: &AbiParam) -> String {
+        self.jni_type_for_mapping(&self.jni_param_mapping(param))
     }
 
     fn jni_buffer_type(&self, element_abi: &AbiType) -> String {
@@ -1750,83 +1819,89 @@ impl<'a> KotlinLowerer<'a> {
                     size_expr: emit::emit_size_expr(&encode_ops.size),
                     encode_expr: emit::emit_write_expr(encode_ops),
                 }),
-                _ => None,
+                ParamRole::InDirect
+                | ParamRole::InString { .. }
+                | ParamRole::InBuffer { .. }
+                | ParamRole::InHandle { .. }
+                | ParamRole::InCallback { .. }
+                | ParamRole::OutBuffer { .. }
+                | ParamRole::OutDirect
+                | ParamRole::OutLen { .. }
+                | ParamRole::StatusOut => None,
+            })
+            .collect()
+    }
+
+    fn native_arg_for_mapping(
+        &self,
+        param: &AbiParam,
+        mapping: &JniParamMapping,
+        writers: &[KotlinWireWriter],
+    ) -> String {
+        let name = NamingConvention::param_name(param.name.as_str());
+        match &mapping.role {
+            JniParamRole::Direct { .. } => match &param.ffi_type {
+                AbiType::U64 | AbiType::USize => format!("{}.toLong()", name),
+                AbiType::U32 => format!("{}.toInt()", name),
+                AbiType::U16 => format!("{}.toShort()", name),
+                AbiType::U8 => format!("{}.toByte()", name),
+                _ => name,
+            },
+            JniParamRole::StringParam | JniParamRole::Buffer { .. } => name,
+            JniParamRole::Encoded => writers
+                .iter()
+                .find(|w| w.binding_name == format!("wire_writer_{}", param.name.as_str()))
+                .map(|w| format!("{}.buffer", w.binding_name))
+                .unwrap_or_else(|| "wire.buffer".to_string()),
+            JniParamRole::Handle { nullable } => {
+                if *nullable {
+                    format!("{}?.handle ?: 0L", name)
+                } else {
+                    format!("{}.handle", name)
+                }
+            }
+            JniParamRole::Callback {
+                callback_id,
+                nullable,
+            } => {
+                let bridge = format!(
+                    "{}Bridge",
+                    NamingConvention::class_name(callback_id.as_str())
+                );
+                if *nullable {
+                    format!("{}?.let {{ {}.create(it) }} ?: 0L", name, bridge)
+                } else {
+                    format!("{}.create({})", bridge, name)
+                }
+            }
+            JniParamRole::OutBuffer => self.writer_pack_expr_for_param(param, &name),
+            JniParamRole::Hidden => name,
+        }
+    }
+
+    fn visible_native_params<'b>(&'b self, call: &'b AbiCall) -> Vec<&'b AbiParam> {
+        let len_params: HashSet<ParamName> = call
+            .params
+            .iter()
+            .filter_map(|param| self.jni_param_mapping(param).has_len_param)
+            .collect();
+        call.params
+            .iter()
+            .filter(|param| {
+                !len_params.contains(&param.name)
+                    && !matches!(self.jni_param_mapping(param).role, JniParamRole::Hidden)
             })
             .collect()
     }
 
     fn native_args_for_params(&self, call: &AbiCall, writers: &[KotlinWireWriter]) -> Vec<String> {
-        let len_params = self.len_param_names(call);
-        call.params
-            .iter()
-            .filter(|param| self.include_native_param(param, &len_params))
-            .map(|param| match &param.role {
-                ParamRole::InEncoded { .. } => writers
-                    .iter()
-                    .find(|w| w.binding_name == format!("wire_writer_{}", param.name.as_str()))
-                    .map(|w| format!("{}.buffer", w.binding_name))
-                    .unwrap_or_else(|| "wire.buffer".to_string()),
-                ParamRole::InHandle { nullable, .. } => {
-                    let name = NamingConvention::param_name(param.name.as_str());
-                    if *nullable {
-                        format!("{}?.handle ?: 0L", name)
-                    } else {
-                        format!("{}.handle", name)
-                    }
-                }
-                ParamRole::InCallback {
-                    callback_id,
-                    nullable,
-                    ..
-                } => {
-                    let bridge = format!(
-                        "{}Bridge",
-                        NamingConvention::class_name(callback_id.as_str())
-                    );
-                    let name = NamingConvention::param_name(param.name.as_str());
-                    if *nullable {
-                        format!("{}?.let {{ {}.create(it) }} ?: 0L", name, bridge)
-                    } else {
-                        format!("{}.create({})", bridge, name)
-                    }
-                }
-                ParamRole::OutBuffer { .. } => {
-                    let name = NamingConvention::param_name(param.name.as_str());
-                    self.writer_pack_expr_for_param(param, &name)
-                }
-                _ => {
-                    let name = NamingConvention::param_name(param.name.as_str());
-                    match &param.ffi_type {
-                        AbiType::U64 | AbiType::USize => format!("{}.toLong()", name),
-                        AbiType::U32 => format!("{}.toInt()", name),
-                        AbiType::U16 => format!("{}.toShort()", name),
-                        AbiType::U8 => format!("{}.toByte()", name),
-                        _ => name,
-                    }
-                }
+        self.visible_native_params(call)
+            .into_iter()
+            .map(|param| {
+                let mapping = self.jni_param_mapping(param);
+                self.native_arg_for_mapping(param, &mapping, writers)
             })
             .collect()
-    }
-
-    fn len_param_names(&self, call: &AbiCall) -> HashSet<ParamName> {
-        call.params
-            .iter()
-            .filter_map(|param| match &param.role {
-                ParamRole::InBuffer { len_param, .. }
-                | ParamRole::InString { len_param }
-                | ParamRole::InEncoded { len_param, .. }
-                | ParamRole::OutBuffer { len_param, .. } => Some(len_param.clone()),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn include_native_param(&self, param: &AbiParam, len_params: &HashSet<ParamName>) -> bool {
-        !len_params.contains(&param.name)
-            && !matches!(
-                param.role,
-                ParamRole::OutLen { .. } | ParamRole::OutDirect | ParamRole::StatusOut
-            )
     }
 
     fn is_instance_receiver(param: &AbiParam) -> bool {
@@ -2436,21 +2511,34 @@ impl<'a> KotlinLowerer<'a> {
         let call_seqs = self.abi.calls.iter().flat_map(|call| {
             let return_seq = match &call.return_ {
                 ReturnTransport::Encoded { decode_ops, .. } => Some(decode_ops),
-                _ => None,
+                ReturnTransport::Void
+                | ReturnTransport::Direct(_)
+                | ReturnTransport::Handle { .. }
+                | ReturnTransport::Callback { .. } => None,
             };
             let param_seqs = call.params.iter().filter_map(|param| match &param.role {
-                ParamRole::InEncoded { decode_ops, .. } => Some(decode_ops),
-                ParamRole::OutBuffer { decode_ops, .. } => Some(decode_ops),
-                _ => None,
+                ParamRole::InEncoded { decode_ops, .. }
+                | ParamRole::OutBuffer { decode_ops, .. } => Some(decode_ops),
+                ParamRole::InDirect
+                | ParamRole::InString { .. }
+                | ParamRole::InBuffer { .. }
+                | ParamRole::InHandle { .. }
+                | ParamRole::InCallback { .. }
+                | ParamRole::OutDirect
+                | ParamRole::OutLen { .. }
+                | ParamRole::StatusOut => None,
             });
             let error_seq = match &call.error {
                 ErrorTransport::Encoded { decode_ops } => Some(decode_ops),
-                _ => None,
+                ErrorTransport::None | ErrorTransport::StatusCode => None,
             };
             let async_seq = match &call.mode {
                 CallMode::Async(async_call) => match &async_call.result {
                     AsyncResultTransport::Encoded { decode_ops, .. } => Some(decode_ops),
-                    _ => None,
+                    AsyncResultTransport::Void
+                    | AsyncResultTransport::Direct(_)
+                    | AsyncResultTransport::Handle { .. }
+                    | AsyncResultTransport::Callback { .. } => None,
                 },
                 CallMode::Sync => None,
             };
@@ -2464,12 +2552,22 @@ impl<'a> KotlinLowerer<'a> {
             callback.methods.iter().flat_map(|method| {
                 let return_seq = match &method.return_ {
                     ReturnTransport::Encoded { decode_ops, .. } => Some(decode_ops),
-                    _ => None,
+                    ReturnTransport::Void
+                    | ReturnTransport::Direct(_)
+                    | ReturnTransport::Handle { .. }
+                    | ReturnTransport::Callback { .. } => None,
                 };
                 let param_seqs = method.params.iter().filter_map(|param| match &param.role {
-                    ParamRole::InEncoded { decode_ops, .. } => Some(decode_ops),
-                    ParamRole::OutBuffer { decode_ops, .. } => Some(decode_ops),
-                    _ => None,
+                    ParamRole::InEncoded { decode_ops, .. }
+                    | ParamRole::OutBuffer { decode_ops, .. } => Some(decode_ops),
+                    ParamRole::InDirect
+                    | ParamRole::InString { .. }
+                    | ParamRole::InBuffer { .. }
+                    | ParamRole::InHandle { .. }
+                    | ParamRole::InCallback { .. }
+                    | ParamRole::OutDirect
+                    | ParamRole::OutLen { .. }
+                    | ParamRole::StatusOut => None,
                 });
                 return_seq.into_iter().chain(param_seqs)
             })
@@ -2669,7 +2767,10 @@ impl<'a> KotlinLowerer<'a> {
                 AsyncResultTransport::Encoded { decode_ops, .. } => {
                     self.blittable_record_id_from_read_seq(decode_ops)
                 }
-                _ => None,
+                AsyncResultTransport::Void
+                | AsyncResultTransport::Direct(_)
+                | AsyncResultTransport::Handle { .. }
+                | AsyncResultTransport::Callback { .. } => None,
             },
             CallMode::Sync => None,
         });
@@ -2685,7 +2786,10 @@ impl<'a> KotlinLowerer<'a> {
             ReturnTransport::Encoded { decode_ops, .. } => {
                 self.blittable_record_id_from_read_seq(decode_ops)
             }
-            _ => None,
+            ReturnTransport::Void
+            | ReturnTransport::Direct(_)
+            | ReturnTransport::Handle { .. }
+            | ReturnTransport::Callback { .. } => None,
         }
     }
 
@@ -2888,4 +2992,29 @@ struct KotlinPreamble {
     extra_imports: Vec<String>,
     custom_types: Vec<KotlinCustomType>,
     has_streams: bool,
+}
+
+enum JniParamRole {
+    Direct {
+        jni_type: String,
+    },
+    StringParam,
+    Buffer {
+        jni_type: String,
+    },
+    Encoded,
+    Handle {
+        nullable: bool,
+    },
+    Callback {
+        callback_id: CallbackId,
+        nullable: bool,
+    },
+    OutBuffer,
+    Hidden,
+}
+
+struct JniParamMapping {
+    role: JniParamRole,
+    has_len_param: Option<ParamName>,
 }
