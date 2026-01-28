@@ -26,26 +26,6 @@ pub struct JniFunction {
     pub jni_params: String,
     pub return_kind: JniReturnKind,
     pub params: Vec<JniParam>,
-    pub is_vec: bool,
-    pub is_vec_record: bool,
-    pub is_data_enum_return: bool,
-    pub data_enum_return_name: String,
-    pub data_enum_return_size: usize,
-    pub vec_buf_type: String,
-    pub vec_free_fn: String,
-    pub vec_c_type: String,
-    pub vec_jni_array_type: String,
-    pub vec_new_array_fn: String,
-    pub vec_set_array_fn: String,
-    pub vec_struct_size: usize,
-    pub option_vec_buf_type: String,
-    pub option_vec_free_fn: String,
-    pub option_vec_c_type: String,
-    pub option_vec_jni_array_type: String,
-    pub option_vec_new_array_fn: String,
-    pub option_vec_struct_size: usize,
-    pub option: Option<JniOptionView>,
-    pub result: Option<JniResultView>,
 }
 
 #[derive(Clone)]
@@ -72,23 +52,40 @@ pub struct JniAsyncFunction {
     pub jni_complete_name: String,
     pub jni_cancel_name: String,
     pub jni_free_name: String,
-    pub jni_complete_return: String,
-    pub jni_complete_c_type: String,
-    pub complete_is_void: bool,
-    pub complete_is_string: bool,
-    pub complete_is_vec: bool,
-    pub complete_is_record: bool,
-    pub complete_is_result: bool,
-    pub result_ok_is_void: bool,
-    pub result_ok_is_string: bool,
-    pub result_err_is_string: bool,
-    pub result_ok_c_type: String,
-    pub result_ok_jni_type: String,
-    pub vec_jni_element_type: String,
-    pub vec_jni_array_type: String,
-    pub vec_new_array_fn: String,
-    pub vec_set_array_fn: String,
+    pub complete_kind: JniAsyncCompleteKind,
     pub params: Vec<JniParam>,
+}
+
+#[derive(Clone)]
+pub enum JniAsyncCompleteKind {
+    Void,
+    WireEncoded,
+    Direct { jni_return: String, c_type: String },
+}
+
+impl JniAsyncCompleteKind {
+    pub fn is_void(&self) -> bool {
+        matches!(self, Self::Void)
+    }
+
+    pub fn is_wire_encoded(&self) -> bool {
+        matches!(self, Self::WireEncoded)
+    }
+
+    pub fn jni_return(&self) -> &str {
+        match self {
+            Self::Void => "void",
+            Self::WireEncoded => "jobject",
+            Self::Direct { jni_return, .. } => jni_return,
+        }
+    }
+
+    pub fn c_type(&self) -> &str {
+        match self {
+            Self::Direct { c_type, .. } => c_type,
+            _ => "",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -125,10 +122,19 @@ pub struct JniAsyncCallbackMethod {
     pub c_params: Vec<JniCallbackCParam>,
     pub setup_lines: Vec<String>,
     pub jni_args: Vec<String>,
-    pub has_return: bool,
-    pub return_c_type: String,
+    pub return_c_type: Option<String>,
     pub invoker_jni_name: String,
     pub invoker_native_name: String,
+}
+
+impl JniAsyncCallbackMethod {
+    pub fn has_return(&self) -> bool {
+        self.return_c_type.is_some()
+    }
+
+    pub fn return_c_type(&self) -> &str {
+        self.return_c_type.as_deref().unwrap_or("")
+    }
 }
 
 #[derive(Clone)]
@@ -136,13 +142,35 @@ pub struct JniCallbackMethod {
     pub ffi_name: String,
     pub jni_method_name: String,
     pub jni_signature: String,
-    pub jni_return_type: String,
-    pub jni_call_type: String,
-    pub c_return_type: String,
-    pub has_return: bool,
     pub c_params: Vec<JniCallbackCParam>,
     pub setup_lines: Vec<String>,
     pub jni_args: Vec<String>,
+    pub return_info: Option<JniCallbackReturn>,
+}
+
+#[derive(Clone)]
+pub struct JniCallbackReturn {
+    pub jni_type: String,
+    pub jni_call_type: String,
+    pub c_type: String,
+}
+
+impl JniCallbackMethod {
+    pub fn has_return(&self) -> bool {
+        self.return_info.is_some()
+    }
+
+    pub fn jni_return_type(&self) -> &str {
+        self.return_info.as_ref().map(|r| r.jni_type.as_str()).unwrap_or("")
+    }
+
+    pub fn jni_call_type(&self) -> &str {
+        self.return_info.as_ref().map(|r| r.jni_call_type.as_str()).unwrap_or("")
+    }
+
+    pub fn c_return_type(&self) -> &str {
+        self.return_info.as_ref().map(|r| r.c_type.as_str()).unwrap_or("")
+    }
 }
 
 #[derive(Clone)]
@@ -156,15 +184,34 @@ pub struct JniParam {
     pub name: String,
     pub ffi_arg: String,
     pub jni_decl: String,
-    pub is_string: bool,
-    pub is_primitive_array: bool,
-    pub is_wire_param: bool,
-    pub is_data_enum: bool,
-    pub is_record_buffer: bool,
-    pub is_closure: bool,
-    pub record_struct_size: usize,
-    pub array_c_type: String,
-    pub array_release_mode: String,
+    pub kind: JniParamKind,
+}
+
+#[derive(Clone)]
+pub enum JniParamKind {
+    Primitive,
+    String,
+    PrimitiveArray {
+        c_type: String,
+        release_mode: JniArrayReleaseMode,
+    },
+    Buffer,
+    Closure,
+}
+
+#[derive(Clone, Copy)]
+pub enum JniArrayReleaseMode {
+    Commit,
+    Abort,
+}
+
+impl JniArrayReleaseMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Commit => "0",
+            Self::Abort => "JNI_ABORT",
+        }
+    }
 }
 
 impl JniParam {
@@ -177,39 +224,33 @@ impl JniParam {
     }
 
     pub fn is_string(&self) -> bool {
-        self.is_string
+        matches!(self.kind, JniParamKind::String)
     }
 
     pub fn is_primitive_array(&self) -> bool {
-        self.is_primitive_array
+        matches!(self.kind, JniParamKind::PrimitiveArray { .. })
     }
 
-    pub fn is_wire_param(&self) -> bool {
-        self.is_wire_param
-    }
-
-    pub fn is_data_enum(&self) -> bool {
-        self.is_data_enum
-    }
-
-    pub fn is_record_buffer(&self) -> bool {
-        self.is_record_buffer
+    pub fn is_buffer(&self) -> bool {
+        matches!(self.kind, JniParamKind::Buffer)
     }
 
     pub fn is_closure(&self) -> bool {
-        self.is_closure
-    }
-
-    pub fn record_struct_size(&self) -> usize {
-        self.record_struct_size
+        matches!(self.kind, JniParamKind::Closure)
     }
 
     pub fn array_c_type(&self) -> &str {
-        &self.array_c_type
+        match &self.kind {
+            JniParamKind::PrimitiveArray { c_type, .. } => c_type,
+            _ => "",
+        }
     }
 
     pub fn array_release_mode(&self) -> &str {
-        &self.array_release_mode
+        match &self.kind {
+            JniParamKind::PrimitiveArray { release_mode, .. } => release_mode.as_str(),
+            _ => "",
+        }
     }
 }
 
@@ -235,17 +276,33 @@ pub struct JniClosureRecordParam {
 pub struct JniAsyncCallbackInvoker {
     pub suffix: String,
     pub jni_fn_name: String,
-    pub c_result_type: String,
-    pub jni_result_type: String,
-    pub has_result: bool,
+    pub result_type: Option<JniInvokerResult>,
+}
+
+#[derive(Clone)]
+pub struct JniInvokerResult {
+    pub c_type: String,
+    pub jni_type: String,
+}
+
+impl JniAsyncCallbackInvoker {
+    pub fn has_result(&self) -> bool {
+        self.result_type.is_some()
+    }
+
+    pub fn c_result_type(&self) -> &str {
+        self.result_type.as_ref().map(|r| r.c_type.as_str()).unwrap_or("")
+    }
+
+    pub fn jni_result_type(&self) -> &str {
+        self.result_type.as_ref().map(|r| r.jni_type.as_str()).unwrap_or("")
+    }
 }
 
 #[derive(Clone)]
 pub struct JniOptionView {
     pub ffi_type: String,
     pub struct_size: usize,
-    pub is_vec: bool,
-    pub is_data_enum: bool,
     pub inner_kind: JniOptionInnerKind,
 }
 
@@ -263,6 +320,16 @@ pub enum JniOptionInnerKind {
 }
 
 impl JniOptionView {
+    pub fn is_vec(&self) -> bool {
+        matches!(
+            self.inner_kind,
+            JniOptionInnerKind::VecPrimitive
+                | JniOptionInnerKind::VecRecord
+                | JniOptionInnerKind::VecString
+                | JniOptionInnerKind::VecEnum
+        )
+    }
+
     pub fn is_vec_record(&self) -> bool {
         matches!(self.inner_kind, JniOptionInnerKind::VecRecord)
     }
@@ -297,10 +364,6 @@ impl JniOptionView {
 
     pub fn is_enum(&self) -> bool {
         matches!(self.inner_kind, JniOptionInnerKind::Enum)
-    }
-
-    pub fn is_data_enum(&self) -> bool {
-        self.is_data_enum
     }
 
     pub fn box_class(&self) -> String {

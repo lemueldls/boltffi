@@ -18,9 +18,10 @@ use crate::ir::types::{PrimitiveType, TypeExpr};
 use crate::kotlin::{NamingConvention, primitives};
 
 use super::plan::{
-    JniAsyncCallbackInvoker, JniAsyncCallbackMethod, JniAsyncFunction, JniCallbackCParam,
-    JniCallbackMethod, JniCallbackTrait, JniClass, JniClosureRecordParam, JniClosureTrampoline,
-    JniFunction, JniModule, JniOptionInnerKind, JniOptionView, JniParam, JniResultVariant,
+    JniArrayReleaseMode, JniAsyncCallbackInvoker, JniAsyncCallbackMethod, JniAsyncCompleteKind,
+    JniAsyncFunction, JniCallbackCParam, JniCallbackMethod, JniCallbackReturn, JniCallbackTrait,
+    JniClass, JniClosureRecordParam, JniClosureTrampoline, JniFunction, JniInvokerResult,
+    JniModule, JniOptionInnerKind, JniOptionView, JniParam, JniParamKind, JniResultVariant,
     JniResultView, JniReturnAbi, JniReturnKind, JniStream, JniWireCtor, JniWireFunction,
     JniWireMethod,
 };
@@ -273,26 +274,6 @@ impl<'a> JniLowerer<'a> {
             jni_params,
             return_kind,
             params,
-            is_vec: false,
-            is_vec_record: false,
-            is_data_enum_return: false,
-            data_enum_return_name: String::new(),
-            data_enum_return_size: 0,
-            vec_buf_type: String::new(),
-            vec_free_fn: String::new(),
-            vec_c_type: String::new(),
-            vec_jni_array_type: String::new(),
-            vec_new_array_fn: String::new(),
-            vec_set_array_fn: String::new(),
-            vec_struct_size: 0,
-            option_vec_buf_type: String::new(),
-            option_vec_free_fn: String::new(),
-            option_vec_c_type: String::new(),
-            option_vec_jni_array_type: String::new(),
-            option_vec_new_array_fn: String::new(),
-            option_vec_struct_size: 0,
-            option: None,
-            result: None,
         }
     }
 
@@ -371,31 +352,19 @@ impl<'a> JniLowerer<'a> {
             jni_prefix,
             subscribe_ffi.replace('_', "_1")
         );
-        let poll_jni = format!(
-            "Java_{}_Native_{}",
-            jni_prefix,
-            poll_ffi.replace('_', "_1")
-        );
+        let poll_jni = format!("Java_{}_Native_{}", jni_prefix, poll_ffi.replace('_', "_1"));
         let pop_batch_jni = format!(
             "Java_{}_Native_{}",
             jni_prefix,
             pop_batch_ffi.replace('_', "_1")
         );
-        let wait_jni = format!(
-            "Java_{}_Native_{}",
-            jni_prefix,
-            wait_ffi.replace('_', "_1")
-        );
+        let wait_jni = format!("Java_{}_Native_{}", jni_prefix, wait_ffi.replace('_', "_1"));
         let unsubscribe_jni = format!(
             "Java_{}_Native_{}",
             jni_prefix,
             unsubscribe_ffi.replace('_', "_1")
         );
-        let free_jni = format!(
-            "Java_{}_Native_{}",
-            jni_prefix,
-            free_ffi.replace('_', "_1")
-        );
+        let free_jni = format!("Java_{}_Native_{}", jni_prefix, free_ffi.replace('_', "_1"));
         JniStream {
             subscribe_ffi,
             subscribe_jni,
@@ -566,8 +535,7 @@ impl<'a> JniLowerer<'a> {
         let jni_params = self.format_jni_params(&params);
 
         let return_abi = self.return_abi(&func.returns);
-        let complete_is_void = return_abi.is_unit();
-        let complete_is_wire_encoded = return_abi.is_wire_encoded();
+        let complete_kind = self.async_complete_kind(&return_abi);
 
         JniAsyncFunction {
             ffi_name: ffi_name.clone(),
@@ -581,22 +549,7 @@ impl<'a> JniLowerer<'a> {
             jni_cancel_name: format!("Java_{}_Native_{}_1cancel", jni_prefix, jni_func_name),
             jni_free_name: format!("Java_{}_Native_{}_1free", jni_prefix, jni_func_name),
             jni_params,
-            jni_complete_return: return_abi.jni_return_type(),
-            jni_complete_c_type: return_abi.jni_c_return_type(),
-            complete_is_void,
-            complete_is_string: false,
-            complete_is_vec: false,
-            complete_is_record: complete_is_wire_encoded,
-            complete_is_result: false,
-            result_ok_is_void: false,
-            result_ok_is_string: false,
-            result_err_is_string: false,
-            result_ok_c_type: String::new(),
-            result_ok_jni_type: String::new(),
-            vec_jni_element_type: String::new(),
-            vec_jni_array_type: String::new(),
-            vec_new_array_fn: String::new(),
-            vec_set_array_fn: String::new(),
+            complete_kind,
             params,
         }
     }
@@ -619,8 +572,7 @@ impl<'a> JniLowerer<'a> {
         let jni_params = self.format_jni_params(&params);
 
         let return_abi = self.return_abi(&method.returns);
-        let complete_is_void = return_abi.is_unit();
-        let complete_is_wire_encoded = return_abi.is_wire_encoded();
+        let complete_kind = self.async_complete_kind(&return_abi);
 
         JniAsyncFunction {
             ffi_name: ffi_name.clone(),
@@ -636,22 +588,7 @@ impl<'a> JniLowerer<'a> {
             jni_cancel_name: format!("Java_{}_Native_{}_1cancel", jni_prefix, jni_func_name),
             jni_free_name: format!("Java_{}_Native_{}_1free", jni_prefix, jni_func_name),
             jni_params,
-            jni_complete_return: return_abi.jni_return_type(),
-            jni_complete_c_type: return_abi.jni_c_return_type(),
-            complete_is_void,
-            complete_is_string: false,
-            complete_is_vec: false,
-            complete_is_record: complete_is_wire_encoded,
-            complete_is_result: false,
-            result_ok_is_void: false,
-            result_ok_is_string: false,
-            result_err_is_string: false,
-            result_ok_c_type: String::new(),
-            result_ok_jni_type: String::new(),
-            vec_jni_element_type: String::new(),
-            vec_jni_array_type: String::new(),
-            vec_new_array_fn: String::new(),
-            vec_set_array_fn: String::new(),
+            complete_kind,
             params,
         }
     }
@@ -695,33 +632,32 @@ impl<'a> JniLowerer<'a> {
             data_enum_info.clone(),
         );
 
-        let record_struct_size = record_info
-            .as_ref()
-            .map(|info| info.struct_size)
-            .unwrap_or(0);
-
-        let is_record_buffer = record_info.is_some();
-        let is_data_enum = data_enum_info.is_some();
-
-        let array_c_type = array_primitive
-            .map(|primitive| self.primitive_c_type(primitive))
-            .unwrap_or_default();
-
-        let array_release_mode = if array_is_mutable { "0" } else { "JNI_ABORT" }.to_string();
+        let kind = if is_closure {
+            JniParamKind::Closure
+        } else if is_string {
+            JniParamKind::String
+        } else if let Some(primitive) = array_primitive {
+            let c_type = self.primitive_c_type(primitive);
+            let release_mode = if array_is_mutable {
+                JniArrayReleaseMode::Commit
+            } else {
+                JniArrayReleaseMode::Abort
+            };
+            JniParamKind::PrimitiveArray {
+                c_type,
+                release_mode,
+            }
+        } else if is_wire_param || data_enum_info.is_some() {
+            JniParamKind::Buffer
+        } else {
+            JniParamKind::Primitive
+        };
 
         JniParam {
             name,
             ffi_arg,
             jni_decl,
-            is_string,
-            is_primitive_array: array_primitive.is_some(),
-            is_wire_param,
-            is_data_enum,
-            is_record_buffer,
-            record_struct_size,
-            array_c_type,
-            array_release_mode,
-            is_closure,
+            kind,
         }
     }
 
@@ -1029,6 +965,21 @@ impl<'a> JniLowerer<'a> {
         }
     }
 
+    fn async_complete_kind(&self, return_abi: &JniReturnAbi) -> JniAsyncCompleteKind {
+        match return_abi {
+            JniReturnAbi::Unit => JniAsyncCompleteKind::Void,
+            JniReturnAbi::WireEncoded => JniAsyncCompleteKind::WireEncoded,
+            JniReturnAbi::Direct {
+                jni_return_type,
+                jni_c_return_type,
+                ..
+            } => JniAsyncCompleteKind::Direct {
+                jni_return: jni_return_type.clone(),
+                c_type: jni_c_return_type.clone(),
+            },
+        }
+    }
+
     fn primitive_return_jni_type(&self, primitive: PrimitiveType) -> String {
         match primitive {
             PrimitiveType::Bool => "jboolean".to_string(),
@@ -1159,8 +1110,6 @@ impl<'a> JniLowerer<'a> {
         JniOptionView {
             ffi_type: self.option_ffi_type(inner, is_vec, is_data_enum),
             struct_size,
-            is_vec,
-            is_data_enum,
             inner_kind,
         }
     }
@@ -1336,11 +1285,16 @@ impl<'a> JniLowerer<'a> {
     }
 
     fn lower_sync_callback_method(&self, method: &CallbackMethodDef) -> JniCallbackMethod {
-        let return_type = self.callback_return_type(&method.returns);
-        let jni_return_type = self.jni_call_return_type(return_type);
-        let jni_call_type = self.jni_call_method_suffix(return_type);
-        let c_return_type = self.c_type_for_callback(return_type);
-        let has_return = !matches!(method.returns, ReturnDef::Void);
+        let return_info = if matches!(method.returns, ReturnDef::Void) {
+            None
+        } else {
+            let return_type = self.callback_return_type(&method.returns);
+            Some(JniCallbackReturn {
+                jni_type: self.jni_call_return_type(return_type),
+                jni_call_type: self.jni_call_method_suffix(return_type),
+                c_type: self.c_type_for_callback(return_type),
+            })
+        };
 
         let lowered_params: Vec<LoweredCallbackParam> = method
             .params
@@ -1369,13 +1323,10 @@ impl<'a> JniLowerer<'a> {
             ffi_name: ffi_name.clone(),
             jni_method_name: ffi_name,
             jni_signature: self.build_callback_jni_signature(&method.params, &method.returns),
-            jni_return_type,
-            jni_call_type,
-            c_return_type,
-            has_return,
             c_params,
             setup_lines,
             jni_args,
+            return_info,
         }
     }
 
@@ -1384,9 +1335,12 @@ impl<'a> JniLowerer<'a> {
         method: &CallbackMethodDef,
         jni_prefix: &str,
     ) -> JniAsyncCallbackMethod {
-        let has_return = !matches!(method.returns, ReturnDef::Void);
-        let return_type = self.callback_return_type(&method.returns);
-        let return_c_type = self.c_type_for_callback(return_type);
+        let return_c_type = if matches!(method.returns, ReturnDef::Void) {
+            None
+        } else {
+            let return_type = self.callback_return_type(&method.returns);
+            Some(self.c_type_for_callback(return_type))
+        };
 
         let lowered_params: Vec<LoweredCallbackParam> = method
             .params
@@ -1419,7 +1373,6 @@ impl<'a> JniLowerer<'a> {
             c_params,
             setup_lines,
             jni_args,
-            has_return,
             return_c_type,
             invoker_jni_name: format!(
                 "Java_{}_Native_invokeAsyncCallback{}",
@@ -1799,17 +1752,7 @@ impl<'a> JniLowerer<'a> {
             _ => "Object".to_string(),
         };
 
-        let (c_result_type, jni_result_type, has_result) = match suffix.as_str() {
-            "Void" => ("void".to_string(), "void".to_string(), false),
-            "Bool" => ("uint8_t".to_string(), "jboolean".to_string(), true),
-            "I8" => ("int8_t".to_string(), "jbyte".to_string(), true),
-            "I16" => ("int16_t".to_string(), "jshort".to_string(), true),
-            "I32" => ("int32_t".to_string(), "jint".to_string(), true),
-            "I64" => ("int64_t".to_string(), "jlong".to_string(), true),
-            "F32" => ("float".to_string(), "jfloat".to_string(), true),
-            "F64" => ("double".to_string(), "jdouble".to_string(), true),
-            _ => ("void*".to_string(), "jobject".to_string(), true),
-        };
+        let result_type = Self::invoker_result_type(&suffix);
 
         JniAsyncCallbackInvoker {
             suffix: suffix.clone(),
@@ -1818,9 +1761,45 @@ impl<'a> JniLowerer<'a> {
                 self.jni_prefix(),
                 suffix
             ),
-            c_result_type,
-            jni_result_type,
-            has_result,
+            result_type,
+        }
+    }
+
+    fn invoker_result_type(suffix: &str) -> Option<JniInvokerResult> {
+        match suffix {
+            "Void" => None,
+            "Bool" => Some(JniInvokerResult {
+                c_type: "uint8_t".to_string(),
+                jni_type: "jboolean".to_string(),
+            }),
+            "I8" => Some(JniInvokerResult {
+                c_type: "int8_t".to_string(),
+                jni_type: "jbyte".to_string(),
+            }),
+            "I16" => Some(JniInvokerResult {
+                c_type: "int16_t".to_string(),
+                jni_type: "jshort".to_string(),
+            }),
+            "I32" => Some(JniInvokerResult {
+                c_type: "int32_t".to_string(),
+                jni_type: "jint".to_string(),
+            }),
+            "I64" => Some(JniInvokerResult {
+                c_type: "int64_t".to_string(),
+                jni_type: "jlong".to_string(),
+            }),
+            "F32" => Some(JniInvokerResult {
+                c_type: "float".to_string(),
+                jni_type: "jfloat".to_string(),
+            }),
+            "F64" => Some(JniInvokerResult {
+                c_type: "double".to_string(),
+                jni_type: "jdouble".to_string(),
+            }),
+            _ => Some(JniInvokerResult {
+                c_type: "void*".to_string(),
+                jni_type: "jobject".to_string(),
+            }),
         }
     }
 
@@ -1861,24 +1840,10 @@ impl<'a> JniLowerer<'a> {
     }
 
     fn build_async_invoker(&self, suffix: &str, jni_prefix: &str) -> JniAsyncCallbackInvoker {
-        let (c_result_type, jni_result_type, has_result) = match suffix {
-            "Void" => ("void".to_string(), "void".to_string(), false),
-            "Bool" => ("uint8_t".to_string(), "jboolean".to_string(), true),
-            "I8" => ("int8_t".to_string(), "jbyte".to_string(), true),
-            "I16" => ("int16_t".to_string(), "jshort".to_string(), true),
-            "I32" => ("int32_t".to_string(), "jint".to_string(), true),
-            "I64" => ("int64_t".to_string(), "jlong".to_string(), true),
-            "F32" => ("float".to_string(), "jfloat".to_string(), true),
-            "F64" => ("double".to_string(), "jdouble".to_string(), true),
-            _ => ("void*".to_string(), "jobject".to_string(), true),
-        };
-
         JniAsyncCallbackInvoker {
             suffix: suffix.to_string(),
             jni_fn_name: format!("Java_{}_Native_invokeAsyncCallback{}", jni_prefix, suffix),
-            c_result_type,
-            jni_result_type,
-            has_result,
+            result_type: Self::invoker_result_type(suffix),
         }
     }
 

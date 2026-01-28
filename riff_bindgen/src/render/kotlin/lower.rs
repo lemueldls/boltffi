@@ -9,8 +9,8 @@ use crate::ir::codec::VecLayout;
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{
     CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef, CustomTypeDef,
-    EnumDef, EnumRepr, FieldDef, FunctionDef, MethodDef, ParamDef, RecordDef, ReturnDef,
-    StreamDef, StreamMode, VariantPayload,
+    EnumDef, EnumRepr, FieldDef, FunctionDef, MethodDef, ParamDef, RecordDef, ReturnDef, StreamDef,
+    StreamMode, VariantPayload,
 };
 use crate::ir::ids::{
     BuiltinId, CallbackId, ClassId, CustomTypeId, EnumId, FieldName, MethodId, ParamName, RecordId,
