@@ -99,6 +99,10 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
     let has_params = !ffi_params.is_empty();
     let has_conversions = !conversions.is_empty();
 
+    // we need to classify first before we check if the return type
+    // needs wire encoding, classify_return gives us String, Vec,
+    // Option, Result etc but the codegen just wants one WireEncoded
+    // variant with the full syn::Type
     let return_kind = classify_return(fn_output);
     let return_kind = if should_wire_encode(&return_kind) {
         convert_to_wire_encoded(return_kind)
@@ -180,6 +184,9 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
             let needs_custom = custom_types::contains_custom_types(&inner_ty, &custom_types);
             let result_ident = syn::Ident::new("result", fn_name.span());
 
+            // custom types like UtcDateTime have to be converted to their
+            // underlying repr (e.g. i64) before wire encoding, the wire
+            // format does not know about the custom type itself
             let encode_body = if needs_custom {
                 let wire_ty = custom_types::wire_type_for(&inner_ty, &custom_types);
                 let wire_value_ident = syn::Ident::new("__riff_wire_value", fn_name.span());

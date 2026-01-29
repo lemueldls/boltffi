@@ -10,6 +10,12 @@ use crate::ir::ops::{ReadSeq, WriteSeq};
 use crate::ir::plan::{AbiType, CallbackStyle, Mutability};
 use crate::ir::types::TypeExpr;
 
+/// The resolved FFI boundary for the whole crate.
+///
+/// Each function and method is an [`AbiCall`] with a concrete parameter strategy
+/// (wire-encoded buffer vs direct primitive), read/write op sequences for its
+/// return type, and for async methods, the polling and completion setup. Backends
+/// must read this and transform ops into syntax.
 #[derive(Debug, Clone)]
 pub struct AbiContract {
     pub package: PackageInfo,

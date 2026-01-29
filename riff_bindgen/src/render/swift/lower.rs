@@ -238,6 +238,9 @@ impl<'a> SwiftLowerer<'a> {
     fn lower_variant_payload(&self, variant: &AbiEnumVariant) -> SwiftVariantPayload {
         match &variant.payload {
             AbiEnumPayload::Unit => SwiftVariantPayload::Unit,
+            // we match tuple variants as case .foo(let value) so we get one
+            // binding for everything and need to remap all fields to encode
+            // from value instead of individual names
             AbiEnumPayload::Tuple(fields) => SwiftVariantPayload::Tuple(
                 fields
                     .iter()
@@ -249,6 +252,8 @@ impl<'a> SwiftLowerer<'a> {
                     })
                     .collect(),
             ),
+            // if the field name is just 0 or 1 we dont have a real name to
+            // bind in the switch so we treat it as value same as tuples
             AbiEnumPayload::Struct(fields) => SwiftVariantPayload::Struct(
                 fields
                     .iter()
@@ -361,6 +366,8 @@ impl<'a> SwiftLowerer<'a> {
                                 method_id: method.id.clone(),
                             });
                             let mode = self.lower_call_mode(call, &method.returns);
+                            // we get the actual value back through poll/complete for async
+                            // so all we set up here is the error wrapping
                             let returns = match &call.mode {
                                 CallMode::Async(async_call) => self
                                     .lower_return_def_for_async(&async_call.error, &method.returns),
@@ -439,6 +446,8 @@ impl<'a> SwiftLowerer<'a> {
             name: camel_case(stream.stream_id.as_str()),
             mode,
             item_type: emit::swift_type(&stream_def.item_type),
+            // remap_root_in_seq only works on writes (ValueExpr), reads
+            // use OffsetExpr so we do our own variable rename here
             item_decode: self.rebase_read_seq(decode_ops, "pos", "0"),
             subscribe: stream.subscribe.to_string(),
             poll: stream.poll.to_string(),
@@ -476,6 +485,9 @@ impl<'a> SwiftLowerer<'a> {
                             .iter()
                             .find(|m| m.id == method_def.id)
                             .expect("callback method");
+                        // IR generates encode ops with self as root but we capture the
+                        // callback return as result in the template so we need to rewrite
+                        // the root before handing it off
                         let returns = self.rebase_return_encode(
                             self.swift_return_from_abi(
                                 &abi_method.return_,
@@ -490,6 +502,8 @@ impl<'a> SwiftLowerer<'a> {
                             .iter()
                             .map(|param| (param.name.clone(), param))
                             .collect::<HashMap<_, _>>();
+                        // abi has extra params like context pointers for vtable machinery
+                        // we only care about the ones the user declared in their trait
                         let params = abi_method
                             .params
                             .iter()
@@ -614,6 +628,9 @@ impl<'a> SwiftLowerer<'a> {
                 ..
             } => {
                 let element_type = self.abi_to_swift(*element_abi);
+                // raw byte buffers show up as Data in Swift because that is
+                // what Swift developers expect for opaque byte blobs, [UInt8]
+                // would work but Data is the idiomatic Swift type for this
                 if *element_abi == AbiType::U8 && *mutability == Mutability::Shared {
                     ("Data".to_string(), SwiftConversion::ToData)
                 } else {
@@ -795,6 +812,10 @@ impl<'a> SwiftLowerer<'a> {
     }
 
     fn swift_type(&self, ty: &TypeExpr) -> String {
+        // handles and callbacks need the lowerer to resolve class/protocol
+        // names, emit::swift_type does not have that context so we handle
+        // them here. Option wrapping them also needs special casing because
+        // "any Protocol" requires parens to become "(any Protocol)?"
         match ty {
             TypeExpr::Handle(id) => self.swift_name_for_class(id),
             TypeExpr::Callback(id) => format!("any {}", pascal_case(id.as_str())),
@@ -1202,6 +1223,10 @@ impl<'a> SwiftLowerer<'a> {
                     ReturnDef::Value(ty) => (self.swift_type(ty), false),
                     ReturnDef::Void => ("Void".to_string(), false),
                 };
+                // when the error transport is not Encoded, the error decode
+                // ops are bundled inside the result decode ops themselves,
+                // so we dig into the first ReadOp::Result to pull out
+                // the err branch
                 let err_decode = match error {
                     ErrorTransport::Encoded { decode_ops } => decode_ops.clone(),
                     _ => match decode_ops.ops.first() {

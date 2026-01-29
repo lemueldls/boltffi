@@ -45,6 +45,9 @@ impl TypeRegistry {
         self.custom_types.insert(name, repr);
     }
 
+    // custom types are checked first because they shadow the underlying
+    // primitive. a type named "UtcDateTime" registered as custom with
+    // repr i64 must resolve to Custom, not fall through to enum/record.
     pub fn classify_named_type(&self, name: &str) -> Option<MType> {
         if let Some(repr) = self.custom_types.get(name) {
             return Some(MType::Custom {

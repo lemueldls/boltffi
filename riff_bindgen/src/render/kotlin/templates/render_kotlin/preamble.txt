@@ -106,6 +106,21 @@ typealias SubscriptionHandle = Long
 
 private const val RIFF_STREAM_POLL_CLOSED: Byte = 1
 
+// Coordinates the lifecycle of a native stream subscription.
+//
+// Two atomic tags prevent races between the poll callback (fired from native
+// code on any thread) and user-initiated cancellation:
+//
+// lifecycleTag: 0 = running, 1 = unsubscribe called, 2 = unsubscribed, 3 = freed.
+//               Transitions are one-way. Once it leaves 0, no more polls register.
+//
+// callbackTag:  0 = idle, 1 = processing batches in handlePoll.
+//               Prevents a second poll callback from entering handlePoll while
+//               the first is still draining popBatch.
+//
+// attemptFinalize() only proceeds when both tags are in their final positions:
+// callbackTag == 0 (no active processing) and lifecycleTag == 2 (unsubscribed).
+// It then transitions lifecycleTag to 3 and calls freeFn + finish.
 internal class RiffStreamContext(
     private val scope: CoroutineScope,
     private val subscription: SubscriptionHandle,
@@ -117,7 +132,9 @@ internal class RiffStreamContext(
     private val processItems: (WireBuffer) -> Unit,
     private val finish: () -> Unit
 ) {
+    // 0 = running, 1 = unsubscribe called, 2 = unsubscribed, 3 = freed
     private val lifecycleTag = AtomicInteger(0)
+    // 0 = idle, 1 = processing. guards handlePoll against concurrent entry.
     private val callbackTag = AtomicInteger(0)
 
     fun start() {

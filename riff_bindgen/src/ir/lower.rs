@@ -36,8 +36,19 @@ use crate::ir::plan::{
 };
 use crate::ir::types::{PrimitiveType, TypeExpr};
 
+/// Walks an [`FfiContract`] and produces an [`AbiContract`].
+///
+/// Most of the work is codec planning, figuring out which records are blittable,
+/// which enums are C-style vs data-carrying, and detecting recursive types.
+/// `record_stack` and `enum_stack` track what we are currently lowering so we
+/// catch cycles: if lowering `TreeNode` hits `TreeNode` again in its own fields,
+/// that is a recursive type, and it gets encoded layout because a fixed size
+/// does not exist.
 pub struct Lowerer<'c> {
     contract: &'c FfiContract,
+    // tracks which records and enums we are currently lowering so we detect cycles.
+    // if we hit the same id again mid-walk, the type is recursive and gets
+    // encoded layout instead of blittable.
     record_stack: RefCell<HashSet<RecordId>>,
     enum_stack: RefCell<HashSet<EnumId>>,
 }
@@ -554,6 +565,8 @@ impl<'c> Lowerer<'c> {
         self.expand_decode_with_offset(codec, "pos")
     }
 
+    // self is only used in recursive calls, records, enums, vecs all recurse back here,
+    // but clippy does not see through the recursion and thinks it is unused.
     #[allow(clippy::only_used_in_recursion)]
     fn expand_decode_with_offset(&self, codec: &CodecPlan, base: &str) -> ReadSeq {
         let offset = OffsetExpr::Base;

@@ -1,6 +1,12 @@
 use crate::ir::ids::{BuiltinId, CustomTypeId, EnumId, FieldName, RecordId, VariantName};
 use crate::ir::types::{PrimitiveType, TypeExpr};
 
+/// Describes how a type is laid out on the wire: either blittable (fixed-size,
+/// no pointers, can be read at known offsets) or variable-length encoded
+/// (needs length prefixes and position tracking).
+///
+/// Recursive types like a tree node containing children of the same type
+/// always get encoded layout because their size is not fixed.
 #[derive(Debug, Clone)]
 pub enum CodecPlan {
     Void,

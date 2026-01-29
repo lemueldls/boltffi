@@ -1,3 +1,18 @@
+//! Intermediate representation for FFI code generation.
+//!
+//! The IR pipeline converts parsed Rust API definitions into target-language source code
+//! in two stages:
+//!
+//! 1. [`build_contract`] scans a `Module` and produces an [`FfiContract`] containing
+//!    every record, enum, class, callback, and function the crate exports.
+//!
+//! 2. [`Lowerer`] takes that contract and produces an [`AbiContract`] where every type
+//!    has been resolved to its wire layout and every function has concrete parameter
+//!    strategies and read/write operation sequences.
+//!
+//! Backends in [`render`](crate::render) consume the [`AbiContract`] and emit source code.
+//! They never see [`CodecPlan`], which stays internal to the lowering step.
+
 pub mod build;
 pub mod callback_plan;
 pub mod codec;

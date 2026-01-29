@@ -6,6 +6,11 @@ use crate::ir::definitions::{
 use crate::ir::ids::{BuiltinId, CallbackId, ClassId, CustomTypeId, EnumId, RecordId};
 use crate::ir::types::BuiltinDef;
 
+/// The Rust crate's public API, extracted from parsed module definitions.
+///
+/// Records, enums, classes, callbacks, free functions. What the crate exports.
+/// Nothing here knows about wire encoding or parameter passing. That happens
+/// when [`Lowerer`](crate::ir::Lowerer) turns this into an [`AbiContract`].
 #[derive(Debug, Clone)]
 pub struct FfiContract {
     pub package: PackageInfo,

@@ -13,12 +13,21 @@ pub enum StreamPollResult {
 
 pub type StreamContinuationCallback = extern "C" fn(callback_data: u64, StreamPollResult);
 
+/// States for the lock-free continuation scheduler. Transitions use atomic CAS.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ContinuationState {
+    /// No continuation is parked and no wake has been buffered.
+    /// Initial state after construction or after a successful callback invocation.
     Empty = 0,
+    /// A wake arrived before a continuation was stored. The next `store()` call
+    /// will fire the callback immediately and transition back to `Empty`.
     Waked = 1,
+    /// A continuation is parked and waiting. A subsequent `wake()` or `cancel()`
+    /// will invoke the stored callback and transition out.
     Stored = 2,
+    /// The stream has been torn down. Terminal state, no further transitions are valid.
+    /// Any future `store()` call receives `Closed` immediately.
     Cancelled = 3,
 }
 
@@ -34,6 +43,61 @@ impl ContinuationState {
     }
 }
 
+/// A lock-free scheduler that coordinates handoff between a stream producer and a
+/// single parked continuation.
+///
+/// # Overview
+///
+/// The scheduler mediates the race between two sides of a stream: the consumer that
+/// parks a continuation via [`store`](Self::store_continuation), and the producer that
+/// signals data availability via [`wake`](Self::wake). Both sides may arrive in any
+/// order; the scheduler resolves the race without locks using atomic compare-and-swap
+/// on a four-state machine.
+///
+/// # States
+///
+/// | State | Meaning |
+/// |-------------|---------|
+/// | `Empty` | Idle. No continuation parked, no pending wake. |
+/// | `Stored` | A continuation is parked and waiting for data. |
+/// | `Waked` | Data arrived before a continuation was parked. |
+/// | `Cancelled` | Terminal. The stream has been torn down. |
+///
+/// # State Diagram
+///
+/// ```text
+///              store()          wake()
+///   Empty ─────────────► Stored ─────────────► Empty
+///     │                    │                     (invokes callback)
+///     │ wake()             │ cancel()
+///     ▼                    ▼
+///   Waked                Cancelled
+///     │                    (invokes callback
+///     │ store()             with Closed)
+///     ▼
+///   Empty
+///   (invokes callback
+///    immediately)
+/// ```
+///
+/// # Transitions
+///
+/// - **`store()` in `Empty`** → `Stored`. The continuation is parked.
+/// - **`store()` in `Waked`** → `Empty`. The wake was buffered, so the continuation
+///   fires immediately with `Ready`.
+/// - **`store()` in `Cancelled`** → stays `Cancelled`. The continuation fires
+///   immediately with `Closed`.
+/// - **`wake()` in `Stored`** → `Empty`. The parked continuation fires with `Ready`.
+/// - **`wake()` in `Empty`** → `Waked`. The wake is buffered for the next `store()`.
+/// - **`cancel()` in `Stored`** → `Cancelled`. The parked continuation fires with `Closed`.
+/// - **`cancel()` in `Empty` or `Waked`** → `Cancelled`. No callback to invoke.
+///
+/// # Thread Safety
+///
+/// All transitions use `compare_exchange` with acquire-release ordering. The callback
+/// pointer and data are stored with release semantics before the state transition, and
+/// loaded with acquire semantics after, ensuring the callback is fully visible to
+/// whichever thread wins the CAS.
 struct StreamContinuationScheduler {
     state: AtomicU8,
     callback_data: AtomicU64,
