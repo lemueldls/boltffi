@@ -109,23 +109,27 @@ fn pack_apple(config: &Config, options: PackAppleOptions) -> Result<()> {
             }
         };
 
-        let generator = match config.apple_spm_distribution() {
-            SpmDistribution::Local => SpmPackageGenerator::new_local(config, layout),
-            SpmDistribution::Remote => {
-                let checksum = checksum.ok_or_else(|| CliError::CommandFailed {
-                    command: "remote SPM requires checksum".to_string(),
-                    status: None,
-                })?;
-                let version = version.ok_or_else(|| CliError::CommandFailed {
-                    command: "remote SPM requires version".to_string(),
-                    status: None,
-                })?;
-                SpmPackageGenerator::new_remote(config, checksum, version, layout)
-            }
-        };
+        if config.apple.spm.skip_package_swift {
+            println!("Skipping Package.swift generation (skip_package_swift = true)");
+        } else {
+            let generator = match config.apple_spm_distribution() {
+                SpmDistribution::Local => SpmPackageGenerator::new_local(config, layout),
+                SpmDistribution::Remote => {
+                    let checksum = checksum.ok_or_else(|| CliError::CommandFailed {
+                        command: "remote SPM requires checksum".to_string(),
+                        status: None,
+                    })?;
+                    let version = version.ok_or_else(|| CliError::CommandFailed {
+                        command: "remote SPM requires version".to_string(),
+                        status: None,
+                    })?;
+                    SpmPackageGenerator::new_remote(config, checksum, version, layout)
+                }
+            };
 
-        let package_path = run_step("Generating Package.swift", || generator.generate())?;
-        println!("Created: {}", package_path.display());
+            let package_path = run_step("Generating Package.swift", || generator.generate())?;
+            println!("Created: {}", package_path.display());
+        }
     }
 
     if let Some(output) = xcframework_output {

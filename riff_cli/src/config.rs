@@ -127,6 +127,8 @@ pub struct SpmConfig {
     pub layout: SpmLayout,
     pub package_name: Option<String>,
     pub wrapper_sources: Option<PathBuf>,
+    #[serde(default)]
+    pub skip_package_swift: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -179,6 +181,7 @@ impl Default for SpmConfig {
             layout: SpmLayout::default(),
             package_name: None,
             wrapper_sources: None,
+            skip_package_swift: false,
         }
     }
 }

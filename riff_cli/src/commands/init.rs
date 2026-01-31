@@ -91,6 +91,7 @@ fn create_default_config(package_name: &str) -> Config {
                 layout: Default::default(),
                 package_name: None,
                 wrapper_sources: None,
+                skip_package_swift: false,
             },
         },
         android: AndroidConfig {
