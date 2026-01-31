@@ -19,6 +19,17 @@ pub enum DecodeError {
     InvalidValue,
 }
 
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BufferTooSmall => write!(f, "BufferTooSmall"),
+            Self::InvalidUtf8 => write!(f, "InvalidUtf8"),
+            Self::InvalidBool => write!(f, "InvalidBool"),
+            Self::InvalidValue => write!(f, "InvalidValue"),
+        }
+    }
+}
+
 pub type DecodeResult<T> = Result<(T, usize), DecodeError>;
 
 pub trait WireDecode: Sized {

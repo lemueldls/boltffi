@@ -286,7 +286,7 @@ pub fn transform_params(
                             } else {
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -296,7 +296,7 @@ pub fn transform_params(
                                 Vec::new()
                             } else {
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }
@@ -321,7 +321,7 @@ pub fn transform_params(
                             } else {
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -331,7 +331,7 @@ pub fn transform_params(
                                 None
                             } else {
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }
@@ -355,7 +355,7 @@ pub fn transform_params(
                                 assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -364,7 +364,7 @@ pub fn transform_params(
                             let #name: #record_ty = {
                                 assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }
@@ -557,7 +557,7 @@ pub fn transform_params_async(
                             } else {
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -567,7 +567,7 @@ pub fn transform_params_async(
                                 Vec::new()
                             } else {
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }
@@ -593,7 +593,7 @@ pub fn transform_params_async(
                             } else {
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -603,7 +603,7 @@ pub fn transform_params_async(
                                 None
                             } else {
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }
@@ -628,7 +628,7 @@ pub fn transform_params_async(
                                 assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -637,7 +637,7 @@ pub fn transform_params_async(
                             let #name: #record_ty = {
                                 assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }
@@ -906,7 +906,7 @@ pub fn transform_method_params(
                             } else {
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -916,7 +916,7 @@ pub fn transform_method_params(
                                 Vec::new()
                             } else {
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }
@@ -941,7 +941,7 @@ pub fn transform_method_params(
                             } else {
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -951,7 +951,7 @@ pub fn transform_method_params(
                                 None
                             } else {
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }
@@ -975,7 +975,7 @@ pub fn transform_method_params(
                                 assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -984,7 +984,7 @@ pub fn transform_method_params(
                             let #name: #record_ty = {
                                 assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                                 let __bytes = ::core::slice::from_raw_parts(#ptr_name, #len_name);
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }
@@ -1141,7 +1141,7 @@ pub fn transform_method_params_async(
                             } else {
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -1151,7 +1151,7 @@ pub fn transform_method_params_async(
                                 Vec::new()
                             } else {
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }
@@ -1177,7 +1177,7 @@ pub fn transform_method_params_async(
                             } else {
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -1187,7 +1187,7 @@ pub fn transform_method_params_async(
                                 None
                             } else {
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }
@@ -1212,7 +1212,7 @@ pub fn transform_method_params_async(
                                 assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
                                 let #wire_value_ident: #wire_ty = ::riff::__private::wire::decode(__bytes)
-                                    .expect(concat!(stringify!(#name), ": wire decode failed"));
+                                    .unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name));
                                 #from_wire
                             };
                         });
@@ -1221,7 +1221,7 @@ pub fn transform_method_params_async(
                             let #name: #record_ty = {
                                 assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                                 let __bytes = unsafe { ::core::slice::from_raw_parts(#ptr_name, #len_name) };
-                                ::riff::__private::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                                ::riff::__private::wire::decode(__bytes).unwrap_or_else(|e| panic!("{}: wire decode failed: {} (buf_len={})", stringify!(#name), e, #len_name))
                             };
                         });
                     }

@@ -1,8 +1,9 @@
 use crate::ir::contract::{FfiContract, PackageInfo, TypeCatalog};
 use crate::ir::definitions::{
     CStyleVariant, CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef,
-    CustomTypeDef, DataVariant, DeprecationInfo, EnumDef, EnumRepr, FieldDef, FunctionDef,
-    MethodDef, ParamDef, ParamPassing, Receiver, RecordDef, ReturnDef, StreamDef, StreamMode,
+    CustomTypeDef, DataVariant, DefaultValue, DeprecationInfo, EnumDef, EnumRepr, FieldDef,
+    FunctionDef, MethodDef, ParamDef, ParamPassing, Receiver, RecordDef, ReturnDef, StreamDef,
+    StreamMode,
     VariantPayload,
 };
 use crate::ir::ids::{
@@ -91,10 +92,19 @@ impl<'m> ContractBuilder<'m> {
             fields: record
                 .fields
                 .iter()
-                .map(|f| FieldDef {
-                    name: FieldName::new(&f.name),
-                    type_expr: self.convert_type(&f.field_type),
-                    doc: f.doc.clone(),
+                .map(|f| {
+                    let type_expr = self.convert_type(&f.field_type);
+                    let default = f
+                        .default_value
+                        .as_deref()
+                        .map(parse_default_value)
+                        .or_else(|| matches!(type_expr, TypeExpr::Option(_)).then_some(DefaultValue::Null));
+                    FieldDef {
+                        name: FieldName::new(&f.name),
+                        type_expr,
+                        doc: f.doc.clone(),
+                        default,
+                    }
                 })
                 .collect(),
             doc: record.doc.clone(),
@@ -161,6 +171,7 @@ impl<'m> ContractBuilder<'m> {
                         name: FieldName::new(&f.name),
                         type_expr: self.convert_type(&f.field_type),
                         doc: f.doc.clone(),
+                        default: None,
                     })
                     .collect(),
             )
@@ -446,6 +457,26 @@ impl<'m> ContractBuilder<'m> {
     }
 }
 
+fn parse_default_value(raw: &str) -> DefaultValue {
+    match raw {
+        "true" => DefaultValue::Bool(true),
+        "false" => DefaultValue::Bool(false),
+        "None" => DefaultValue::Null,
+        s if s.starts_with('"') && s.ends_with('"') => {
+            DefaultValue::String(s[1..s.len() - 1].to_string())
+        }
+        s if s.contains("::") => {
+            let (enum_name, variant_name) = s.rsplit_once("::").expect("contains ::");
+            DefaultValue::EnumVariant {
+                enum_name: enum_name.to_string(),
+                variant_name: variant_name.to_string(),
+            }
+        }
+        s if s.contains('.') => DefaultValue::Float(s.parse().unwrap_or(0.0)),
+        s => DefaultValue::Integer(s.parse().unwrap_or(0)),
+    }
+}
+
 fn convert_primitive(p: model::Primitive) -> PrimitiveType {
     match p {
         model::Primitive::Bool => PrimitiveType::Bool,
@@ -501,9 +532,11 @@ pub fn build_contract(module: &mut Module) -> FfiContract {
 #[cfg(test)]
 mod tests {
     use crate::ir::definitions::{
-        CallbackKind, ConstructorDef, EnumRepr, ParamPassing, Receiver as IrReceiver, ReturnDef,
-        VariantPayload,
+        CallbackKind, ConstructorDef, DefaultValue, EnumRepr, ParamPassing,
+        Receiver as IrReceiver, ReturnDef, VariantPayload,
     };
+
+    use super::parse_default_value;
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use crate::model::{
         self, CallbackTrait, Enumeration, Function, Method, Module, Parameter, Primitive, Receiver,
@@ -1004,5 +1037,114 @@ mod tests {
         assert!(contract.catalog.resolve_class(&"Canvas".into()).is_some());
         assert_eq!(contract.functions.len(), 1);
         assert_eq!(contract.catalog.all_callbacks().count(), 1);
+    }
+
+    #[test]
+    fn parse_default_bool_true() {
+        assert!(matches!(parse_default_value("true"), DefaultValue::Bool(true)));
+    }
+
+    #[test]
+    fn parse_default_bool_false() {
+        assert!(matches!(parse_default_value("false"), DefaultValue::Bool(false)));
+    }
+
+    #[test]
+    fn parse_default_integer() {
+        match parse_default_value("42") {
+            DefaultValue::Integer(v) => assert_eq!(v, 42),
+            other => panic!("expected Integer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_default_negative_integer() {
+        match parse_default_value("-7") {
+            DefaultValue::Integer(v) => assert_eq!(v, -7),
+            other => panic!("expected Integer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_default_float() {
+        match parse_default_value("3.14") {
+            DefaultValue::Float(v) => assert!((v - 3.14).abs() < f64::EPSILON),
+            other => panic!("expected Float, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_default_string() {
+        match parse_default_value("\"hello\"") {
+            DefaultValue::String(v) => assert_eq!(v, "hello"),
+            other => panic!("expected String, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_default_enum_variant() {
+        match parse_default_value("Direction::North") {
+            DefaultValue::EnumVariant { enum_name, variant_name } => {
+                assert_eq!(enum_name, "Direction");
+                assert_eq!(variant_name, "North");
+            }
+            other => panic!("expected EnumVariant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_default_none_becomes_null() {
+        assert!(matches!(parse_default_value("None"), DefaultValue::Null));
+    }
+
+    #[test]
+    fn option_field_auto_defaults_to_null() {
+        let mut module = empty_module();
+        module.records.push(
+            Record::new("Config")
+                .with_field(RecordField::new("name", Type::Primitive(Primitive::I32)))
+                .with_field(RecordField::new(
+                    "label",
+                    Type::Option(Box::new(Type::String)),
+                )),
+        );
+
+        let def = builder(&module).convert_record(&module.records[0]);
+
+        assert!(def.fields[0].default.is_none());
+        assert!(matches!(def.fields[1].default, Some(DefaultValue::Null)));
+    }
+
+    #[test]
+    fn explicit_default_overrides_option_auto() {
+        let mut module = empty_module();
+        module.records.push(
+            Record::new("Config").with_field(
+                RecordField::new("label", Type::Option(Box::new(Type::String)))
+                    .with_default("\"unnamed\""),
+            ),
+        );
+
+        let def = builder(&module).convert_record(&module.records[0]);
+
+        match &def.fields[0].default {
+            Some(DefaultValue::String(v)) => assert_eq!(v, "unnamed"),
+            other => panic!("expected String default, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn required_field_has_no_default() {
+        let mut module = empty_module();
+        module.records.push(
+            Record::new("Point")
+                .with_field(RecordField::new("x", Type::Primitive(Primitive::F64)))
+                .with_field(RecordField::new("y", Type::Primitive(Primitive::F64))),
+        );
+
+        let def = builder(&module).convert_record(&module.records[0]);
+
+        assert!(def.fields[0].default.is_none());
+        assert!(def.fields[1].default.is_none());
     }
 }

@@ -21,8 +21,8 @@ pub use custom_ffi::CustomFfiConvertible;
 pub use handle::HandleBox;
 pub use pending::{CancellationToken, PendingHandle};
 pub use riff_macros::{
-    Data, FfiType, custom_ffi, custom_type, data, error, export, ffi_class, ffi_export, ffi_stream,
-    ffi_trait, name, skip,
+    Data, FfiType, custom_ffi, custom_type, data, default, error, export, ffi_class, ffi_export,
+    ffi_stream, ffi_trait, name, skip,
 };
 pub use ringbuffer::SpscRingBuffer;
 pub use rustfuture::{

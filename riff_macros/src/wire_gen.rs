@@ -285,13 +285,20 @@ fn generate_wire_decode_impl(
         };
     }
 
+    let struct_name_str = struct_name.to_string();
     let decode_fields = field_names
         .iter()
         .zip(field_types.iter())
         .map(|(name, ty)| {
             let decode_expr = decode_from_expr(ty, custom_types, quote! { &buf[position..] });
+            let field_name_str = name.to_string();
+            let struct_name_lit = &struct_name_str;
             quote! {
-                let (#name, size) = #decode_expr?;
+                let (#name, size) = #decode_expr.map_err(|e| {
+                    eprintln!("[riff] wire decode error in {}.{} at position {} (buf_len={}): {:?}",
+                        #struct_name_lit, #field_name_str, position, buf.len(), e);
+                    e
+                })?;
                 position += size;
             }
         });

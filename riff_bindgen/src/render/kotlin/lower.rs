@@ -10,8 +10,8 @@ use crate::ir::contract::FfiContract;
 use crate::ir::definitions::Receiver;
 use crate::ir::definitions::{
     CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef, CustomTypeDef,
-    EnumDef, EnumRepr, FieldDef, FunctionDef, MethodDef, ParamDef, RecordDef, ReturnDef, StreamDef,
-    StreamMode, VariantPayload,
+    DefaultValue, EnumDef, EnumRepr, FieldDef, FunctionDef, MethodDef, ParamDef, RecordDef,
+    ReturnDef, StreamDef, StreamMode, VariantPayload,
 };
 use crate::ir::ids::{
     BuiltinId, CallbackId, ClassId, CustomTypeId, EnumId, FieldName, MethodId, ParamName, RecordId,
@@ -666,7 +666,7 @@ impl<'a> KotlinLowerer<'a> {
         KotlinRecordField {
             name: kotlin_name.clone(),
             kotlin_type: self.kotlin_type(&field.type_expr),
-            default_value: self.default_expr(&field.type_expr),
+            default_value: field.default.as_ref().map(kotlin_default_literal),
             read_expr: emit::emit_read_value(&decode_seq, "offset", "offset"),
             local_name: local_name.clone(),
             wire_decode_inline: emit::emit_inline_decode(&decode_seq, &local_name, "pos"),
@@ -2406,27 +2406,6 @@ impl<'a> KotlinLowerer<'a> {
         next_offset.saturating_sub(current.offset + current.size)
     }
 
-    fn default_expr(&self, ty: &TypeExpr) -> Option<String> {
-        match ty {
-            TypeExpr::Primitive(p) => Some(match p {
-                PrimitiveType::Bool => "false".to_string(),
-                PrimitiveType::U8 => "0u".to_string(),
-                PrimitiveType::U16 => "0u".to_string(),
-                PrimitiveType::U32 => "0u".to_string(),
-                PrimitiveType::U64 | PrimitiveType::USize => "0u".to_string(),
-                PrimitiveType::I8 => "0".to_string(),
-                PrimitiveType::I16 => "0".to_string(),
-                PrimitiveType::I32 => "0".to_string(),
-                PrimitiveType::I64 | PrimitiveType::ISize => "0".to_string(),
-                PrimitiveType::F32 => "0f".to_string(),
-                PrimitiveType::F64 => "0.0".to_string(),
-            }),
-            TypeExpr::String => Some("\"\"".to_string()),
-            TypeExpr::Option(_) => Some("null".to_string()),
-            _ => None,
-        }
-    }
-
     fn should_generate_fixed_enum_codec(&self, enumeration: &EnumDef) -> bool {
         match &enumeration.repr {
             EnumRepr::Data { variants, .. } => {
@@ -3233,6 +3212,26 @@ fn read_seq_offset(seq: &ReadSeq) -> Option<usize> {
         OffsetExpr::Base => Some(0),
         OffsetExpr::BasePlus(value) => Some(*value),
         _ => None,
+    }
+}
+
+fn kotlin_default_literal(default: &DefaultValue) -> String {
+    use heck::ToUpperCamelCase;
+    match default {
+        DefaultValue::Bool(true) => "true".to_string(),
+        DefaultValue::Bool(false) => "false".to_string(),
+        DefaultValue::Integer(v) => v.to_string(),
+        DefaultValue::Float(v) => format!("{}", v),
+        DefaultValue::String(v) => format!("\"{}\"", v),
+        DefaultValue::EnumVariant {
+            enum_name,
+            variant_name,
+        } => format!(
+            "{}.{}",
+            enum_name.to_upper_camel_case(),
+            NamingConvention::enum_entry_name(variant_name)
+        ),
+        DefaultValue::Null => "null".to_string(),
     }
 }
 

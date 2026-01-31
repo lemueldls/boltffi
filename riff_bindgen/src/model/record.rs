@@ -78,6 +78,7 @@ pub struct RecordField {
     pub name: String,
     pub field_type: Type,
     pub doc: Option<String>,
+    pub default_value: Option<String>,
 }
 
 impl RecordField {
@@ -86,7 +87,13 @@ impl RecordField {
             name: name.into(),
             field_type,
             doc: None,
+            default_value: None,
         }
+    }
+
+    pub fn with_default(mut self, value: impl Into<String>) -> Self {
+        self.default_value = Some(value.into());
+        self
     }
 
     pub fn with_doc(mut self, doc: impl Into<String>) -> Self {

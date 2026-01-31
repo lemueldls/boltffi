@@ -13,6 +13,8 @@ pub fn data_impl(item: TokenStream) -> TokenStream {
             item_struct.attrs.insert(0, syn::parse_quote!(#[repr(C)]));
         }
 
+        strip_riff_field_attrs(&mut item_struct.fields);
+
         let struct_name = &item_struct.ident;
         let free_fn_name = format_ident!("riff_free_buf_{}", struct_name);
 
@@ -65,6 +67,19 @@ pub fn data_impl(item: TokenStream) -> TokenStream {
     )
     .to_compile_error()
     .into()
+}
+
+fn is_riff_field_attr(attr: &syn::Attribute) -> bool {
+    let path = attr.path();
+    path.segments.len() == 2
+        && path.segments[0].ident == "riff"
+        && path.segments[1].ident == "default"
+}
+
+fn strip_riff_field_attrs(fields: &mut syn::Fields) {
+    fields.iter_mut().for_each(|field| {
+        field.attrs.retain(|attr| !is_riff_field_attr(attr));
+    });
 }
 
 pub fn derive_data_impl(_input: TokenStream) -> TokenStream {

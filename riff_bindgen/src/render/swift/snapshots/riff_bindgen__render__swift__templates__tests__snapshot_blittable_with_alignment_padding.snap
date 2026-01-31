@@ -23,10 +23,14 @@ extension Padded: WireEncodable {
     @inlinable func wireEncodedSize() -> Int { 12 }
     @inlinable func wireEncodeTo(_ data: inout Data) {
         var copy = self
-        Swift.withUnsafeBytes(of: &copy) { data.append(contentsOf: $0) }
+        withUnsafePointer(to: &copy) { ptr in
+            data.append(UnsafeRawPointer(ptr).assumingMemoryBound(to: UInt8.self), count: 12)
+        }
     }
     @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) {
         var copy = self
-        Swift.withUnsafeBytes(of: &copy) { bytes.append(contentsOf: $0) }
+        withUnsafePointer(to: &copy) { ptr in
+            bytes.append(contentsOf: UnsafeBufferPointer(start: UnsafeRawPointer(ptr).assumingMemoryBound(to: UInt8.self), count: 12))
+        }
     }
 }

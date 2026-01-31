@@ -115,3 +115,8 @@ pub fn skip(_attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn name(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
+
+#[proc_macro_attribute]
+pub fn default(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}

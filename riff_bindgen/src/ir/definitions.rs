@@ -31,6 +31,20 @@ pub struct FieldDef {
     pub name: FieldName,
     pub type_expr: TypeExpr,
     pub doc: Option<String>,
+    pub default: Option<DefaultValue>,
+}
+
+#[derive(Debug, Clone)]
+pub enum DefaultValue {
+    Bool(bool),
+    Integer(i64),
+    Float(f64),
+    String(String),
+    EnumVariant {
+        enum_name: String,
+        variant_name: String,
+    },
+    Null,
 }
 
 #[derive(Debug, Clone)]

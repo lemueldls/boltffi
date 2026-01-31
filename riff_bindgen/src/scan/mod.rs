@@ -937,6 +937,9 @@ impl SourceScanner {
                     if let Some(doc) = extract_doc_string(&f.attrs) {
                         record_field = record_field.with_doc(doc);
                     }
+                    if let Some(default) = extract_default_value(&f.attrs) {
+                        record_field = record_field.with_default(default);
+                    }
                     Some(record_field)
                 })
                 .collect(),
@@ -1304,6 +1307,23 @@ fn has_attribute(attrs: &[Attribute], name: &str) -> bool {
                 .segments
                 .last()
                 .is_some_and(|segment| segment.ident == name)
+    })
+}
+
+fn extract_default_value(attrs: &[Attribute]) -> Option<String> {
+    attrs.iter().find_map(|attr| {
+        let path = attr.path();
+        let is_riff_default = path.segments.len() == 2
+            && path.segments[0].ident == "riff"
+            && path.segments[1].ident == "default";
+        if !is_riff_default {
+            return None;
+        }
+        let tokens = match &attr.meta {
+            syn::Meta::List(list) => list.tokens.to_string(),
+            _ => return None,
+        };
+        Some(tokens.trim().to_string())
     })
 }
 

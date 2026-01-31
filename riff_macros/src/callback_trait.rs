@@ -249,7 +249,7 @@ fn expand_method(
 
         let callback_type = if let Some(ref ret_ty) = return_type {
             if async_wire_return {
-                quote! { extern "C" fn(callback_data: u64, result: ::riff::__private::FfiBuf<u8>, status: ::riff::__private::FfiStatus) }
+                quote! { extern "C" fn(callback_data: u64, result_ptr: *const u8, result_len: usize, status: ::riff::__private::FfiStatus) }
             } else {
                 let ffi_ret = rust_type_to_ffi_param_type(ret_ty);
                 quote! { extern "C" fn(callback_data: u64, result: #ffi_ret, status: ::riff::__private::FfiStatus) }
@@ -284,10 +284,10 @@ fn expand_method(
 
                 let callback_body = if async_wire_return {
                     quote! {
-                        extern "C" fn callback(data: u64, result: ::riff::__private::FfiBuf<u8>, status: ::riff::__private::FfiStatus) {
+                        extern "C" fn callback(data: u64, result_ptr: *const u8, result_len: usize, status: ::riff::__private::FfiStatus) {
                             let decoded: #ret_ty = {
-                                let bytes = result.into_vec();
-                                ::riff::__private::wire::decode(&bytes).expect("wire decode async callback return")
+                                let bytes = unsafe { ::core::slice::from_raw_parts(result_ptr, result_len) };
+                                ::riff::__private::wire::decode(bytes).expect("wire decode async callback return")
                             };
                             let ctx = unsafe { Arc::from_raw(data as *const AsyncContext<#ret_ty>) };
                             let waker = ctx

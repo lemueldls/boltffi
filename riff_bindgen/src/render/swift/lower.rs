@@ -20,7 +20,8 @@ use crate::ir::abi::{
 };
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{
-    CallbackKind, ConstructorDef, ParamDef, Receiver, ReturnDef, StreamDef, StreamMode,
+    CallbackKind, ConstructorDef, DefaultValue, ParamDef, Receiver, ReturnDef, StreamDef,
+    StreamMode,
 };
 use crate::ir::ids::{CallbackId, ClassId, EnumId, FieldName, ParamName, RecordId};
 use crate::ir::ops::{
@@ -202,7 +203,7 @@ impl<'a> SwiftLowerer<'a> {
                             SwiftField {
                                 swift_name,
                                 swift_type: emit::swift_type(&field.type_expr),
-                                default_expr: None,
+                                default_expr: field.default.as_ref().map(swift_default_literal),
                                 decode,
                                 encode,
                                 doc: field.doc.clone(),
@@ -1385,6 +1386,20 @@ impl<'a> SwiftLowerer<'a> {
     }
 }
 
+fn swift_default_literal(default: &DefaultValue) -> String {
+    match default {
+        DefaultValue::Bool(true) => "true".to_string(),
+        DefaultValue::Bool(false) => "false".to_string(),
+        DefaultValue::Integer(v) => v.to_string(),
+        DefaultValue::Float(v) => format!("{}", v),
+        DefaultValue::String(v) => format!("\"{}\"", v),
+        DefaultValue::EnumVariant { variant_name, .. } => {
+            format!(".{}", variant_name.to_lower_camel_case())
+        }
+        DefaultValue::Null => "nil".to_string(),
+    }
+}
+
 fn lower_first_char(name: &str) -> String {
     name.chars()
         .enumerate()
@@ -1436,11 +1451,13 @@ mod tests {
                     name: FieldName::new("x"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::F64),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("y"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::F64),
                     doc: None,
+                default: None,
                 },
             ],
             doc: None,
@@ -1468,11 +1485,13 @@ mod tests {
                     name: FieldName::new("id"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::I64),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("name"),
                     type_expr: TypeExpr::String,
                     doc: None,
+                default: None,
                 },
             ],
             doc: None,
@@ -1499,6 +1518,7 @@ mod tests {
                 name: FieldName::new("values"),
                 type_expr: TypeExpr::Vec(Box::new(TypeExpr::Primitive(PrimitiveType::I32))),
                 doc: None,
+            default: None,
             }],
             doc: None,
             deprecated: None,
@@ -1524,11 +1544,13 @@ mod tests {
                     name: FieldName::new("max_connections"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::I32),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("timeout_ms"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::U64),
                     doc: None,
+                default: None,
                 },
             ],
             doc: None,
@@ -1552,56 +1574,67 @@ mod tests {
                     name: FieldName::new("a"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::Bool),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("b"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::I8),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("c"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::U8),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("d"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::I16),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("e"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::U16),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("f"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::I32),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("g"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::U32),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("h"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::I64),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("i"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::U64),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("j"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::F32),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("k"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::F64),
                     doc: None,
+                default: None,
                 },
             ],
             doc: None,
@@ -1714,16 +1747,19 @@ mod tests {
                     name: FieldName::new("a"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::U8),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("b"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::U32),
                     doc: None,
+                default: None,
                 },
                 FieldDef {
                     name: FieldName::new("c"),
                     type_expr: TypeExpr::Primitive(PrimitiveType::U8),
                     doc: None,
+                default: None,
                 },
             ],
             doc: None,
@@ -1748,6 +1784,7 @@ mod tests {
                 name: FieldName::new("value"),
                 type_expr: TypeExpr::Option(Box::new(TypeExpr::Primitive(PrimitiveType::I32))),
                 doc: None,
+            default: None,
             }],
             doc: None,
             deprecated: None,
@@ -1768,6 +1805,7 @@ mod tests {
                 name: FieldName::new("items"),
                 type_expr: TypeExpr::Vec(Box::new(TypeExpr::Primitive(PrimitiveType::I32))),
                 doc: None,
+            default: None,
             }],
             doc: None,
             deprecated: None,
@@ -1788,6 +1826,7 @@ mod tests {
                 name: FieldName::new("value"),
                 type_expr: TypeExpr::Primitive(PrimitiveType::I32),
                 doc: None,
+            default: None,
             }],
             doc: None,
             deprecated: None,
@@ -1798,6 +1837,7 @@ mod tests {
                 name: FieldName::new("inner"),
                 type_expr: TypeExpr::Record(RecordId::new("Inner")),
                 doc: None,
+            default: None,
             }],
             doc: None,
             deprecated: None,
@@ -1841,5 +1881,83 @@ mod tests {
         assert_eq!(cb.protocol_name, "Logger");
         assert_eq!(cb.methods.len(), 1);
         assert_eq!(cb.methods[0].params.len(), 1);
+    }
+
+    #[test]
+    fn swift_default_literal_bool() {
+        assert_eq!(swift_default_literal(&DefaultValue::Bool(true)), "true");
+        assert_eq!(swift_default_literal(&DefaultValue::Bool(false)), "false");
+    }
+
+    #[test]
+    fn swift_default_literal_integer() {
+        assert_eq!(swift_default_literal(&DefaultValue::Integer(42)), "42");
+        assert_eq!(swift_default_literal(&DefaultValue::Integer(-1)), "-1");
+    }
+
+    #[test]
+    fn swift_default_literal_float() {
+        assert_eq!(swift_default_literal(&DefaultValue::Float(3.14)), "3.14");
+    }
+
+    #[test]
+    fn swift_default_literal_string() {
+        assert_eq!(
+            swift_default_literal(&DefaultValue::String("hello".to_string())),
+            "\"hello\""
+        );
+    }
+
+    #[test]
+    fn swift_default_literal_enum_variant() {
+        assert_eq!(
+            swift_default_literal(&DefaultValue::EnumVariant {
+                enum_name: "Direction".to_string(),
+                variant_name: "North".to_string(),
+            }),
+            ".north"
+        );
+    }
+
+    #[test]
+    fn swift_default_literal_null() {
+        assert_eq!(swift_default_literal(&DefaultValue::Null), "nil");
+    }
+
+    #[test]
+    fn record_field_default_expr_propagates() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(RecordDef {
+            id: RecordId::new("Config"),
+            fields: vec![
+                FieldDef {
+                    name: FieldName::new("name"),
+                    type_expr: TypeExpr::String,
+                    doc: None,
+                    default: None,
+                },
+                FieldDef {
+                    name: FieldName::new("retries"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::I32),
+                    doc: None,
+                    default: Some(DefaultValue::Integer(3)),
+                },
+                FieldDef {
+                    name: FieldName::new("label"),
+                    type_expr: TypeExpr::Option(Box::new(TypeExpr::String)),
+                    doc: None,
+                    default: Some(DefaultValue::Null),
+                },
+            ],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let record = &module.records[0];
+
+        assert!(record.fields[0].default_expr.is_none());
+        assert_eq!(record.fields[1].default_expr.as_deref(), Some("3"));
+        assert_eq!(record.fields[2].default_expr.as_deref(), Some("nil"));
     }
 }
