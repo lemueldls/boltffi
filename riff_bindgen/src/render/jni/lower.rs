@@ -1319,8 +1319,12 @@ impl<'a> JniLowerer<'a> {
         method: &CallbackMethodDef,
         jni_prefix: &str,
     ) -> JniAsyncCallbackMethod {
+        let invoker_suffix = self.async_invoker_suffix(&method.returns);
+
         let return_c_type = if matches!(method.returns, ReturnDef::Void) {
             None
+        } else if invoker_suffix == "Wire" {
+            Some("wire".to_string())
         } else {
             let return_type = self.callback_return_type(&method.returns);
             Some(self.c_type_for_callback(return_type))
@@ -1346,8 +1350,6 @@ impl<'a> JniLowerer<'a> {
             .iter()
             .map(|param| param.jni_arg.clone())
             .collect();
-
-        let invoker_suffix = self.async_invoker_suffix(&method.returns);
         let ffi_name = naming::vtable_field_name(method.id.as_str()).into_string();
 
         JniAsyncCallbackMethod {
@@ -1446,15 +1448,8 @@ impl<'a> JniLowerer<'a> {
                 let model_primitive = self.to_model_primitive(*p);
                 primitives::info(model_primitive).invoker_suffix.to_string()
             }
-            ReturnDef::Result { ok, .. } => match ok {
-                TypeExpr::Primitive(p) => {
-                    let model_primitive = self.to_model_primitive(*p);
-                    primitives::info(model_primitive).invoker_suffix.to_string()
-                }
-                TypeExpr::Void => "Void".to_string(),
-                _ => "Object".to_string(),
-            },
-            _ => "Object".to_string(),
+            ReturnDef::Result { .. } => "Wire".to_string(),
+            _ => "Wire".to_string(),
         }
     }
 
@@ -1763,6 +1758,10 @@ impl<'a> JniLowerer<'a> {
     fn invoker_result_type(suffix: &str) -> Option<JniInvokerResult> {
         match suffix {
             "Void" => None,
+            "Wire" => Some(JniInvokerResult {
+                c_type: "wire".to_string(),
+                jni_type: "jbyteArray".to_string(),
+            }),
             "Bool" => Some(JniInvokerResult {
                 c_type: "bool".to_string(),
                 jni_type: "jboolean".to_string(),

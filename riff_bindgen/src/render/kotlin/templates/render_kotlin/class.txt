@@ -165,11 +165,8 @@
             poll = Native::{{ stream.poll }},
             unsubscribe = Native::{{ stream.unsubscribe }},
             freeFn = Native::{{ stream.free }},
-            processItems = { wire ->
-                val count = wire.readU32(0).toInt()
-{%- if stream.uses_offset() %}
-                var offset = 4
-{%- endif %}
+            processItems = { reader ->
+                val count = reader.readI32()
                 repeat(count) {
                     val item = {{ stream.item_decode_expr() }}
                     trySend(item)
@@ -204,11 +201,8 @@
             poll = Native::{{ stream.poll }},
             unsubscribe = Native::{{ stream.unsubscribe }},
             freeFn = Native::{{ stream.free }},
-            processItems = { wire ->
-                val count = wire.readU32(0).toInt()
-{%- if stream.uses_offset() %}
-                var offset = 4
-{%- endif %}
+            processItems = { reader ->
+                val count = reader.readI32()
                 repeat(count) {
                     val item = {{ stream.item_decode_expr() }}
                     callback(item)
@@ -245,12 +239,9 @@ class {{ class_name }}{{ method_name_pascal }}Subscription(
         if (handle == 0L) return emptyList()
         val bytes = popBatchFn(handle, maxCount) ?: return emptyList()
         if (bytes.isEmpty()) return emptyList()
-        val wire = WireBuffer(bytes)
-        val count = wire.readU32(0).toInt()
+        val reader = WireReader(bytes)
+        val count = reader.readI32()
         val result = ArrayList<{{ stream.item_type }}>(count)
-{%- if stream.uses_offset() %}
-        var offset = 4
-{%- endif %}
         repeat(count) {
             val item = {{ stream.item_decode_expr() }}
             result.add(item)

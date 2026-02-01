@@ -15,7 +15,7 @@ fun {{ func_name }}({% for param in signature_params %}{{ param.name }}: {{ para
         {{ decode_expr }}
     }
 {%- else %}
-    val wire = WireBuffer(buf)
+    val reader = WireReader(buf)
     return {{ decode_expr }}
 {%- endif %}
 {%- endif %}
@@ -42,7 +42,7 @@ fun {{ func_name }}({% for param in signature_params %}{{ param.name }}: {{ para
             {{ decode_expr }}
         }
 {%- else %}
-        val wire = WireBuffer(buf)
+        val reader = WireReader(buf)
         return {{ decode_expr }}
 {%- endif %}
 {%- endif %}

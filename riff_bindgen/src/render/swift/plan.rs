@@ -907,9 +907,7 @@ impl SwiftParam {
 
     pub fn wrapper_code(&self) -> Option<String> {
         match &self.conversion {
-            SwiftConversion::ToString => {
-                Some(format!("var {n} = {n}", n = self.name))
-            }
+            SwiftConversion::ToString => Some(format!("var {n} = {n}", n = self.name)),
             SwiftConversion::InlineClosure { closure } => Some(closure.render()),
             SwiftConversion::ToWireBuffer { encode } => {
                 let writer_body = emit::emit_writer_write(encode);
@@ -933,9 +931,7 @@ impl SwiftParam {
 
     pub fn closure_wrap_open(&self) -> Option<String> {
         match &self.conversion {
-            SwiftConversion::ToString => {
-                Some(format!("{n}.withUTF8 {{ {n}Buf in", n = self.name))
-            }
+            SwiftConversion::ToString => Some(format!("{n}.withUTF8 {{ {n}Buf in", n = self.name)),
             SwiftConversion::ToData => Some(format!(
                 "{}.withUnsafeBytes {{ {}Ptr in",
                 self.name, self.name
@@ -1140,13 +1136,9 @@ impl SwiftReturn {
 
     pub fn reader_decode_expr(&self) -> Option<String> {
         match self {
-            SwiftReturn::FromWireBuffer { decode, .. } => {
-                Some(emit::emit_reader_read(decode))
-            }
+            SwiftReturn::FromWireBuffer { decode, .. } => Some(emit::emit_reader_read(decode)),
             SwiftReturn::Throws {
-                ok,
-                err_is_string,
-                ..
+                ok, err_is_string, ..
             } => match ok.as_ref() {
                 SwiftReturn::FromWireBuffer { decode, .. } => match decode.ops.first() {
                     Some(ReadOp::Result { ok, err, .. }) => {
@@ -1170,5 +1162,3 @@ impl SwiftReturn {
         }
     }
 }
-
-

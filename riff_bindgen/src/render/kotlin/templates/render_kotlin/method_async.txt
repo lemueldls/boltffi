@@ -37,7 +37,7 @@ suspend fun {{ method_name }}({% for param in signature_params %}{{ param.name }
             {{ decode_expr }}
         }
 {%- else %}
-        val wire = WireBuffer(buf)
+        val reader = WireReader(buf)
         {{ decode_expr }}
 {%- endif %}
 {%- endif %}

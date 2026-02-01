@@ -13,18 +13,12 @@ object {{ codec_name }} {
 
         when (value) {
 {%- for variant in variants %}
-{%- if variant.fields.is_empty() %}
-            {{ class_name }}.{{ variant.name }} -> {
-                buf.putInt(TAG_OFFSET, TAG_{{ variant.const_name }})
-            }
-{%- else %}
             is {{ class_name }}.{{ variant.name }} -> {
                 buf.putInt(TAG_OFFSET, TAG_{{ variant.const_name }})
 {%- for field in variant.fields %}
                 buf.{{ field.putter }}(PAYLOAD_OFFSET + {{ field.offset }}, {{ field.value_expr }})
 {%- endfor %}
             }
-{%- endif %}
 {%- endfor %}
         }
 

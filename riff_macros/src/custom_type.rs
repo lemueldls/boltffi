@@ -1,5 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
+use riff_ffi_rules::naming;
 use syn::parse::Parse;
 
 struct CustomTypeSpec {
@@ -86,8 +87,9 @@ pub fn custom_type_impl(item: TokenStream) -> TokenStream {
         try_from_ffi,
     } = spec;
 
-    let into_fn_name = format_ident!("__riff_custom_type_{}_into_ffi", name);
-    let try_from_fn_name = format_ident!("__riff_custom_type_{}_try_from_ffi", name);
+    let snake = naming::to_snake_case(&name.to_string());
+    let into_fn_name = format_ident!("__riff_custom_type_{}_into_ffi", snake);
+    let try_from_fn_name = format_ident!("__riff_custom_type_{}_try_from_ffi", snake);
 
     TokenStream::from(quote! {
         #[doc(hidden)]

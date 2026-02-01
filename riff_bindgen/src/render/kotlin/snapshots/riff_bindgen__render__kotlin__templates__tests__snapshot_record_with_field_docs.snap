@@ -18,13 +18,10 @@ data class Location(
     companion object {
         const val SIZE_BYTES: Int = 16
 
-        fun decode(wire: WireBuffer, offset: Int): Location {
-            wire.pos = offset + SIZE_BYTES
-            return Location(
-                wire.readI64(offset),
-                wire.readF64(offset + 8)
-            )
-        }
+        fun decode(reader: WireReader): Location = Location(
+            reader.readI64(),
+            reader.readF64()
+        )
     }
     fun wireEncodedSize(): Int = SIZE_BYTES
 

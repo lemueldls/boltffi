@@ -17,8 +17,8 @@ use crate::ir::ids::{
     BuiltinId, CallbackId, ClassId, CustomTypeId, EnumId, FieldName, MethodId, ParamName, RecordId,
 };
 use crate::ir::ops::{
-    FieldReadOp, FieldWriteOp, OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq,
-    remap_root_in_seq,
+    FieldReadOp, FieldWriteOp, OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape,
+    WriteOp, WriteSeq, remap_root_in_seq,
 };
 use crate::ir::plan::AbiType;
 use crate::ir::types::{PrimitiveType, TypeExpr};
@@ -316,9 +316,7 @@ impl<'a> KotlinLowerer<'a> {
         let class_name = NamingConvention::class_name(custom.id.as_str());
         let repr_kotlin_type = self.kotlin_type(&custom.repr);
         let custom_seq = self.custom_read_seq(custom);
-        let repr_decode_value_expr =
-            emit::emit_read_value_advancing(&custom_seq, "offset", "offset");
-        let repr_advance_expr = emit::emit_advance_read(&custom_seq);
+        let repr_decode_expr = emit::emit_reader_read(&custom_seq);
         let custom_write_seq = self.custom_write_seq(custom);
         let repr_encode_expr = emit::emit_write_expr(&custom_write_seq);
         let repr_size_expr = emit::emit_size_expr_for_write_seq(&custom_write_seq);
@@ -328,8 +326,7 @@ impl<'a> KotlinLowerer<'a> {
             repr_kotlin_type,
             repr_size_expr,
             repr_encode_expr,
-            repr_decode_value_expr,
-            repr_advance_expr,
+            repr_decode_expr,
         }
     }
 
@@ -554,20 +551,14 @@ impl<'a> KotlinLowerer<'a> {
         field: &AbiEnumField,
         variant_names: &HashSet<String>,
     ) -> KotlinEnumField {
-        let local_name = format!("_{}_", field.name.as_str().to_lowercase());
         let (kotlin_type, decode_name) =
             self.kotlin_type_with_disambiguation(&field.type_expr, variant_names);
-        let wire_decode_inline = emit::emit_inline_decode(&field.decode, &local_name, "pos");
-        let wire_decode_inline =
-            self.qualify_decode_expr(wire_decode_inline, decode_name.as_deref());
-        let wire_advance_expr = emit::emit_advance_read(&field.decode);
-        let wire_advance_expr = self.qualify_decode_expr(wire_advance_expr, decode_name.as_deref());
+        let wire_decode_expr = emit::emit_reader_read(&field.decode);
+        let wire_decode_expr = self.qualify_decode_expr(wire_decode_expr, decode_name.as_deref());
         KotlinEnumField {
             name: NamingConvention::property_name(field.name.as_str()),
             kotlin_type,
-            local_name: local_name.clone(),
-            wire_decode_inline,
-            wire_advance_expr,
+            wire_decode_expr,
             wire_size_expr: emit::emit_size_expr_for_write_seq(&field.encode),
             wire_encode: emit::emit_write_expr(&field.encode),
         }
@@ -607,34 +598,55 @@ impl<'a> KotlinLowerer<'a> {
         payload: &VariantPayload,
         offsets: Option<&Vec<usize>>,
     ) -> Vec<KotlinDataEnumField> {
-        match (payload, offsets) {
-            (VariantPayload::Struct(fields), Some(offsets)) => fields
+        let Some(offsets) = offsets else {
+            return Vec::new();
+        };
+
+        match payload {
+            VariantPayload::Unit => Vec::new(),
+            VariantPayload::Struct(fields) => fields
                 .iter()
                 .zip(offsets.iter().copied())
-                .filter_map(|(field, offset)| match field.type_expr {
+                .filter_map(|(field, offset)| match &field.type_expr {
                     TypeExpr::Primitive(primitive) => {
-                        let (getter, putter, conversion) =
-                            self.primitive_field_accessors(primitive);
-                        let value_expr = self.primitive_write_value_expr(
-                            primitive,
-                            &format!(
-                                "value.{}",
-                                NamingConvention::property_name(field.name.as_str())
-                            ),
-                        );
-                        Some(KotlinDataEnumField {
-                            param_name: NamingConvention::property_name(field.name.as_str()),
-                            value_expr,
-                            offset,
-                            getter,
-                            putter,
-                            conversion,
-                        })
+                        let param_name = NamingConvention::property_name(field.name.as_str());
+                        Some(self.data_enum_field_for_primitive(*primitive, param_name, offset))
                     }
                     _ => None,
                 })
                 .collect(),
-            _ => Vec::new(),
+            VariantPayload::Tuple(types) => types
+                .iter()
+                .enumerate()
+                .zip(offsets.iter().copied())
+                .filter_map(|((index, type_expr), offset)| match type_expr {
+                    TypeExpr::Primitive(primitive) => {
+                        let base_name = format!("value_{}", index);
+                        let param_name = NamingConvention::property_name(base_name.as_str());
+                        Some(self.data_enum_field_for_primitive(*primitive, param_name, offset))
+                    }
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+
+    fn data_enum_field_for_primitive(
+        &self,
+        primitive: PrimitiveType,
+        param_name: String,
+        offset: usize,
+    ) -> KotlinDataEnumField {
+        let (getter, putter, conversion) = self.primitive_field_accessors(primitive);
+        let value_expr =
+            self.primitive_write_value_expr(primitive, &format!("value.{}", param_name));
+        KotlinDataEnumField {
+            param_name,
+            value_expr,
+            offset,
+            getter,
+            putter,
+            conversion,
         }
     }
 
@@ -655,8 +667,6 @@ impl<'a> KotlinLowerer<'a> {
     }
 
     fn lower_record_field(&self, record: &RecordDef, field: &FieldDef) -> KotlinRecordField {
-        let kotlin_name = NamingConvention::property_name(field.name.as_str());
-        let local_name = format!("_{}_", field.name.as_str().to_lowercase());
         let decode_seq = self
             .record_field_read_seq(&record.id, &field.name)
             .expect("record field decode ops");
@@ -664,13 +674,13 @@ impl<'a> KotlinLowerer<'a> {
             .record_field_write_seq(&record.id, &field.name)
             .expect("record field encode ops");
         KotlinRecordField {
-            name: kotlin_name.clone(),
+            name: NamingConvention::property_name(field.name.as_str()),
             kotlin_type: self.kotlin_type(&field.type_expr),
-            default_value: field.default.as_ref().map(kotlin_default_literal),
-            read_expr: emit::emit_read_value(&decode_seq, "offset", "offset"),
-            local_name: local_name.clone(),
-            wire_decode_inline: emit::emit_inline_decode(&decode_seq, &local_name, "pos"),
-            wire_advance_expr: emit::emit_advance_read(&decode_seq),
+            default_value: field
+                .default
+                .as_ref()
+                .map(|d| kotlin_default_literal(d, &self.kotlin_type(&field.type_expr))),
+            wire_decode_expr: emit::emit_reader_read(&decode_seq),
             wire_size_expr: emit::emit_size_expr_for_write_seq(&encode_seq),
             wire_encode: emit::emit_write_expr(&encode_seq),
             padding_after: self.field_padding_after(&record.id, &field.name),
@@ -1163,7 +1173,8 @@ impl<'a> KotlinLowerer<'a> {
                 Some(self.lower_callback_param(def, abi_param))
             })
             .collect();
-        let return_info = self.callback_return_info(&method.returns, &abi_method.return_);
+        let return_info =
+            self.callback_return_info(&method.returns, &abi_method.return_, &abi_method.error);
         KotlinCallbackMethod {
             name: NamingConvention::method_name(method.id.as_str()),
             ffi_name: abi_method.vtable_field.as_str().to_string(),
@@ -1192,7 +1203,8 @@ impl<'a> KotlinLowerer<'a> {
                 Some(self.lower_callback_param(def, abi_param))
             })
             .collect();
-        let return_info = self.callback_return_info(&method.returns, &abi_method.return_);
+        let return_info =
+            self.callback_return_info(&method.returns, &abi_method.return_, &abi_method.error);
         let invoker = self.async_callback_invoker(&return_info);
         KotlinAsyncCallbackMethod {
             name: NamingConvention::method_name(method.id.as_str()),
@@ -1259,6 +1271,7 @@ impl<'a> KotlinLowerer<'a> {
             Some("Long") => "I64".to_string(),
             Some("Float") => "F32".to_string(),
             Some("Double") => "F64".to_string(),
+            Some("ByteArray") => "Wire".to_string(),
             Some("ByteBuffer") => "Object".to_string(),
             Some("String") => "Object".to_string(),
             Some(_) => "Object".to_string(),
@@ -1269,6 +1282,7 @@ impl<'a> KotlinLowerer<'a> {
         &self,
         returns: &ReturnDef,
         transport: &ReturnTransport,
+        error: &ErrorTransport,
     ) -> Option<KotlinCallbackReturn> {
         let kotlin_type = self.kotlin_return_type_from_def(returns, transport)?;
         let (jni_type, default_value, to_jni) = match transport {
@@ -1279,8 +1293,8 @@ impl<'a> KotlinLowerer<'a> {
                 self.callback_return_cast_for_abi(abi),
             ),
             ReturnTransport::Encoded { encode_ops, .. } => (
-                "ByteBuffer".to_string(),
-                "ByteBuffer.allocateDirect(0)".to_string(),
+                "ByteArray".to_string(),
+                "byteArrayOf()".to_string(),
                 self.callback_return_wire_encode(encode_ops),
             ),
             ReturnTransport::Handle { class_id, nullable } => (
@@ -1313,11 +1327,13 @@ impl<'a> KotlinLowerer<'a> {
             }
             _ => (None, false),
         };
+        let to_jni_result = self.build_result_wire_encode(transport, error);
         Some(KotlinCallbackReturn {
             kotlin_type,
             jni_type,
             default_value,
             to_jni,
+            to_jni_result,
             error_type,
             error_is_throwable,
         })
@@ -1337,9 +1353,9 @@ impl<'a> KotlinLowerer<'a> {
     }
 
     fn callback_encoded_conversion(&self, decode_ops: &ReadSeq, name: &str) -> String {
-        let decode_expr = emit::emit_read_value(decode_ops, "offset", "offset");
+        let decode_expr = emit::emit_reader_read(decode_ops);
         format!(
-            "run {{ val bytes = ByteArray({}.remaining()); {}.get(bytes); val wire = WireBuffer(bytes); val offset = 0; {} }}",
+            "run {{ val bytes = ByteArray({}.remaining()); {}.get(bytes); val reader = WireReader(bytes); {} }}",
             name, name, decode_expr
         )
     }
@@ -1391,9 +1407,57 @@ impl<'a> KotlinLowerer<'a> {
         let size_expr = emit::emit_size_expr_for_write_seq(encode_ops);
         let encode_expr = emit::emit_write_expr(encode_ops);
         format!(
-            ".let {{ value -> run {{ val writer = WireWriterPool.acquire({}); try {{ val wire = writer.writer; {}; writer.buffer }} finally {{ writer.close() }} }} }}",
+            ".let {{ value -> run {{ val writer = WireWriterPool.acquire({}); try {{ val wire = writer.writer; {}; wire.toByteArray() }} finally {{ writer.close() }} }} }}",
             size_expr, encode_expr
         )
+    }
+
+    fn build_result_wire_encode(
+        &self,
+        transport: &ReturnTransport,
+        error: &ErrorTransport,
+    ) -> Option<String> {
+        let (ok_encode_ops, err_encode_ops) = match (transport, error) {
+            (
+                ReturnTransport::Encoded { encode_ops, .. },
+                ErrorTransport::Encoded {
+                    encode_ops: Some(err_encode_ops),
+                    ..
+                },
+            ) => (encode_ops, err_encode_ops),
+            _ => return None,
+        };
+
+        let ok_seq = remap_root_in_seq(ok_encode_ops, ValueExpr::Var("okVal".to_string()));
+        let err_seq = remap_root_in_seq(err_encode_ops, ValueExpr::Var("errVal".to_string()));
+        let ok_size = Self::size_expr_for_write_seq(&ok_seq);
+        let err_size = Self::size_expr_for_write_seq(&err_seq);
+        let value = ValueExpr::Var("value".to_string());
+
+        let result_seq = WriteSeq {
+            size: SizeExpr::ResultSize {
+                value: value.clone(),
+                ok: Box::new(ok_size),
+                err: Box::new(err_size),
+            },
+            ops: vec![WriteOp::Result {
+                value: value.clone(),
+                ok: Box::new(ok_seq),
+                err: Box::new(err_seq),
+            }],
+            shape: WireShape::Value,
+        };
+
+        Some(self.callback_return_wire_encode(&result_seq))
+    }
+
+    fn size_expr_for_write_seq(seq: &WriteSeq) -> SizeExpr {
+        match seq.ops.first() {
+            Some(WriteOp::Custom { value, .. }) => SizeExpr::WireSize {
+                value: value.clone(),
+            },
+            _ => seq.size.clone(),
+        }
     }
 
     fn lower_native(&self) -> KotlinNative {
@@ -1459,8 +1523,11 @@ impl<'a> KotlinLowerer<'a> {
                     .filter(|method| method.is_async)
                     .map(|method| {
                         let abi_method = self.abi_callback_method(&callback.id, &method.id);
-                        let return_info =
-                            self.callback_return_info(&method.returns, &abi_method.return_);
+                        let return_info = self.callback_return_info(
+                            &method.returns,
+                            &abi_method.return_,
+                            &abi_method.error,
+                        );
                         self.async_callback_invoker(&return_info)
                     })
             })
@@ -2180,7 +2247,7 @@ impl<'a> KotlinLowerer<'a> {
                 } else if self.is_blittable_return(returns) {
                     self.decode_blittable_return(decode_ops)
                 } else {
-                    emit::emit_read_value(decode_ops, "0", "0")
+                    emit::emit_reader_read(decode_ops)
                 }
             }
             ReturnTransport::Handle { class_id, nullable } => {
@@ -2196,18 +2263,18 @@ impl<'a> KotlinLowerer<'a> {
     fn decode_result_expr(&self, returns: &ReturnDef, decode_ops: &ReadSeq) -> String {
         let (ok_seq, err_seq) = match decode_ops.ops.first() {
             Some(ReadOp::Result { ok, err, .. }) => (ok.as_ref(), err.as_ref()),
-            _ => return emit::emit_read_value(decode_ops, "0", "0"),
+            _ => return emit::emit_reader_read(decode_ops),
         };
-        let ok_reader = match returns {
+        let ok_expr = match returns {
             ReturnDef::Result {
                 ok: TypeExpr::Void, ..
-            } => "Unit.also { w.pos = p }".to_string(),
-            _ => emit::emit_element_reader(ok_seq),
+            } => "Unit".to_string(),
+            _ => emit::emit_reader_read(ok_seq),
         };
-        let err_reader = emit::emit_element_reader(err_seq);
+        let err_expr = emit::emit_reader_read(err_seq);
         format!(
-            "wire.readResultValue(0, {{ w, p -> {} }}, {{ w, p -> {} }}).getOrThrow()",
-            ok_reader, err_reader
+            "reader.readResult({{ {} }}, {{ {} }}).getOrThrow()",
+            ok_expr, err_expr
         )
     }
 
@@ -2265,7 +2332,7 @@ impl<'a> KotlinLowerer<'a> {
                 "{}Reader.readAll(buffer, 4, buffer.getInt(0))",
                 NamingConvention::class_name(id.as_str())
             ),
-            _ => emit::emit_read_value(decode_ops, "0", "0"),
+            _ => emit::emit_reader_read(decode_ops),
         }
     }
 
@@ -2305,7 +2372,7 @@ impl<'a> KotlinLowerer<'a> {
                 } else if self.is_blittable_async_result(result) {
                     self.decode_blittable_return(decode_ops)
                 } else {
-                    emit::emit_read_value(decode_ops, "0", "0")
+                    emit::emit_reader_read(decode_ops)
                 }
             }
             AsyncResultTransport::Handle { class_id, nullable } => {
@@ -3215,13 +3282,33 @@ fn read_seq_offset(seq: &ReadSeq) -> Option<usize> {
     }
 }
 
-fn kotlin_default_literal(default: &DefaultValue) -> String {
+fn kotlin_default_literal(default: &DefaultValue, kotlin_type: &str) -> String {
     use heck::ToUpperCamelCase;
     match default {
         DefaultValue::Bool(true) => "true".to_string(),
         DefaultValue::Bool(false) => "false".to_string(),
-        DefaultValue::Integer(v) => v.to_string(),
-        DefaultValue::Float(v) => format!("{}", v),
+        DefaultValue::Integer(v) => match kotlin_type {
+            "Double" => format!("{}.0", v),
+            "Float" => format!("{}.0f", v),
+            "UInt" => format!("{}u", v),
+            "ULong" => format!("{}uL", v),
+            "UShort" => format!("{}u", v),
+            "UByte" => format!("{}u", v),
+            "Long" => format!("{}L", v),
+            _ => v.to_string(),
+        },
+        DefaultValue::Float(v) => {
+            let has_decimal = v.fract() != 0.0;
+            let base = if has_decimal {
+                format!("{}", v)
+            } else {
+                format!("{}.0", v)
+            };
+            match kotlin_type {
+                "Float" => format!("{}f", base),
+                _ => base,
+            }
+        }
         DefaultValue::String(v) => format!("\"{}\"", v),
         DefaultValue::EnumVariant {
             enum_name,

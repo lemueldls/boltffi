@@ -1,6 +1,6 @@
 use crate::ir::codec::{EnumLayout, VecLayout};
 use crate::ir::ids::BuiltinId;
-use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
+use crate::ir::ops::{ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
 use crate::ir::types::{PrimitiveType, TypeExpr};
 use crate::render::kotlin::NamingConvention;
 
@@ -161,7 +161,7 @@ pub fn emit_size_expr_for_write_seq(seq: &WriteSeq) -> String {
                     let ok_expr = emit_size_expr(ok);
                     let err_expr = emit_size_expr(err);
                     format!(
-                        "(when (val _r = {}) {{ is RiffResult.Ok<*> -> {{ val okVal = _r.value as {}; 1 + {} }}; is RiffResult.Err<*> -> {{ val errVal = _r.error as {}; 1 + {} }} }})",
+                        "(when (val _r = {}) {{ is RiffResult.Ok<*> -> {{ val okVal = riffUnsafeCast<{}>(_r.value); 1 + {} }}; is RiffResult.Err<*> -> {{ val errVal = riffUnsafeCast<{}>(_r.error); 1 + {} }} }})",
                         v, ok_type, ok_expr, err_type, err_expr
                     )
                 }
@@ -172,327 +172,99 @@ pub fn emit_size_expr_for_write_seq(seq: &WriteSeq) -> String {
     }
 }
 
-pub fn emit_read_pair(seq: &ReadSeq, base_name: &str, base_expr: &str) -> String {
-    let op = seq.ops.first().expect("read ops");
-    match op {
-        ReadOp::Primitive { primitive, offset } => {
-            let value_expr = emit_read_primitive(*primitive, offset, base_name, base_expr);
-            let size = emit_size_expr(&seq.size);
-            format!("{} to {}", value_expr, size)
-        }
-        ReadOp::String { offset } => {
-            let value = emit_read_string_value(offset, base_name, base_expr);
-            let size = emit_read_string_size(offset, base_name, base_expr);
-            format!("{} to {}", value, size)
-        }
-        ReadOp::Bytes { offset } => {
-            let value = emit_read_bytes_value(offset, base_name, base_expr);
-            let size = emit_read_bytes_size(offset, base_name, base_expr);
-            format!("{} to {}", value, size)
-        }
-        ReadOp::Option { tag_offset, some } => {
-            let offset_expr = emit_offset_expr(tag_offset, base_name, base_expr);
-            let reader = emit_element_reader(some);
-            format!(
-                "wire.readNullableValue({}, {{ w, p -> {} }}).let {{ v -> v to (wire.pos - {}) }}",
-                offset_expr, reader, offset_expr
-            )
-        }
-        ReadOp::Vec {
-            len_offset,
-            element_type,
-            element,
-            layout,
-        } => {
-            let value = emit_read_vec_value(
-                len_offset,
-                element_type,
-                element,
-                layout,
-                base_name,
-                base_expr,
-            );
-            let offset_expr = emit_offset_expr(len_offset, base_name, base_expr);
-            format!("{}.let {{ v -> v to (wire.pos - {}) }}", value, offset_expr)
-        }
-        ReadOp::Record { id, offset, .. } => {
-            let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-            format!(
-                "{}.decode(wire, {}).let {{ v -> v to (wire.pos - {}) }}",
-                render_type_name(id.as_str()),
-                offset_expr,
-                offset_expr
-            )
-        }
-        ReadOp::Enum { id, offset, layout } => {
-            let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-            match layout {
-                EnumLayout::CStyle {
-                    is_error: false, ..
-                } => {
-                    let size = emit_size_expr(&seq.size);
-                    format!(
-                        "{}.fromValue(wire.readI32({})) to {}",
-                        render_type_name(id.as_str()),
-                        offset_expr,
-                        size
-                    )
-                }
-                EnumLayout::CStyle { is_error: true, .. }
-                | EnumLayout::Data { .. }
-                | EnumLayout::Recursive => {
-                    format!(
-                        "{}.decode(wire, {}).let {{ v -> v to (wire.pos - {}) }}",
-                        render_type_name(id.as_str()),
-                        offset_expr,
-                        offset_expr
-                    )
-                }
-            }
-        }
-        ReadOp::Result {
-            tag_offset,
-            ok,
-            err,
-        } => {
-            let offset_expr = emit_offset_expr(tag_offset, base_name, base_expr);
-            let ok_reader = emit_element_reader(ok);
-            let err_reader = emit_element_reader(err);
-            format!(
-                "wire.readResultValue({}, {{ w, p -> {} }}, {{ w, p -> {} }}).let {{ v -> v to (wire.pos - {}) }}",
-                offset_expr, ok_reader, err_reader, offset_expr
-            )
-        }
-        ReadOp::Builtin { id, offset } => {
-            let value_expr = emit_read_builtin_value(id, offset, base_name, base_expr);
-            let size = emit_read_builtin_size(id, offset, base_name, base_expr);
-            format!("{} to {}", value_expr, size)
-        }
-        ReadOp::Custom { id, .. } => {
-            format!(
-                "{}.decode(wire, {}).let {{ v -> v to (wire.pos - {}) }}",
-                render_type_name(id.as_str()),
-                base_expr,
-                base_expr
-            )
-        }
-    }
-}
-
-pub fn emit_read_value(seq: &ReadSeq, base_name: &str, base_expr: &str) -> String {
-    let op = seq.ops.first().expect("read ops");
-    match op {
-        ReadOp::Primitive { primitive, offset } => {
-            emit_read_primitive(*primitive, offset, base_name, base_expr)
-        }
-        ReadOp::String { offset } => emit_read_string_value(offset, base_name, base_expr),
-        ReadOp::Bytes { offset } => emit_read_bytes_value(offset, base_name, base_expr),
-        ReadOp::Option { tag_offset, some } => {
-            let offset_expr = emit_offset_expr(tag_offset, base_name, base_expr);
-            let reader = emit_element_reader(some);
-            format!(
-                "wire.readNullableValue({}, {{ w, p -> {} }})",
-                offset_expr, reader
-            )
-        }
-        ReadOp::Vec {
-            len_offset,
-            element_type,
-            element,
-            layout,
-        } => emit_read_vec_value(
-            len_offset,
-            element_type,
-            element,
-            layout,
-            base_name,
-            base_expr,
-        ),
-        ReadOp::Record { id, offset, .. } => {
-            let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-            format!(
-                "{}.decode(wire, {})",
-                render_type_name(id.as_str()),
-                offset_expr
-            )
-        }
-        ReadOp::Enum { id, offset, layout } => {
-            let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-            match layout {
-                EnumLayout::CStyle {
-                    is_error: false, ..
-                } => {
-                    format!(
-                        "{}.fromValue(wire.readI32({}))",
-                        render_type_name(id.as_str()),
-                        offset_expr
-                    )
-                }
-                EnumLayout::CStyle { is_error: true, .. }
-                | EnumLayout::Data { .. }
-                | EnumLayout::Recursive => {
-                    format!(
-                        "{}.decode(wire, {})",
-                        render_type_name(id.as_str()),
-                        offset_expr
-                    )
-                }
-            }
-        }
-        ReadOp::Result {
-            tag_offset,
-            ok,
-            err,
-        } => {
-            let offset_expr = emit_offset_expr(tag_offset, base_name, base_expr);
-            let ok_reader = emit_element_reader(ok);
-            let err_reader = emit_element_reader(err);
-            format!(
-                "wire.readResultValue({}, {{ w, p -> {} }}, {{ w, p -> {} }})",
-                offset_expr, ok_reader, err_reader
-            )
-        }
-        ReadOp::Builtin { id, offset } => emit_read_builtin_value(id, offset, base_name, base_expr),
-        ReadOp::Custom { id, .. } => {
-            format!(
-                "{}.decode(wire, {})",
-                render_type_name(id.as_str()),
-                base_expr
-            )
-        }
-    }
-}
-
-pub fn emit_advance_read(seq: &ReadSeq) -> String {
+pub fn emit_reader_read(seq: &ReadSeq) -> String {
     let op = seq.ops.first().expect("read ops");
     match op {
         ReadOp::Primitive { primitive, .. } => {
             let method = match primitive {
-                PrimitiveType::Bool => "advanceBool",
-                PrimitiveType::I8 => "advanceI8",
-                PrimitiveType::U8 => "advanceU8",
-                PrimitiveType::I16 => "advanceI16",
-                PrimitiveType::U16 => "advanceU16",
-                PrimitiveType::I32 => "advanceI32",
-                PrimitiveType::U32 => "advanceU32",
-                PrimitiveType::I64 | PrimitiveType::ISize => "advanceI64",
-                PrimitiveType::U64 | PrimitiveType::USize => "advanceU64",
-                PrimitiveType::F32 => "advanceF32",
-                PrimitiveType::F64 => "advanceF64",
+                PrimitiveType::Bool => "readBool",
+                PrimitiveType::I8 => "readI8",
+                PrimitiveType::U8 => "readU8",
+                PrimitiveType::I16 => "readI16",
+                PrimitiveType::U16 => "readU16",
+                PrimitiveType::I32 => "readI32",
+                PrimitiveType::U32 => "readU32",
+                PrimitiveType::I64 | PrimitiveType::ISize => "readI64",
+                PrimitiveType::U64 | PrimitiveType::USize => "readU64",
+                PrimitiveType::F32 => "readF32",
+                PrimitiveType::F64 => "readF64",
             };
-            format!("wire.{}()", method)
+            format!("reader.{}()", method)
         }
-        ReadOp::String { .. } => "wire.advanceString()".to_string(),
-        ReadOp::Bytes { .. } => "wire.advanceBytes()".to_string(),
+        ReadOp::String { .. } => "reader.readString()".to_string(),
+        ReadOp::Bytes { .. } => "reader.readBytes()".to_string(),
         ReadOp::Record { id, .. } => {
-            format!("{}.decode(wire, wire.pos)", render_type_name(id.as_str()))
+            format!("{}.decode(reader)", render_type_name(id.as_str()))
         }
         ReadOp::Enum { id, layout, .. } => match layout {
             EnumLayout::CStyle {
                 is_error: false, ..
             } => {
                 format!(
-                    "{}.fromValue(wire.advanceI32())",
+                    "{}.fromValue(reader.readI32())",
                     render_type_name(id.as_str())
                 )
             }
             EnumLayout::CStyle { is_error: true, .. }
             | EnumLayout::Data { .. }
             | EnumLayout::Recursive => {
-                format!("{}.decode(wire, wire.pos)", render_type_name(id.as_str()))
+                format!("{}.decode(reader)", render_type_name(id.as_str()))
             }
         },
         ReadOp::Option { some, .. } => {
-            let inner = emit_advance_read(some);
-            format!("wire.advanceNullable {{ {} }}", inner)
+            let inner = emit_reader_read(some);
+            format!("reader.readOptional {{ {} }}", inner)
         }
         ReadOp::Vec {
             element_type,
             element,
             layout,
             ..
-        } => emit_advance_vec(element_type, element, layout),
+        } => emit_reader_vec(element_type, element, layout),
         ReadOp::Result { ok, err, .. } => {
-            let ok_expr = emit_advance_read(ok);
-            let err_expr = emit_advance_read(err);
-            format!("wire.advanceResult({{ {} }}, {{ {} }})", ok_expr, err_expr)
+            let ok_expr = emit_reader_read(ok);
+            let err_expr = emit_reader_read(err);
+            format!("reader.readResult({{ {} }}, {{ {} }})", ok_expr, err_expr)
         }
         ReadOp::Builtin { id, .. } => match id.as_str() {
-            "Duration" => "wire.advanceDuration()".to_string(),
-            "SystemTime" => "wire.advanceInstant()".to_string(),
-            "Uuid" => "wire.advanceUuid()".to_string(),
-            "Url" => "wire.advanceUri()".to_string(),
-            _ => "wire.advanceString()".to_string(),
+            "Duration" => "reader.readDuration()".to_string(),
+            "SystemTime" => "reader.readInstant()".to_string(),
+            "Uuid" => "reader.readUuid()".to_string(),
+            "Url" => "reader.readUri()".to_string(),
+            _ => "reader.readString()".to_string(),
         },
         ReadOp::Custom { id, .. } => {
-            format!("{}.decode(wire, wire.pos)", render_type_name(id.as_str()))
+            format!("{}.decode(reader)", render_type_name(id.as_str()))
         }
     }
 }
 
-fn emit_advance_vec(element_type: &TypeExpr, element: &ReadSeq, layout: &VecLayout) -> String {
+fn emit_reader_vec(element_type: &TypeExpr, element: &ReadSeq, layout: &VecLayout) -> String {
     match layout {
         VecLayout::Blittable { .. } => match element_type {
             TypeExpr::Primitive(primitive) => {
                 let method = match primitive {
-                    PrimitiveType::I32 | PrimitiveType::U32 => "advanceIntArray",
-                    PrimitiveType::I16 | PrimitiveType::U16 => "advanceShortArray",
+                    PrimitiveType::I32 | PrimitiveType::U32 => "readIntArray",
+                    PrimitiveType::I16 | PrimitiveType::U16 => "readShortArray",
                     PrimitiveType::I64
                     | PrimitiveType::U64
                     | PrimitiveType::ISize
-                    | PrimitiveType::USize => "advanceLongArray",
-                    PrimitiveType::F32 => "advanceFloatArray",
-                    PrimitiveType::F64 => "advanceDoubleArray",
-                    PrimitiveType::U8 | PrimitiveType::I8 => "advanceBytes",
-                    PrimitiveType::Bool => "advanceBooleanArray",
+                    | PrimitiveType::USize => "readLongArray",
+                    PrimitiveType::F32 => "readFloatArray",
+                    PrimitiveType::F64 => "readDoubleArray",
+                    PrimitiveType::U8 | PrimitiveType::I8 => "readBytes",
+                    PrimitiveType::Bool => "readBooleanArray",
                 };
-                format!("wire.{}()", method)
+                format!("reader.{}()", method)
             }
             _ => {
-                let inner = emit_advance_read(element);
-                format!("wire.advanceList {{ {} }}", inner)
+                let inner = emit_reader_read(element);
+                format!("reader.readList {{ {} }}", inner)
             }
         },
         VecLayout::Encoded => {
-            let inner = emit_advance_read(element);
-            format!("wire.advanceList {{ {} }}", inner)
-        }
-    }
-}
-
-pub fn emit_read_value_advancing(seq: &ReadSeq, base_name: &str, base_expr: &str) -> String {
-    let op = seq.ops.first().expect("read ops");
-    match op {
-        ReadOp::Primitive { primitive, offset } => {
-            let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-            let size = emit_size_expr(&seq.size);
-            let value = emit_read_primitive(*primitive, offset, base_name, base_expr);
-            format!(
-                "run {{ val v = {}; wire.pos = {} + {}; v }}",
-                value, offset_expr, size
-            )
-        }
-        ReadOp::String { offset } => {
-            let value = emit_read_string_value(offset, base_name, base_expr);
-            let size = emit_read_string_size(offset, base_name, base_expr);
-            let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-            format!(
-                "run {{ val v = {}; wire.pos = {} + {}; v }}",
-                value, offset_expr, size
-            )
-        }
-        ReadOp::Bytes { offset } => {
-            let value = emit_read_bytes_value(offset, base_name, base_expr);
-            let size = emit_read_bytes_size(offset, base_name, base_expr);
-            let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-            format!(
-                "run {{ val v = {}; wire.pos = {} + {}; v }}",
-                value, offset_expr, size
-            )
-        }
-        _ => {
-            let value = emit_read_value(seq, base_name, base_expr);
-            format!("run {{ val v = {}; v }}", value)
+            let inner = emit_reader_read(element);
+            format!("reader.readList {{ {} }}", inner)
         }
     }
 }
@@ -539,91 +311,13 @@ pub fn emit_write_expr(seq: &WriteSeq) -> String {
             let ok_type = kotlin_type_for_write_seq(ok);
             let err_type = kotlin_type_for_write_seq(err);
             format!(
-                "when ({}) {{ is RiffResult.Ok<*> -> {{ wire.writeU8(0u); val okVal = {}.value as {}; {} }} is RiffResult.Err<*> -> {{ wire.writeU8(1u); val errVal = {}.error as {}; {} }} }}",
-                v, v, ok_type, ok_expr, v, err_type, err_expr
+                "when ({}) {{ is RiffResult.Ok<*> -> {{ wire.writeU8(0u); val okVal = riffUnsafeCast<{}>({}.value); {} }} is RiffResult.Err<*> -> {{ wire.writeU8(1u); val errVal = riffUnsafeCast<{}>({}.error); {} }} }}",
+                v, ok_type, v, ok_expr, err_type, v, err_expr
             )
         }
         WriteOp::Builtin { id, value } => emit_write_builtin(id, &render_value(value)),
         WriteOp::Custom { value, .. } => {
             format!("{}.wireEncodeTo(wire)", render_value(value))
-        }
-    }
-}
-
-pub fn emit_inline_decode(seq: &ReadSeq, _local_name: &str, pos_var: &str) -> String {
-    match seq.size {
-        SizeExpr::Fixed(fixed) => {
-            let value_expr = emit_read_value(seq, pos_var, pos_var);
-            format!(
-                "run {{ val v = {}; {} += {}; v }}",
-                value_expr, pos_var, fixed
-            )
-        }
-        _ => {
-            let op = seq.ops.first().expect("read ops");
-            match op {
-                ReadOp::String { offset } => {
-                    let value = emit_read_string_value(offset, pos_var, pos_var);
-                    let size = emit_read_string_size(offset, pos_var, pos_var);
-                    format!("run {{ val v = {}; {} += {}; v }}", value, pos_var, size)
-                }
-                ReadOp::Bytes { offset } => {
-                    let value = emit_read_bytes_value(offset, pos_var, pos_var);
-                    let size = emit_read_bytes_size(offset, pos_var, pos_var);
-                    format!("run {{ val v = {}; {} += {}; v }}", value, pos_var, size)
-                }
-                ReadOp::Vec {
-                    len_offset,
-                    element_type,
-                    element,
-                    layout,
-                } => {
-                    let value = emit_read_vec_value(
-                        len_offset,
-                        element_type,
-                        element,
-                        layout,
-                        pos_var,
-                        pos_var,
-                    );
-                    let is_primitive_blittable = matches!(
-                        (layout, element_type),
-                        (VecLayout::Blittable { .. }, TypeExpr::Primitive(_))
-                    );
-                    if is_primitive_blittable {
-                        let offset_expr = emit_offset_expr(len_offset, pos_var, pos_var);
-                        let size = emit_read_primitive_array_size(element_type, &offset_expr);
-                        format!("run {{ val v = {}; {} += {}; v }}", value, pos_var, size)
-                    } else {
-                        format!("run {{ val v = {}; {} = wire.pos; v }}", value, pos_var)
-                    }
-                }
-                ReadOp::Option { tag_offset, some } => {
-                    let offset_expr = emit_offset_expr(tag_offset, pos_var, pos_var);
-                    let reader = emit_element_reader(some);
-                    format!(
-                        "run {{ val v = wire.readNullableValue({}, {{ w, p -> {} }}); {} = wire.pos; v }}",
-                        offset_expr, reader, pos_var
-                    )
-                }
-                ReadOp::Result {
-                    tag_offset,
-                    ok,
-                    err,
-                } => {
-                    let offset_expr = emit_offset_expr(tag_offset, pos_var, pos_var);
-                    let ok_reader = emit_element_reader(ok);
-                    let err_reader = emit_element_reader(err);
-                    format!(
-                        "run {{ val v = wire.readResultValue({}, {{ w, p -> {} }}, {{ w, p -> {} }}); {} = wire.pos; v }}",
-                        offset_expr, ok_reader, err_reader, pos_var
-                    )
-                }
-                _ => {
-                    let pair_expr = emit_read_pair(seq, pos_var, pos_var);
-                    format!("run {{ val (v, s) = {}; {} += s; v }}", pair_expr, pos_var)
-                }
-            }
         }
     }
 }
@@ -648,226 +342,6 @@ fn emit_builtin_size(id: &BuiltinId, value: &str) -> String {
         format!("Utf8Codec.maxBytes({}.toString())", value)
     } else {
         format!("{}.wireEncodedSize()", value)
-    }
-}
-
-fn emit_offset_expr(offset: &OffsetExpr, base_name: &str, base_expr: &str) -> String {
-    match offset {
-        OffsetExpr::Fixed(value) => value.to_string(),
-        OffsetExpr::Base => base_expr.to_string(),
-        OffsetExpr::BasePlus(add) => {
-            if *add == 0 {
-                base_expr.to_string()
-            } else {
-                format!("{} + {}", base_expr, add)
-            }
-        }
-        OffsetExpr::Var(name) => {
-            if name == base_name {
-                base_expr.to_string()
-            } else {
-                name.to_string()
-            }
-        }
-        OffsetExpr::VarPlus(name, add) => {
-            let base = if name == base_name {
-                base_expr.to_string()
-            } else {
-                name.to_string()
-            };
-            if *add == 0 {
-                base
-            } else {
-                format!("{} + {}", base, add)
-            }
-        }
-    }
-}
-
-fn emit_read_primitive(
-    primitive: PrimitiveType,
-    offset: &OffsetExpr,
-    base_name: &str,
-    base_expr: &str,
-) -> String {
-    let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-    match primitive {
-        PrimitiveType::Bool => format!("wire.readBool({})", offset_expr),
-        PrimitiveType::I8 => format!("wire.readI8({})", offset_expr),
-        PrimitiveType::U8 => format!("wire.readU8({})", offset_expr),
-        PrimitiveType::I16 => format!("wire.readI16({})", offset_expr),
-        PrimitiveType::U16 => format!("wire.readU16({})", offset_expr),
-        PrimitiveType::I32 => format!("wire.readI32({})", offset_expr),
-        PrimitiveType::U32 => format!("wire.readU32({})", offset_expr),
-        PrimitiveType::I64 | PrimitiveType::ISize => format!("wire.readI64({})", offset_expr),
-        PrimitiveType::U64 | PrimitiveType::USize => format!("wire.readU64({})", offset_expr),
-        PrimitiveType::F32 => format!("wire.readF32({})", offset_expr),
-        PrimitiveType::F64 => format!("wire.readF64({})", offset_expr),
-    }
-}
-
-fn emit_read_string_value(offset: &OffsetExpr, base_name: &str, base_expr: &str) -> String {
-    let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-    format!("wire.readStringAt({})", offset_expr)
-}
-
-fn emit_read_string_size(offset: &OffsetExpr, base_name: &str, base_expr: &str) -> String {
-    let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-    format!("wire.stringSize({})", offset_expr)
-}
-
-fn emit_read_bytes_value(offset: &OffsetExpr, base_name: &str, base_expr: &str) -> String {
-    let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-    format!("wire.readBytesAt({})", offset_expr)
-}
-
-fn emit_read_bytes_size(offset: &OffsetExpr, base_name: &str, base_expr: &str) -> String {
-    let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-    format!("wire.bytesSize({})", offset_expr)
-}
-
-fn emit_read_builtin_value(
-    id: &BuiltinId,
-    offset: &OffsetExpr,
-    base_name: &str,
-    base_expr: &str,
-) -> String {
-    let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-    match id.as_str() {
-        "Duration" => format!("wire.readDuration({})", offset_expr),
-        "SystemTime" => format!("wire.readInstant({})", offset_expr),
-        "Uuid" => format!("wire.readUuid({})", offset_expr),
-        "Url" => format!("java.net.URI.create(wire.readStringAt({}))", offset_expr),
-        _ => format!("wire.readStringAt({})", offset_expr),
-    }
-}
-
-fn emit_read_builtin_size(
-    id: &BuiltinId,
-    offset: &OffsetExpr,
-    base_name: &str,
-    base_expr: &str,
-) -> String {
-    let offset_expr = emit_offset_expr(offset, base_name, base_expr);
-    match id.as_str() {
-        "Duration" => "12".to_string(),
-        "SystemTime" => "12".to_string(),
-        "Uuid" => "16".to_string(),
-        "Url" => format!("wire.stringSize({})", offset_expr),
-        other => panic!("unhandled custom type size: {other}"),
-    }
-}
-
-fn emit_read_primitive_array_size(element_type: &TypeExpr, offset_expr: &str) -> String {
-    let size_method = match element_type {
-        TypeExpr::Primitive(primitive) => match primitive {
-            PrimitiveType::I32 | PrimitiveType::U32 => "intArraySize",
-            PrimitiveType::I16 | PrimitiveType::U16 => "shortArraySize",
-            PrimitiveType::I64
-            | PrimitiveType::U64
-            | PrimitiveType::ISize
-            | PrimitiveType::USize => "longArraySize",
-            PrimitiveType::F32 => "floatArraySize",
-            PrimitiveType::F64 => "doubleArraySize",
-            PrimitiveType::U8 | PrimitiveType::I8 => "bytesSize",
-            PrimitiveType::Bool => "booleanArraySize",
-        },
-        _ => "bytesSize",
-    };
-    format!("wire.{}({})", size_method, offset_expr)
-}
-
-fn emit_read_vec_value(
-    len_offset: &OffsetExpr,
-    element_type: &TypeExpr,
-    element: &ReadSeq,
-    layout: &VecLayout,
-    base_name: &str,
-    base_expr: &str,
-) -> String {
-    let offset_expr = emit_offset_expr(len_offset, base_name, base_expr);
-    match layout {
-        VecLayout::Blittable { .. } => match element_type {
-            TypeExpr::Primitive(primitive) => {
-                let method = match primitive {
-                    PrimitiveType::I32 | PrimitiveType::U32 => "readIntArrayAt",
-                    PrimitiveType::I16 | PrimitiveType::U16 => "readShortArrayAt",
-                    PrimitiveType::I64
-                    | PrimitiveType::U64
-                    | PrimitiveType::ISize
-                    | PrimitiveType::USize => "readLongArrayAt",
-                    PrimitiveType::F32 => "readFloatArrayAt",
-                    PrimitiveType::F64 => "readDoubleArrayAt",
-                    PrimitiveType::U8 | PrimitiveType::I8 => "readBytesAt",
-                    PrimitiveType::Bool => "readBooleanArrayAt",
-                };
-                format!("wire.{}({})", method, offset_expr)
-            }
-            _ => {
-                let reader = emit_element_reader(element);
-                format!("wire.readListOf({}, {{ w, p -> {} }})", offset_expr, reader)
-            }
-        },
-        VecLayout::Encoded => {
-            let reader = emit_element_reader(element);
-            format!("wire.readListOf({}, {{ w, p -> {} }})", offset_expr, reader)
-        }
-    }
-}
-
-pub fn emit_element_reader(seq: &ReadSeq) -> String {
-    let op = seq.ops.first().expect("read ops");
-    match op {
-        ReadOp::Primitive { primitive, .. } => {
-            let (method, size) = match primitive {
-                PrimitiveType::Bool => ("readBool", 1),
-                PrimitiveType::I8 => ("readI8", 1),
-                PrimitiveType::U8 => ("readU8", 1),
-                PrimitiveType::I16 => ("readI16", 2),
-                PrimitiveType::U16 => ("readU16", 2),
-                PrimitiveType::I32 => ("readI32", 4),
-                PrimitiveType::U32 => ("readU32", 4),
-                PrimitiveType::I64 | PrimitiveType::ISize => ("readI64", 8),
-                PrimitiveType::U64 | PrimitiveType::USize => ("readU64", 8),
-                PrimitiveType::F32 => ("readF32", 4),
-                PrimitiveType::F64 => ("readF64", 8),
-            };
-            format!("w.{}(p).also {{ w.pos = p + {} }}", method, size)
-        }
-        ReadOp::String { .. } => {
-            "w.readStringAt(p).also { w.pos = p + w.stringSize(p) }".to_string()
-        }
-        ReadOp::Bytes { .. } => "w.readBytesAt(p).also { w.pos = p + w.bytesSize(p) }".to_string(),
-        ReadOp::Record { id, .. } => format!("{}.decode(w, p)", id.as_str()),
-        ReadOp::Enum { id, layout, .. } => match layout {
-            EnumLayout::CStyle {
-                is_error: false, ..
-            } => {
-                let size = emit_size_expr(&seq.size);
-                format!(
-                    "{}.fromValue(w.readI32(p)).also {{ w.pos = p + {} }}",
-                    id.as_str(),
-                    size
-                )
-            }
-            EnumLayout::CStyle { is_error: true, .. }
-            | EnumLayout::Data { .. }
-            | EnumLayout::Recursive => {
-                format!("{}.decode(w, p)", id.as_str())
-            }
-        },
-        ReadOp::Builtin { id, .. } => match id.as_str() {
-            "Duration" => "w.readDuration(p).also { w.pos = p + 12 }".to_string(),
-            "SystemTime" => "w.readInstant(p).also { w.pos = p + 12 }".to_string(),
-            "Uuid" => "w.readUuid(p).also { w.pos = p + 16 }".to_string(),
-            "Url" => "java.net.URI.create(w.readStringAt(p)).also { w.pos = p + w.stringSize(p) }"
-                .to_string(),
-            _ => "w.readStringAt(p).also { w.pos = p + w.stringSize(p) }".to_string(),
-        },
-        ReadOp::Option { .. } => emit_read_value(seq, "p", "p"),
-        ReadOp::Vec { .. } => emit_read_value(seq, "p", "p"),
-        ReadOp::Result { .. } => emit_read_value(seq, "p", "p"),
-        ReadOp::Custom { id, .. } => format!("{}.decode(w, p)", id.as_str()),
     }
 }
 

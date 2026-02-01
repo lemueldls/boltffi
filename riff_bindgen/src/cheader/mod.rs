@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use riff_ffi_rules::naming;
 
 use crate::model::{
@@ -22,6 +24,7 @@ impl CHeaderGenerator {
         let mut out = String::new();
 
         out.push_str(&Self::generate_preamble(prefix));
+        out.push_str(&Self::generate_forward_declarations(module));
         out.push_str(&Self::generate_async_types_if_needed(module, prefix));
         out.push_str(&Self::generate_stream_types_if_needed(module));
         out.push_str(&Self::generate_ffi_primitive_types(module));
@@ -38,6 +41,97 @@ impl CHeaderGenerator {
         out.push_str(&Self::generate_free_functions(prefix));
 
         out
+    }
+
+    fn generate_forward_declarations(module: &Module) -> String {
+        let names = Self::collect_forward_decl_struct_names(module);
+        if names.is_empty() {
+            return String::new();
+        }
+
+        let decls = names
+            .into_iter()
+            .map(|name| format!("struct {};\n", name))
+            .collect::<String>();
+        format!("\n{}\n", decls)
+    }
+
+    fn collect_forward_decl_struct_names(module: &Module) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+
+        module
+            .classes
+            .iter()
+            .map(|class| class.name.clone())
+            .for_each(|name| {
+                names.insert(name);
+            });
+
+        module.functions.iter().for_each(|func| {
+            func.inputs
+                .iter()
+                .map(|param| &param.param_type)
+                .chain(func.returns.ok_type().into_iter())
+                .chain(func.returns.err_type().into_iter())
+                .for_each(|ty| Self::collect_forward_decl_names_from_type(ty, &mut names));
+        });
+
+        module.classes.iter().for_each(|class| {
+            class
+                .constructors
+                .iter()
+                .flat_map(|ctor| ctor.inputs.iter().map(|param| &param.param_type))
+                .for_each(|ty| Self::collect_forward_decl_names_from_type(ty, &mut names));
+
+            class.methods.iter().for_each(|method| {
+                method
+                    .inputs
+                    .iter()
+                    .map(|param| &param.param_type)
+                    .chain(method.returns.ok_type().into_iter())
+                    .chain(method.returns.err_type().into_iter())
+                    .for_each(|ty| Self::collect_forward_decl_names_from_type(ty, &mut names));
+            });
+        });
+
+        module.callback_traits.iter().for_each(|callback| {
+            callback.methods.iter().for_each(|method| {
+                method
+                    .inputs
+                    .iter()
+                    .map(|param| &param.param_type)
+                    .chain(method.returns.ok_type().into_iter())
+                    .chain(method.returns.err_type().into_iter())
+                    .for_each(|ty| Self::collect_forward_decl_names_from_type(ty, &mut names));
+            });
+        });
+
+        names
+    }
+
+    fn collect_forward_decl_names_from_type(ty: &Type, names: &mut BTreeSet<String>) {
+        match ty {
+            Type::Object(name) => {
+                names.insert(name.clone());
+            }
+            Type::Slice(inner) | Type::MutSlice(inner) | Type::Vec(inner) | Type::Option(inner) => {
+                Self::collect_forward_decl_names_from_type(inner, names)
+            }
+            Type::Result { ok, err } => {
+                Self::collect_forward_decl_names_from_type(ok, names);
+                Self::collect_forward_decl_names_from_type(err, names);
+            }
+            Type::Custom { repr, .. } => Self::collect_forward_decl_names_from_type(repr, names),
+            Type::Primitive(_)
+            | Type::String
+            | Type::Bytes
+            | Type::Builtin(_)
+            | Type::Closure(_)
+            | Type::Record(_)
+            | Type::Enum(_)
+            | Type::BoxedTrait(_)
+            | Type::Void => {}
+        }
     }
 
     fn generate_free_functions(prefix: &str) -> String {

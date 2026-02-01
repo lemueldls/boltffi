@@ -5,6 +5,7 @@ use std::sync::{Mutex, OnceLock};
 
 use proc_macro2::Span;
 use quote::{format_ident, quote};
+use riff_ffi_rules::naming;
 use syn::parse::Parse;
 use syn::{GenericArgument, PathArguments, Type};
 
@@ -24,7 +25,8 @@ impl CustomTypeEntry {
     }
 
     pub fn to_fn_path(&self) -> proc_macro2::TokenStream {
-        let fn_name = format_ident!("__riff_custom_type_{}_into_ffi", self.name);
+        let snake = naming::to_snake_case(&self.name);
+        let fn_name = format_ident!("__riff_custom_type_{}_into_ffi", snake);
         let module_path = self
             .module_path
             .iter()
@@ -34,7 +36,8 @@ impl CustomTypeEntry {
     }
 
     pub fn try_from_fn_path(&self) -> proc_macro2::TokenStream {
-        let fn_name = format_ident!("__riff_custom_type_{}_try_from_ffi", self.name);
+        let snake = naming::to_snake_case(&self.name);
+        let fn_name = format_ident!("__riff_custom_type_{}_try_from_ffi", snake);
         let module_path = self
             .module_path
             .iter()

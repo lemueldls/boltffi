@@ -1,6 +1,6 @@
 use crate::ir::codec::VecLayout;
 use crate::ir::ids::CallbackId;
-use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq};
+use crate::ir::ops::ReadSeq;
 use crate::render::kotlin::emit;
 
 #[derive(Clone)]
@@ -36,8 +36,7 @@ pub struct KotlinCustomType {
     pub repr_kotlin_type: String,
     pub repr_size_expr: String,
     pub repr_encode_expr: String,
-    pub repr_decode_value_expr: String,
-    pub repr_advance_expr: String,
+    pub repr_decode_expr: String,
 }
 
 #[derive(Clone)]
@@ -77,9 +76,7 @@ pub struct KotlinEnumVariant {
 pub struct KotlinEnumField {
     pub name: String,
     pub kotlin_type: String,
-    pub local_name: String,
-    pub wire_decode_inline: String,
-    pub wire_advance_expr: String,
+    pub wire_decode_expr: String,
     pub wire_size_expr: String,
     pub wire_encode: String,
 }
@@ -125,10 +122,7 @@ pub struct KotlinRecordField {
     pub name: String,
     pub kotlin_type: String,
     pub default_value: Option<String>,
-    pub read_expr: String,
-    pub local_name: String,
-    pub wire_decode_inline: String,
-    pub wire_advance_expr: String,
+    pub wire_decode_expr: String,
     pub wire_size_expr: String,
     pub wire_encode: String,
     pub padding_after: usize,
@@ -294,45 +288,8 @@ pub struct KotlinStream {
 
 impl KotlinStream {
     pub fn item_decode_expr(&self) -> String {
-        emit::emit_read_value(&self.item_decode, "offset", "offset")
+        emit::emit_reader_read(&self.item_decode)
     }
-
-    pub fn uses_offset(&self) -> bool {
-        uses_offset_in_read_seq(&self.item_decode)
-    }
-}
-
-fn uses_offset_in_read_seq(seq: &ReadSeq) -> bool {
-    seq.ops.iter().any(uses_offset_in_read_op)
-}
-
-fn uses_offset_in_read_op(op: &ReadOp) -> bool {
-    match op {
-        ReadOp::Primitive { offset, .. } => offset_uses(offset),
-        ReadOp::String { offset } => offset_uses(offset),
-        ReadOp::Bytes { offset } => offset_uses(offset),
-        ReadOp::Option { tag_offset, some } => {
-            offset_uses(tag_offset) || uses_offset_in_read_seq(some)
-        }
-        ReadOp::Vec {
-            len_offset,
-            element,
-            ..
-        } => offset_uses(len_offset) || uses_offset_in_read_seq(element),
-        ReadOp::Record { offset, .. } => offset_uses(offset),
-        ReadOp::Enum { offset, .. } => offset_uses(offset),
-        ReadOp::Result {
-            tag_offset,
-            ok,
-            err,
-        } => offset_uses(tag_offset) || uses_offset_in_read_seq(ok) || uses_offset_in_read_seq(err),
-        ReadOp::Builtin { offset, .. } => offset_uses(offset),
-        ReadOp::Custom { underlying, .. } => uses_offset_in_read_seq(underlying),
-    }
-}
-
-fn offset_uses(offset: &OffsetExpr) -> bool {
-    matches!(offset, OffsetExpr::Base | OffsetExpr::BasePlus(_))
 }
 
 #[derive(Clone)]
@@ -381,6 +338,7 @@ pub struct KotlinCallbackReturn {
     pub jni_type: String,
     pub default_value: String,
     pub to_jni: String,
+    pub to_jni_result: Option<String>,
     pub error_type: Option<String>,
     pub error_is_throwable: bool,
 }

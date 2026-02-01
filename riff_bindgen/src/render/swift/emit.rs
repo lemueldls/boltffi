@@ -668,10 +668,7 @@ fn emit_offset_expr(offset: &OffsetExpr, base_name: &str, base_expr: &str) -> St
 }
 
 pub fn emit_reader_read(seq: &ReadSeq) -> String {
-    seq.ops
-        .first()
-        .map(emit_reader_read_op)
-        .unwrap_or_default()
+    seq.ops.first().map(emit_reader_read_op).unwrap_or_default()
 }
 
 fn emit_reader_read_op(op: &ReadOp) -> String {

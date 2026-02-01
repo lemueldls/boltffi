@@ -3,8 +3,7 @@ use crate::ir::definitions::{
     CStyleVariant, CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef,
     CustomTypeDef, DataVariant, DefaultValue, DeprecationInfo, EnumDef, EnumRepr, FieldDef,
     FunctionDef, MethodDef, ParamDef, ParamPassing, Receiver, RecordDef, ReturnDef, StreamDef,
-    StreamMode,
-    VariantPayload,
+    StreamMode, VariantPayload,
 };
 use crate::ir::ids::{
     BuiltinId, CallbackId, ClassId, ConverterPath, CustomTypeId, EnumId, FieldName, FunctionId,
@@ -94,11 +93,14 @@ impl<'m> ContractBuilder<'m> {
                 .iter()
                 .map(|f| {
                     let type_expr = self.convert_type(&f.field_type);
-                    let default = f
-                        .default_value
-                        .as_deref()
-                        .map(parse_default_value)
-                        .or_else(|| matches!(type_expr, TypeExpr::Option(_)).then_some(DefaultValue::Null));
+                    let default =
+                        f.default_value
+                            .as_deref()
+                            .map(parse_default_value)
+                            .or_else(|| {
+                                matches!(type_expr, TypeExpr::Option(_))
+                                    .then_some(DefaultValue::Null)
+                            });
                     FieldDef {
                         name: FieldName::new(&f.name),
                         type_expr,
@@ -156,7 +158,11 @@ impl<'m> ContractBuilder<'m> {
     fn convert_variant_payload(&self, fields: &[model::RecordField]) -> VariantPayload {
         if fields.is_empty() {
             VariantPayload::Unit
-        } else if fields.iter().enumerate().all(|(i, f)| f.name == format!("value_{i}")) {
+        } else if fields
+            .iter()
+            .enumerate()
+            .all(|(i, f)| f.name == format!("value_{i}"))
+        {
             VariantPayload::Tuple(
                 fields
                     .iter()
@@ -532,8 +538,8 @@ pub fn build_contract(module: &mut Module) -> FfiContract {
 #[cfg(test)]
 mod tests {
     use crate::ir::definitions::{
-        CallbackKind, ConstructorDef, DefaultValue, EnumRepr, ParamPassing,
-        Receiver as IrReceiver, ReturnDef, VariantPayload,
+        CallbackKind, ConstructorDef, DefaultValue, EnumRepr, ParamPassing, Receiver as IrReceiver,
+        ReturnDef, VariantPayload,
     };
 
     use super::parse_default_value;
@@ -703,12 +709,11 @@ mod tests {
     fn multi_field_tuple_variant_produces_tuple_payload() {
         let mut module = empty_module();
         module.enums.push(
-            Enumeration::new("Value")
-                .with_variant(
-                    Variant::new("Pair")
-                        .with_field(RecordField::new("value_0", Type::Primitive(Primitive::I32)))
-                        .with_field(RecordField::new("value_1", Type::String)),
-                ),
+            Enumeration::new("Value").with_variant(
+                Variant::new("Pair")
+                    .with_field(RecordField::new("value_0", Type::Primitive(Primitive::I32)))
+                    .with_field(RecordField::new("value_1", Type::String)),
+            ),
         );
 
         let def = builder(&module).convert_enum(&module.enums[0]);
@@ -731,12 +736,11 @@ mod tests {
     fn named_fields_produce_struct_payload() {
         let mut module = empty_module();
         module.enums.push(
-            Enumeration::new("Event")
-                .with_variant(
-                    Variant::new("Click")
-                        .with_field(RecordField::new("x", Type::Primitive(Primitive::I32)))
-                        .with_field(RecordField::new("y", Type::Primitive(Primitive::I32))),
-                ),
+            Enumeration::new("Event").with_variant(
+                Variant::new("Click")
+                    .with_field(RecordField::new("x", Type::Primitive(Primitive::I32)))
+                    .with_field(RecordField::new("y", Type::Primitive(Primitive::I32))),
+            ),
         );
 
         let def = builder(&module).convert_enum(&module.enums[0]);
@@ -1041,12 +1045,18 @@ mod tests {
 
     #[test]
     fn parse_default_bool_true() {
-        assert!(matches!(parse_default_value("true"), DefaultValue::Bool(true)));
+        assert!(matches!(
+            parse_default_value("true"),
+            DefaultValue::Bool(true)
+        ));
     }
 
     #[test]
     fn parse_default_bool_false() {
-        assert!(matches!(parse_default_value("false"), DefaultValue::Bool(false)));
+        assert!(matches!(
+            parse_default_value("false"),
+            DefaultValue::Bool(false)
+        ));
     }
 
     #[test]
@@ -1084,7 +1094,10 @@ mod tests {
     #[test]
     fn parse_default_enum_variant() {
         match parse_default_value("Direction::North") {
-            DefaultValue::EnumVariant { enum_name, variant_name } => {
+            DefaultValue::EnumVariant {
+                enum_name,
+                variant_name,
+            } => {
                 assert_eq!(enum_name, "Direction");
                 assert_eq!(variant_name, "North");
             }

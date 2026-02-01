@@ -8,9 +8,8 @@
 {%- endfor %}
 
     companion object {
-        fun decode(wire: WireBuffer, offset: Int): {{ class_name }} {
-            wire.pos = offset
-            val tag = wire.advanceI32()
+        fun decode(reader: WireReader): {{ class_name }} {
+            val tag = reader.readI32()
             return when (tag) {
 {%- for variant in variants %}
                 {{ variant.tag }} -> {
@@ -19,7 +18,7 @@
 {%- else %}
                     {{ variant.name }}(
 {%- for field in variant.fields %}
-                        {{ field.wire_advance_expr }}{% if !loop.last %},{% endif %}
+                        {{ field.wire_decode_expr }}{% if !loop.last %},{% endif %}
 {%- endfor %}
                     )
 {%- endif %}

@@ -132,6 +132,10 @@ impl JniAsyncCallbackMethod {
         self.return_c_type.is_some()
     }
 
+    pub fn is_wire(&self) -> bool {
+        self.return_c_type.as_deref() == Some("wire")
+    }
+
     pub fn return_c_type(&self) -> &str {
         self.return_c_type.as_deref().unwrap_or("")
     }
@@ -297,6 +301,13 @@ pub struct JniInvokerResult {
 impl JniAsyncCallbackInvoker {
     pub fn has_result(&self) -> bool {
         self.result_type.is_some()
+    }
+
+    pub fn is_wire(&self) -> bool {
+        self.result_type
+            .as_ref()
+            .map(|r| r.c_type == "wire")
+            .unwrap_or(false)
     }
 
     pub fn c_result_type(&self) -> &str {

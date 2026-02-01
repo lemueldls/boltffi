@@ -1,6 +1,6 @@
 {%- if fields.is_empty() %}
 {{ self::kdoc_block(doc, "") }}object {{ class_name }} {
-    fun decode(wire: WireBuffer, offset: Int): {{ class_name }} { wire.pos = offset; return {{ class_name }} }
+    fun decode(reader: WireReader): {{ class_name }} = {{ class_name }}
 
     fun wireEncodedSize(): Int = 0
 
@@ -17,23 +17,17 @@
 {%- if is_blittable %}
         const val SIZE_BYTES: Int = {{ struct_size }}
 
-        fun decode(wire: WireBuffer, offset: Int): {{ class_name }} {
-            wire.pos = offset + SIZE_BYTES
-            return {{ class_name }}(
+        fun decode(reader: WireReader): {{ class_name }} = {{ class_name }}(
 {%- for field in fields %}
-                {{ field.read_expr }}{% if !loop.last %},{% endif %}
+            {{ field.wire_decode_expr }}{% if is_blittable && field.padding_after > 0 %}.also { reader.skip({{ field.padding_after }}) }{% endif %}{% if !loop.last %},{% endif %}
 {%- endfor %}
-            )
-        }
+        )
 {%- else %}
-        fun decode(wire: WireBuffer, offset: Int): {{ class_name }} {
-            wire.pos = offset
-            return {{ class_name }}(
+        fun decode(reader: WireReader): {{ class_name }} = {{ class_name }}(
 {%- for field in fields %}
-                {{ field.wire_advance_expr }}{% if !loop.last %},{% endif %}
+            {{ field.wire_decode_expr }}{% if !loop.last %},{% endif %}
 {%- endfor %}
-            )
-        }
+        )
 {%- endif %}
     }
 
