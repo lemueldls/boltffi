@@ -32,6 +32,10 @@ value class {{ custom.class_name }}(val value: {{ custom.repr_kotlin_type }}) {
 
 class FfiException(val code: Int, message: String) : Exception(message)
 
+object RiffScope : CoroutineScope {
+    override val coroutineContext = Dispatchers.Default + SupervisorJob()
+}
+
 class RiffException(val errorBuffer: ByteBuffer) : Exception("Structured error") {
     init {
         errorBuffer.order(ByteOrder.nativeOrder())

@@ -189,12 +189,11 @@
         )
 {%- when KotlinStreamMode::Callback { class_name, method_name_pascal } %}
 
-    @OptIn(DelicateCoroutinesApi::class)
     fun {{ stream.name }}(callback: ({{ stream.item_type }}) -> Unit): {{ class_name }}{{ method_name_pascal }}Cancellable {
         val subscription = Native.{{ stream.subscribe }}(handle)
         if (subscription == 0L) return {{ class_name }}{{ method_name_pascal }}Cancellable {}
         val context = RiffStreamContext(
-            scope = GlobalScope,
+            scope = RiffScope,
             subscription = subscription,
             batchSize = 16L,
             popBatch = Native::{{ stream.pop_batch }},

@@ -159,8 +159,9 @@ impl<'a> KotlinLowerer<'a> {
             .any(|callback| callback.methods.iter().any(|method| method.is_async));
         let coroutine_imports = if has_async_callbacks || has_streams {
             vec![
-                "kotlinx.coroutines.DelicateCoroutinesApi".to_string(),
-                "kotlinx.coroutines.GlobalScope".to_string(),
+                "kotlinx.coroutines.CoroutineScope".to_string(),
+                "kotlinx.coroutines.Dispatchers".to_string(),
+                "kotlinx.coroutines.SupervisorJob".to_string(),
                 "kotlinx.coroutines.launch".to_string(),
             ]
         } else {
@@ -169,7 +170,6 @@ impl<'a> KotlinLowerer<'a> {
         let stream_imports = if has_streams {
             vec![
                 "java.util.concurrent.atomic.AtomicInteger".to_string(),
-                "kotlinx.coroutines.CoroutineScope".to_string(),
                 "kotlinx.coroutines.channels.awaitClose".to_string(),
                 "kotlinx.coroutines.flow.Flow".to_string(),
                 "kotlinx.coroutines.flow.callbackFlow".to_string(),

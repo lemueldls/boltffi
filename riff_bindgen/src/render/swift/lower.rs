@@ -30,7 +30,7 @@ use crate::ir::ops::{
 };
 use crate::ir::plan::AbiType;
 use crate::ir::plan::{CallbackStyle, Mutability};
-use crate::ir::types::TypeExpr;
+use crate::ir::types::{PrimitiveType, TypeExpr};
 use crate::render::{TypeConversion, TypeMappings};
 
 struct AbiIndex {
@@ -987,7 +987,13 @@ impl<'a> SwiftLowerer<'a> {
                 }
                 _ => self.resolve_swift_type(ty),
             },
-            TypeExpr::Vec(inner) => format!("[{}]", self.swift_type(inner)),
+            TypeExpr::Vec(inner) => {
+                if matches!(inner.as_ref(), TypeExpr::Primitive(PrimitiveType::U8)) {
+                    "Data".to_string()
+                } else {
+                    format!("[{}]", self.swift_type(inner))
+                }
+            }
             TypeExpr::Result { ok, err } => {
                 format!("Result<{}, {}>", self.swift_type(ok), self.swift_type(err))
             }
