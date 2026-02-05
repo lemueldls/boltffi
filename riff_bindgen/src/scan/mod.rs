@@ -1,3 +1,4 @@
+use indexmap::IndexMap;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -48,7 +49,7 @@ pub struct TypeMeta {
 
 #[derive(Default)]
 pub struct TypeRegistry {
-    types: HashMap<String, TypeMeta>,
+    types: IndexMap<String, TypeMeta>,
 }
 
 impl TypeRegistry {
@@ -263,12 +264,13 @@ impl SourceScanner {
     }
 
     pub fn scan_directory(&mut self, crate_path: &Path, dir: &Path) -> Result<(), String> {
-        let files: Vec<_> = WalkDir::new(dir)
+        let mut files: Vec<_> = WalkDir::new(dir)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "rs"))
             .map(|e| e.path().to_path_buf())
             .collect();
+        files.sort();
 
         self.global_aliases = Self::collect_global_aliases(&files)?;
         let compiler_targets = Self::collect_compiler_type_targets(&files, &self.global_aliases)?;
