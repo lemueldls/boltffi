@@ -1,0 +1,239 @@
+# Packaging
+
+Packaging takes your Rust library and produces artifacts ready for use in Xcode and Android Studio. A single command handles everything: compiling for each target architecture, generating bindings, and bundling the results into the format each platform expects.
+
+## Overview
+
+The packaging process has three stages:
+
+1. **Build** - Compile your Rust library for each target architecture (arm64, x86_64, etc.)
+2. **Generate** - Create Swift/Kotlin bindings and C headers from your exported API
+3. **Package** - Bundle everything into platform-specific formats
+
+For Apple, this produces an xcframework and SwiftPM package. For Android, this produces jniLibs and Kotlin sources ready to drop into your project.
+
+## Getting Started
+
+Initialize your project with a configuration file:
+
+```bash
+boltffi init
+```
+
+This creates `boltffi.toml` with defaults. The minimal configuration is:
+
+```toml
+[package]
+name = "mylib"
+```
+
+Your `Cargo.toml` needs the right crate types:
+
+```toml
+[lib]
+crate-type = ["staticlib", "cdylib"]
+```
+
+## Apple Packaging
+
+Package everything for iOS and iOS Simulator:
+
+```bash
+boltffi pack apple --release
+```
+
+This builds for arm64 (device) and arm64/x86_64 (simulator), generates Swift bindings and a C header, creates an xcframework, and generates a SwiftPM package.
+
+### Output Structure
+
+```
+dist/apple/
+├── MyLib.xcframework/
+│   ├── ios-arm64/
+│   │   ├── Headers/
+│   │   │   └── mylib.h
+│   │   └── libmylib.a
+│   ├── ios-arm64_x86_64-simulator/
+│   │   ├── Headers/
+│   │   │   └── mylib.h
+│   │   └── libmylib.a
+│   └── Info.plist
+├── Package.swift
+└── Sources/
+    └── BoltFFI/
+        └── MyLibBoltFFI.swift
+```
+
+The xcframework contains fat libraries for each platform slice. The SwiftPM package ties it all together with a binary target for the xcframework and a Swift target for the generated bindings.
+
+### Including macOS
+
+To also build for macOS, add this to your `boltffi.toml`:
+
+```toml
+[apple]
+include_macos = true
+```
+
+Then run:
+
+```bash
+boltffi pack apple --release
+```
+
+The xcframework will include an additional `macos-arm64_x86_64` slice.
+
+### SwiftPM Layouts
+
+The `layout` option controls how the SwiftPM package is structured. Configure it in `boltffi.toml`:
+
+```toml
+[apple.spm]
+layout = "ffi-only"  # or "bundled" or "split"
+```
+
+**ffi-only** (default): Self-contained package with the xcframework and generated Swift. Import and use directly.
+
+**bundled**: For existing Swift packages where you want to add generated bindings to your own wrapper target. Set `wrapper_sources` to your target's source directory.
+
+**split**: Binary-only package. The generated Swift is written to a separate location for you to include in your own package. Use this when you need full control over the Swift target.
+
+See [Configuration](/docs/configuration) for the full list of options.
+
+### Using in Xcode
+
+1. In Xcode, go to File → Add Package Dependencies
+2. Click "Add Local..." and select the `dist/apple` directory
+3. Add the package to your target
+
+Then import and use:
+
+```swift
+import MyLib
+
+let result = someExportedFunction()
+```
+
+The package exposes a single module with your library name. All exported functions, classes, and types are available.
+
+### Remote Distribution
+
+For distributing via GitHub releases or another host:
+
+```toml
+[apple.spm]
+distribution = "remote"
+repo_url = "https://github.com/you/mylib/releases/download"
+```
+
+```bash
+boltffi pack apple --release --version 1.0.0
+```
+
+This generates a `Package.swift` that points to a remote zip URL instead of a local path. Upload `MyLib.xcframework.zip` to your release, and consumers can add your package by URL.
+
+## Android Packaging
+
+Package everything for Android:
+
+```bash
+boltffi pack android --release
+```
+
+This builds for all Android ABIs (arm64-v8a, armeabi-v7a, x86, x86_64), generates Kotlin bindings and JNI glue, and copies the shared libraries to jniLibs.
+
+### Output Structure
+
+```
+dist/android/
+├── jniLibs/
+│   ├── arm64-v8a/
+│   │   └── libmylib.so
+│   ├── armeabi-v7a/
+│   │   └── libmylib.so
+│   ├── x86/
+│   │   └── libmylib.so
+│   └── x86_64/
+│       └── libmylib.so
+└── kotlin/
+    ├── com/
+    │   └── example/
+    │       └── mylib/
+    │           └── MyLib.kt
+    └── jni/
+        └── jni_glue.c
+```
+
+The jniLibs folder follows the standard Android layout. Each ABI gets its own shared library. The Kotlin sources include your bindings and the JNI glue that connects them to the native code.
+
+### Using in Android Studio
+
+1. Copy `dist/android/jniLibs` to your app module's `src/main/` directory
+2. Copy the Kotlin sources from `dist/android/kotlin/com/...` to your source set
+3. Add the JNI glue to your native build (if using CMake or ndk-build)
+
+Then import and use:
+
+```kotlin
+import com.example.mylib.*
+
+val result = someExportedFunction()
+```
+
+### Gradle Integration
+
+If you're using the Android Gradle Plugin with native support, point it at the jniLibs:
+
+```kotlin
+android {
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+}
+```
+
+The shared libraries are loaded automatically when you first call into your Kotlin bindings.
+
+## Build Profiles
+
+Debug builds are faster but produce larger, slower binaries:
+
+```bash
+boltffi pack apple           # debug
+boltffi pack apple --release # optimized
+```
+
+Always use `--release` for distribution. Debug builds include symbols and skip optimizations, resulting in binaries 5-10x larger than release builds.
+
+## Skipping Steps
+
+If you've already built and just want to regenerate bindings or repackage:
+
+```bash
+boltffi pack apple --no-build        # skip cargo build
+boltffi pack apple --regenerate=false # skip binding generation
+boltffi pack apple --xcframework-only # skip Package.swift
+boltffi pack apple --spm-only        # skip xcframework
+```
+
+These options are useful during development when iterating on specific parts of the pipeline.
+
+## Full Release Pipeline
+
+For CI or final releases, run the complete pipeline:
+
+```bash
+boltffi release apple
+```
+
+This runs check, build, generate, and pack in sequence. Equivalent to:
+
+```bash
+boltffi check --apple
+boltffi build apple --release
+boltffi generate swift
+boltffi generate header
+boltffi pack apple --release --no-build
+```

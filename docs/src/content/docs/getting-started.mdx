@@ -1,0 +1,116 @@
+# Getting Started
+
+This guide walks you through creating a Rust library and packaging it for use in other languages.
+
+## Prerequisites
+
+- Rust 1.70+ ([rustup.rs](https://rustup.rs))
+- For Apple: Xcode 15+ with command line tools
+- For Android: Android Studio with NDK
+
+## Install BoltFFI
+
+```bash
+cargo install boltffi_cli
+```
+
+## Create a Rust library
+
+```bash
+cargo new --lib mylib
+cd mylib
+```
+
+Edit `Cargo.toml`:
+
+```toml
+[package]
+name = "mylib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+boltffi = "0.1"
+```
+
+## Write your code
+
+Two attributes do most of the work:
+
+- `#[data]` marks a struct or enum as a record (value type, copied across the boundary)
+- `#[export]` exposes a function or impl block to the target language
+
+Replace `src/lib.rs`:
+
+```rust
+use boltffi::*;
+
+#[data]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[export]
+pub fn distance(a: Point, b: Point) -> f64 {
+    ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt()
+}
+```
+
+## Build and package
+
+```bash
+boltffi init                    # creates boltffi.toml
+boltffi pack apple --release    # builds, generates Swift, packages xcframework
+```
+
+This creates:
+- `dist/apple/MyLib.xcframework`
+- `dist/apple/Package.swift`
+
+For Android:
+
+```bash
+boltffi pack android --release  # builds, generates Kotlin, packages jniLibs
+```
+
+## Use in Swift
+
+Add the package to Xcode (File → Add Package Dependencies → local path to `dist/apple`), then:
+
+```swift
+import MyLib
+
+let p1 = Point(x: 0, y: 0)
+let p2 = Point(x: 3, y: 4)
+print(distance(a: p1, b: p2))  // 5.0
+```
+
+## Use in Kotlin
+
+Copy `dist/android` into your Android project, then:
+
+```kotlin
+import com.example.mylib.*
+
+val p1 = Point(0.0, 0.0)
+val p2 = Point(3.0, 4.0)
+println(distance(p1, p2))  // 5.0
+```
+
+## What you learned
+
+- `#[data]` creates records (value types)
+- `#[export]` exposes functions
+- `boltffi pack` handles build, codegen, and packaging in one step
+
+## Next steps
+
+- [Types](/docs/types) - how Rust types map to target languages
+- [Records](/docs/records) - structs, enums, default values
+- [Classes](/docs/classes) - stateful objects with methods
+- [Functions](/docs/functions) - parameters, return types, errors
+- [Async](/docs/async) - async functions and methods

@@ -1,0 +1,304 @@
+import CodeComparison from "../../components/CodeComparisonWrapper.astro";
+import TypeTable from "../../components/TypeTable";
+
+# Callbacks & Traits
+
+Target language code can flow into Rust through closures and traits. Pass a closure and the target language provides a lambda. Define a trait and the target language implements it as a protocol or interface. Both enable patterns like event handling, progress reporting, data providers, and transformation functions. BoltFFI generates the appropriate bindings for each form, handling the FFI boundary so implementations on either side can call each other safely.
+
+## Closures
+
+Use closures when you need a single callback function. Accept `impl Fn`, `impl FnMut`, or `impl FnOnce` as a parameter, and BoltFFI generates a function type in the target language. The caller passes a lambda or closure, and Rust invokes it during execution. This works for iteration, mapping, filtering, and simple event handlers. Closures work in both standalone functions and class methods.
+
+<CodeComparison
+  title="Closure callback"
+  rust={`#[export]
+pub fn foreach_item(
+    items: &[i32],
+    mut callback: impl FnMut(i32)
+) {
+    items.iter().for_each(|&x| callback(x));
+}`}
+  swift={`// Generated
+func foreachItem(
+    items: [Int32],
+    callback: (Int32) -> Void
+)
+
+// Usage
+var sum: Int32 = 0
+foreachItem(items: [1, 2, 3]) { value in
+    sum += value
+}`}
+  kotlin={`// Generated
+fun foreachItem(
+    items: IntArray,
+    callback: (Int) -> Unit
+)
+
+// Usage
+var sum = 0
+foreachItem(intArrayOf(1, 2, 3)) { value ->
+    sum += value
+}`}
+/>
+
+### Return Values
+
+Closures can return values. The return type becomes part of the generated function signature.
+
+<CodeComparison
+  title="Closure with return value"
+  rust={`#[export]
+pub fn transform(
+    items: &[i32],
+    f: impl Fn(i32) -> i32
+) -> Vec<i32> {
+    items.iter().map(|&x| f(x)).collect()
+}`}
+  swift={`// Generated
+func transform(
+    items: [Int32],
+    f: (Int32) -> Int32
+) -> [Int32]
+
+// Usage
+let doubled = transform(items: [1, 2, 3]) { $0 * 2 }`}
+  kotlin={`// Generated
+fun transform(
+    items: IntArray,
+    f: (Int) -> Int
+): IntArray
+
+// Usage
+val doubled = transform(intArrayOf(1, 2, 3)) { it * 2 }`}
+/>
+
+## Traits
+
+Use traits when you need multiple related callback methods. Define a trait with `#[export]` and BoltFFI generates a protocol or interface in the target language. The target language implements this protocol, and Rust receives an object that can call any of its methods. This pattern works well for progress handlers, event listeners, and delegate protocols. Like closures, trait callbacks work in both standalone functions and class methods.
+
+<CodeComparison
+  title="Trait callback"
+  rust={`#[export]
+pub trait ProgressHandler {
+    fn on_progress(&self, percent: f64);
+    fn on_complete(&self, result: &str);
+    fn on_error(&self, error: &str);
+}
+
+#[export]
+pub fn download(
+    url: &str,
+    handler: Box<dyn ProgressHandler>
+) {
+    handler.on_progress(0.0);
+    // ... work ...
+    handler.on_complete("Done");
+}`}
+  swift={`// Generated
+protocol ProgressHandlerProtocol {
+    func onProgress(percent: Double)
+    func onComplete(result: String)
+    func onError(error: String)
+}
+
+func download(
+    url: String,
+    handler: ProgressHandlerProtocol
+)
+
+// Usage
+class MyHandler: ProgressHandlerProtocol {
+    func onProgress(percent: Double) {
+        print("Progress: \\(percent)%")
+    }
+    func onComplete(result: String) {
+        print("Done: \\(result)")
+    }
+    func onError(error: String) {
+        print("Error: \\(error)")
+    }
+}
+
+download(url: "https://example.com", handler: MyHandler())`}
+  kotlin={`// Generated
+interface ProgressHandlerProtocol {
+    fun onProgress(percent: Double)
+    fun onComplete(result: String)
+    fun onError(error: String)
+}
+
+fun download(
+    url: String,
+    handler: ProgressHandlerProtocol
+)
+
+// Usage
+class MyHandler : ProgressHandlerProtocol {
+    override fun onProgress(percent: Double) {
+        println("Progress: $percent%")
+    }
+    override fun onComplete(result: String) {
+        println("Done: $result")
+    }
+    override fun onError(error: String) {
+        println("Error: $error")
+    }
+}
+
+download("https://example.com", MyHandler())`}
+/>
+
+### Ownership
+
+Trait callbacks can be passed as `Box<dyn Trait>` or `Arc<dyn Trait>`. Use `Box` when the callback is used once or owned by a single call. Use `Arc` when the callback needs to be shared across multiple calls or stored for later use. The choice affects how the target language object is retained.
+
+<CodeComparison
+  title="Box vs Arc ownership"
+  rust={`#[export]
+pub fn single_use(handler: Box<dyn ProgressHandler>) {
+    handler.on_complete("done");
+}
+
+#[export]
+pub fn shared_use(handler: Arc<dyn ProgressHandler>) {
+    let h = handler.clone();
+    // can store h for later, pass to threads, etc.
+    handler.on_progress(50.0);
+}`}
+  swift={`// Both accept the same protocol
+func singleUse(handler: ProgressHandlerProtocol)
+func sharedUse(handler: ProgressHandlerProtocol)
+
+// Usage is identical from Swift side
+singleUse(handler: MyHandler())
+sharedUse(handler: MyHandler())`}
+  kotlin={`// Both accept the same interface
+fun singleUse(handler: ProgressHandlerProtocol)
+fun sharedUse(handler: ProgressHandlerProtocol)
+
+// Usage is identical from Kotlin side
+singleUse(MyHandler())
+sharedUse(MyHandler())`}
+/>
+
+### Async Methods
+
+Trait methods can be async. Mark the trait with `#[async_trait]` and use `async fn` for methods that need to perform async work on the target language side. When Rust calls an async method, it awaits the result before continuing.
+
+<CodeComparison
+  title="Async trait callback"
+  rust={`use async_trait::async_trait;
+
+#[async_trait]
+#[export]
+pub trait DataProvider {
+    async fn fetch(&self, key: &str) -> String;
+}
+
+#[export]
+pub async fn process(provider: Box<dyn DataProvider>) -> String {
+    let data = provider.fetch("config").await;
+    format!("Got: {}", data)
+}`}
+  swift={`// Generated
+protocol DataProviderProtocol {
+    func fetch(key: String) async -> String
+}
+
+func process(
+    provider: DataProviderProtocol
+) async -> String
+
+// Usage
+class MyProvider: DataProviderProtocol {
+    func fetch(key: String) async -> String {
+        // can do async work here
+        return "value for \\(key)"
+    }
+}
+
+let result = await process(provider: MyProvider())`}
+  kotlin={`// Generated
+interface DataProviderProtocol {
+    suspend fun fetch(key: String): String
+}
+
+suspend fun process(
+    provider: DataProviderProtocol
+): String
+
+// Usage
+class MyProvider : DataProviderProtocol {
+    override suspend fun fetch(key: String): String {
+        // can do async work here
+        return "value for $key"
+    }
+}
+
+val result = process(MyProvider())`}
+/>
+
+### Storing Traits
+
+Trait objects can be stored in class fields for later use. The target language object remains alive as long as the Rust class holds the reference.
+
+<CodeComparison
+  title="Storing trait objects"
+  rust={`pub struct Engine {
+    logger: Box<dyn Logger>,
+}
+
+#[export]
+impl Engine {
+    pub fn new(logger: Box<dyn Logger>) -> Self {
+        Engine { logger }
+    }
+    
+    pub fn do_work(&self) {
+        self.logger.log("Working...");
+    }
+}`}
+  swift={`// Generated
+public class Engine {
+    public init(logger: LoggerProtocol)
+    public func doWork()
+}
+
+// Usage
+let engine = Engine(logger: MyLogger())
+engine.doWork()`}
+  kotlin={`// Generated
+class Engine(logger: LoggerProtocol) {
+    fun doWork()
+}
+
+// Usage
+val engine = Engine(MyLogger())
+engine.doWork()`}
+/>
+
+### Thread Safety
+
+For traits that will be called from multiple threads, add `Send + Sync` bounds. This ensures the target language implementation can be safely shared across threads.
+
+```rust
+#[export]
+pub trait ThreadSafeLogger: Send + Sync {
+    fn log(&self, message: &str);
+}
+```
+
+### Limitations
+
+Trait callbacks have some restrictions:
+
+- Generic traits are not supported
+- Associated types are not supported
+- Default method implementations are ignored
+
+## How It Works
+
+Closures are passed as function pointers with an associated context. When the target language calls a function that accepts a closure, it packages the lambda and any captured state into a handle. Rust receives this handle and invokes the closure through a generated wrapper that unpacks arguments, calls the target language function, and returns the result.
+
+Trait callbacks use a vtable mechanism. When the target language passes a callback object, BoltFFI creates a handle that pairs the object reference with a vtable of function pointers. Each method in the trait has a corresponding entry in the vtable. When Rust calls a method, it invokes the function pointer with the handle, which dispatches to the target language implementation. The handle tracks ownership so the object stays alive as long as Rust holds a reference.

@@ -1,0 +1,520 @@
+import CodeComparison from "../../components/CodeComparisonWrapper.astro";
+import TypeTable from "../../components/TypeTable";
+
+# Classes
+
+BoltFFI has two ways to expose a struct: as data or as a class.
+
+Data (`#[data]`) is for plain values. A `Point { x, y }` or a `User { id, name, email }`. Data is copied when it crosses the boundary. The target language gets a struct or record with public fields. No behavior, no methods, just data.
+
+Classes (`#[export] impl`) are for objects with behavior. A `DatabaseConnection` or a `HttpClient`. The object lives in Rust, the target language holds a reference to it. Methods operate on that reference. The object is not copied - there's one instance, and both sides point to it.
+
+Use data when you're passing values around. Use classes when you're managing state or resources.
+
+## Defining a class
+
+Put `#[export]` on the impl block, not the struct. The struct stays private; only the methods you define in the impl block are exposed.
+
+<CodeComparison
+  title=""
+  rust={`pub struct Counter {
+    value: i32,
+}
+
+#[export]
+impl Counter {
+    pub fn new() -> Self {
+        Counter { value: 0 }
+    }
+    
+    pub fn increment(&mut self) {
+        self.value += 1;
+    }
+    
+    pub fn get(&self) -> i32 {
+        self.value
+    }
+}`}
+  swift={`public class Counter {
+    public init()
+    public func increment()
+    public func get() -> Int32
+}
+
+let counter = Counter()
+counter.increment()
+counter.increment()
+print(counter.get())  // 2`}
+  kotlin={`class Counter {
+    constructor()
+    fun increment()
+    fun get(): Int
+}
+
+val counter = Counter()
+counter.increment()
+counter.increment()
+println(counter.get())  // 2`}
+/>
+
+## Constructors
+
+Methods that return `Self` become constructors. How they appear in the target language depends on the method name and parameters.
+
+### The `new()` method
+
+A method named `new()` becomes the primary constructor.
+
+<CodeComparison
+  title=""
+  rust={`#[export]
+impl Counter {
+    pub fn new() -> Self {
+        Counter { value: 0 }
+    }
+}`}
+  swift={`public class Counter {
+    public init()
+}
+
+let c = Counter()`}
+  kotlin={`class Counter {
+    constructor()
+}
+
+val c = Counter()`}
+/>
+
+### Named constructors with parameters
+
+Methods with parameters that return `Self` become additional constructors. In Swift, they become `convenience init`. In Kotlin, they go in the companion object.
+
+<CodeComparison
+  title=""
+  rust={`#[export]
+impl Database {
+    pub fn new() -> Self {
+        Database { path: ":memory:".into() }
+    }
+    
+    pub fn open(path: &str) -> Self {
+        Database { path: path.into() }
+    }
+    
+    pub fn with_options(
+        path: &str,
+        read_only: bool
+    ) -> Self {
+        Database {
+            path: path.into(),
+            read_only,
+        }
+    }
+}`}
+  swift={`public class Database {
+    public init()
+    public convenience init(path: String)
+    public convenience init(path: String, readOnly: Bool)
+}
+
+let db1 = Database()
+let db2 = Database(path: "data.db")
+let db3 = Database(path: "data.db", readOnly: true)`}
+  kotlin={`class Database {
+    constructor()
+    
+    companion object {
+        fun open(path: String): Database
+        fun withOptions(path: String, readOnly: Boolean): Database
+    }
+}
+
+val db1 = Database()
+val db2 = Database.open("data.db")
+val db3 = Database.withOptions("data.db", true)`}
+/>
+
+### Factory methods (no parameters)
+
+Methods with no parameters and a name other than `new` become factory methods.
+
+<CodeComparison
+  title=""
+  rust={`#[export]
+impl Config {
+    pub fn new() -> Self {
+        Config::default_config()
+    }
+    
+    pub fn production() -> Self {
+        Config { debug: false, timeout: 30 }
+    }
+    
+    pub fn development() -> Self {
+        Config { debug: true, timeout: 120 }
+    }
+}`}
+  swift={`public class Config {
+    public init()
+    public static func production() -> Config
+    public static func development() -> Config
+}
+
+let cfg = Config.production()`}
+  kotlin={`class Config {
+    constructor()
+    
+    companion object {
+        fun production(): Config
+        fun development(): Config
+    }
+}
+
+val cfg = Config.production()`}
+/>
+
+### Fallible constructors
+
+Constructors can return `Result<Self, E>`. The error type must be marked with `#[error]`. The constructor becomes throwing in the target language.
+
+<CodeComparison
+  title=""
+  rust={`#[error]
+pub enum DbError {
+    NotFound,
+    PermissionDenied,
+}
+
+#[export]
+impl Database {
+    pub fn open(path: &str) -> Result<Self, DbError> {
+        if !path_exists(path) {
+            return Err(DbError::NotFound);
+        }
+        Ok(Database { path: path.into() })
+    }
+}`}
+  swift={`public class Database {
+    public convenience init(path: String) throws
+}
+
+do {
+    let db = try Database(path: "data.db")
+} catch DbError.notFound {
+    print("file not found")
+}`}
+  kotlin={`class Database {
+    companion object {
+        @Throws(DbError::class)
+        fun open(path: String): Database
+    }
+}
+
+try {
+    val db = Database.open("data.db")
+} catch (e: DbError.NotFound) {
+    println("file not found")
+}`}
+/>
+
+## Methods
+
+Methods take `&self` (read-only access) or `&mut self` (mutable access).
+
+<CodeComparison
+  title=""
+  rust={`#[export]
+impl Account {
+    pub fn balance(&self) -> i64 {
+        self.balance
+    }
+    
+    pub fn deposit(&mut self, amount: i64) {
+        self.balance += amount;
+    }
+    
+    pub fn withdraw(
+        &mut self,
+        amount: i64
+    ) -> Result<(), AccountError> {
+        if amount > self.balance {
+            return Err(AccountError::Insufficient);
+        }
+        self.balance -= amount;
+        Ok(())
+    }
+}`}
+  swift={`public class Account {
+    public func balance() -> Int64
+    public func deposit(amount: Int64)
+    public func withdraw(amount: Int64) throws
+}
+
+let acc = Account()
+acc.deposit(amount: 100)
+print(acc.balance())
+
+do {
+    try acc.withdraw(amount: 50)
+} catch {
+    print(error)
+}`}
+  kotlin={`class Account {
+    fun balance(): Long
+    fun deposit(amount: Long)
+    @Throws(AccountError::class)
+    fun withdraw(amount: Long)
+}
+
+val acc = Account()
+acc.deposit(100)
+println(acc.balance())
+
+try {
+    acc.withdraw(50)
+} catch (e: AccountError) {
+    println(e.message)
+}`}
+/>
+
+### &self vs &mut self
+
+`&self` takes a shared reference. `&mut self` takes an exclusive reference.
+
+BoltFFI does not provide automatic locking. If your class has `&mut self` methods and you call them from multiple threads, you must handle synchronization yourself. The simplest approach: use `&self` for all methods and handle mutability internally with atomics, `Mutex`, or other synchronization primitives. See [Thread safety](#thread-safety) for more.
+
+### Static methods
+
+Methods without `self` become static methods on the class.
+
+<CodeComparison
+  title=""
+  rust={`#[export]
+impl Config {
+    pub fn default_timeout() -> u32 {
+        30
+    }
+    
+    pub fn max_connections() -> u32 {
+        100
+    }
+}`}
+  swift={`public class Config {
+    public static func defaultTimeout() -> UInt32
+    public static func maxConnections() -> UInt32
+}
+
+let t = Config.defaultTimeout()`}
+  kotlin={`class Config {
+    companion object {
+        fun defaultTimeout(): UInt
+        fun maxConnections(): UInt
+    }
+}
+
+val t = Config.defaultTimeout()`}
+/>
+
+### Async methods
+
+Mark a method `async` and it becomes an async method in the target language. BoltFFI has no built-in executor. You choose your Rust async runtime (Tokio, async-std, etc.), and the target language's async system coordinates with it automatically. See [Async](/docs/async) for more.
+
+<CodeComparison
+  title=""
+  rust={`#[export]
+impl HttpClient {
+    pub fn new() -> Self {
+        HttpClient { client: reqwest::Client::new() }
+    }
+    
+    pub async fn get(&self, url: &str) -> Result<String, HttpError> {
+        let resp = self.client.get(url).send().await?;
+        let body = resp.text().await?;
+        Ok(body)
+    }
+    
+    pub async fn post(
+        &self,
+        url: &str,
+        body: &str
+    ) -> Result<String, HttpError> {
+        let resp = self.client
+            .post(url)
+            .body(body.to_string())
+            .send()
+            .await?;
+        Ok(resp.text().await?)
+    }
+}`}
+  swift={`public class HttpClient {
+    public init()
+    public func get(url: String) async throws -> String
+    public func post(url: String, body: String) async throws -> String
+}
+
+let client = HttpClient()
+let data = try await client.get(url: "https://api.example.com")`}
+  kotlin={`class HttpClient {
+    constructor()
+    suspend fun get(url: String): String
+    suspend fun post(url: String, body: String): String
+}
+
+val client = HttpClient()
+val data = client.get("https://api.example.com")`}
+/>
+
+### Methods that take or return classes
+
+Methods can accept or return other class instances.
+
+<CodeComparison
+  title=""
+  rust={`#[export]
+impl Session {
+    pub fn new(user: &User) -> Self {
+        Session { user_id: user.id() }
+    }
+    
+    pub fn user(&self) -> User {
+        User::find(self.user_id)
+    }
+}
+
+#[export]
+impl User {
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}`}
+  swift={`public class Session {
+    public init(user: User)
+    public func user() -> User
+}
+
+let user = User(name: "alice")
+let session = Session(user: user)
+let u = session.user()`}
+  kotlin={`class Session {
+    constructor(user: User)
+    fun user(): User
+}
+
+val user = User("alice")
+val session = Session(user)
+val u = session.user()`}
+/>
+
+## Skipping methods
+
+Use `#[skip]` to exclude a method from FFI export. The method stays in Rust but isn't exposed to the target language.
+
+```rust
+#[export]
+impl MyClass {
+    pub fn exported(&self) -> i32 {
+        self.helper() * 2
+    }
+    
+    #[skip]
+    pub fn helper(&self) -> i32 {
+        42
+    }
+}
+```
+
+## Thread safety
+
+BoltFFI requires exported classes to be `Send + Sync` by default. This is a compile-time check. If your struct isn't thread-safe, compilation fails.
+
+If your struct contains types that aren't thread-safe (like `RefCell`, `Rc`, or raw mutable state), you have two options:
+
+1. Make it thread-safe using `Mutex`, `RwLock`, atomics, or other synchronization primitives.
+
+2. Opt out with `#[boltffi::export(thread_unsafe)]`. This disables the check, but you're responsible for ensuring the class is only used from a single thread.
+
+<CodeComparison
+  title=""
+  rust={`use std::sync::atomic::{AtomicI32, Ordering};
+
+pub struct SafeCounter {
+    value: AtomicI32,
+}
+
+#[export]
+impl SafeCounter {
+    pub fn new() -> Self {
+        SafeCounter {
+            value: AtomicI32::new(0)
+        }
+    }
+    
+    pub fn increment(&self) {
+        self.value.fetch_add(1, Ordering::SeqCst);
+    }
+    
+    pub fn get(&self) -> i32 {
+        self.value.load(Ordering::SeqCst)
+    }
+}`}
+  swift={`public class SafeCounter {
+    public init()
+    public func increment()
+    public func get() -> Int32
+}
+
+let counter = SafeCounter()
+DispatchQueue.concurrentPerform(iterations: 100) { _ in
+    counter.increment()
+}`}
+  kotlin={`class SafeCounter {
+    constructor()
+    fun increment()
+    fun get(): Int
+}
+
+val counter = SafeCounter()
+repeat(100) {
+    thread { counter.increment() }
+}`}
+/>
+
+### Opting out
+
+If you guarantee single-threaded access, you can disable the thread safety check:
+
+```rust
+pub struct NotThreadSafe {
+    data: RefCell<Vec<String>>,
+}
+
+#[boltffi::export(thread_unsafe)]
+impl NotThreadSafe {
+    // ...
+}
+```
+
+This compiles, but calling methods from multiple threads is undefined behavior.
+
+The key insight: `&self` methods don't lock at the FFI boundary. The Rust code runs concurrently. You're responsible for making the Rust implementation thread-safe.
+
+## Memory management
+
+The Rust struct lives in Rust's heap. The target language holds a reference to it. When the target language's object is deallocated (garbage collected, reference count hits zero, etc.), BoltFFI drops the Rust struct.
+
+You don't need to manually free anything. But be aware: the Rust object stays alive as long as the target language holds a reference. If you store a class instance in a long-lived collection, the Rust memory stays allocated.
+
+## When to use classes vs data structs
+
+Use `#[data]` structs when:
+- The data is small and copied frequently
+- There's no behavior, just fields
+- You're passing data in and out of functions
+
+Use `#[export]` classes when:
+- The object has internal state that changes over time
+- The object manages resources (files, connections, memory)
+- You want to hide implementation details behind methods
+- The object is expensive to copy
+
+A `Point { x, y }` is data. A `DatabaseConnection` is a class.

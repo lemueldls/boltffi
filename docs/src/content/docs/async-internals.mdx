@@ -1,0 +1,86 @@
+# Async Internals
+
+This page explains how BoltFFI bridges Rust futures to target language async systems. You don't need to understand this to use async functions, but it helps when debugging or optimizing async code.
+
+## The Polling Model
+
+BoltFFI wraps each Rust future in a `RustFuture<T>` that exposes a C-compatible interface. The generated bindings use this interface to drive the future to completion. When you call an async function, the bindings create a future handle, poll it until ready, extract the result, and free the handle. The target language's async runtime controls when polling happens, and BoltFFI uses continuation callbacks to signal when the future needs attention.
+
+<svg viewBox="0 0 700 540" className="w-full my-8" style={{ maxWidth: '700px' }}>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#6b7280" />
+    </marker>
+    <marker id="arrow-dashed" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#6b7280" />
+    </marker>
+  </defs>
+  
+  <rect x="40" y="20" width="120" height="36" rx="4" fill="#1e1e2e" stroke="#89b4fa" strokeWidth="1.5" />
+  <text x="100" y="43" textAnchor="middle" fill="#cdd6f4" fontSize="12" fontFamily="system-ui">User Code</text>
+  
+  <rect x="280" y="20" width="140" height="36" rx="4" fill="#1e1e2e" stroke="#a6e3a1" strokeWidth="1.5" />
+  <text x="350" y="43" textAnchor="middle" fill="#cdd6f4" fontSize="12" fontFamily="system-ui">Generated Bindings</text>
+  
+  <rect x="530" y="20" width="130" height="36" rx="4" fill="#1e1e2e" stroke="#fab387" strokeWidth="1.5" />
+  <text x="595" y="43" textAnchor="middle" fill="#cdd6f4" fontSize="12" fontFamily="system-ui">Rust Scaffolding</text>
+  
+  <line x1="100" y1="56" x2="100" y2="500" stroke="#89b4fa" strokeWidth="1" strokeDasharray="4,4" />
+  <line x1="350" y1="56" x2="350" y2="500" stroke="#a6e3a1" strokeWidth="1" strokeDasharray="4,4" />
+  <line x1="595" y1="56" x2="595" y2="500" stroke="#fab387" strokeWidth="1" strokeDasharray="4,4" />
+  
+  <line x1="100" y1="90" x2="342" y2="90" stroke="#6b7280" strokeWidth="1.5" markerEnd="url(#arrow)" />
+  <text x="221" y="82" textAnchor="middle" fill="#cdd6f4" fontSize="11" fontFamily="system-ui">call async function</text>
+  
+  <line x1="350" y1="120" x2="587" y2="120" stroke="#6b7280" strokeWidth="1.5" markerEnd="url(#arrow)" />
+  <text x="469" y="112" textAnchor="middle" fill="#cdd6f4" fontSize="11" fontFamily="system-ui">call scaffolding function</text>
+  
+  <line x1="595" y1="150" x2="358" y2="150" stroke="#6b7280" strokeWidth="1.5" strokeDasharray="6,3" markerEnd="url(#arrow-dashed)" />
+  <text x="469" y="142" textAnchor="middle" fill="#cdd6f4" fontSize="11" fontFamily="system-ui">return RustFuture handle</text>
+  
+  <rect x="315" y="180" width="315" height="150" rx="4" fill="transparent" stroke="#89b4fa" strokeWidth="1.5" strokeDasharray="4,4" />
+  <text x="330" y="198" fill="#89b4fa" fontSize="11" fontWeight="500" fontFamily="system-ui">loop</text>
+  <text x="480" y="198" fill="#6b7280" fontSize="10" fontFamily="system-ui">[until RustFuture is ready]</text>
+  
+  <line x1="350" y1="225" x2="587" y2="225" stroke="#6b7280" strokeWidth="1.5" markerEnd="url(#arrow)" />
+  <text x="469" y="217" textAnchor="middle" fill="#cdd6f4" fontSize="11" fontFamily="system-ui">call RustFuture poll fn</text>
+  
+  <line x1="595" y1="275" x2="358" y2="275" stroke="#6b7280" strokeWidth="1.5" markerEnd="url(#arrow)" />
+  <text x="469" y="267" textAnchor="middle" fill="#cdd6f4" fontSize="11" fontFamily="system-ui">call future callback</text>
+  
+  <line x1="350" y1="360" x2="587" y2="360" stroke="#6b7280" strokeWidth="1.5" markerEnd="url(#arrow)" />
+  <text x="469" y="352" textAnchor="middle" fill="#cdd6f4" fontSize="11" fontFamily="system-ui">call RustFuture complete fn</text>
+  
+  <line x1="595" y1="390" x2="358" y2="390" stroke="#6b7280" strokeWidth="1.5" strokeDasharray="6,3" markerEnd="url(#arrow-dashed)" />
+  <text x="469" y="382" textAnchor="middle" fill="#cdd6f4" fontSize="11" fontFamily="system-ui">return result</text>
+  
+  <line x1="350" y1="420" x2="587" y2="420" stroke="#6b7280" strokeWidth="1.5" markerEnd="url(#arrow)" />
+  <text x="469" y="412" textAnchor="middle" fill="#cdd6f4" fontSize="11" fontFamily="system-ui">call RustFuture free fn</text>
+  
+  <line x1="350" y1="465" x2="108" y2="465" stroke="#6b7280" strokeWidth="1.5" strokeDasharray="6,3" markerEnd="url(#arrow-dashed)" />
+  <text x="221" y="457" textAnchor="middle" fill="#cdd6f4" fontSize="11" fontFamily="system-ui">return from async function</text>
+</svg>
+
+## Generated FFI Functions
+
+For each async function, BoltFFI generates five FFI functions:
+
+- **entry** - Creates the `RustFuture` and returns a handle
+- **poll** - Polls the future with a continuation callback
+- **complete** - Extracts the result once the future is ready
+- **cancel** - Marks the future as cancelled
+- **free** - Deallocates the future
+
+The bindings call these in sequence: entry to create, poll in a loop until ready, complete to get the result, and free to clean up.
+
+## Continuation Callbacks
+
+When the bindings call poll, they pass a continuation callback and a handle. If the future is not ready, BoltFFI stores this callback. When the future wakes (I/O completes, timer fires, etc.), BoltFFI invokes the stored callback, which tells the bindings to poll again. This avoids busy-waiting and lets the target language's async runtime manage scheduling.
+
+## Lock-Free Implementation
+
+The polling mechanism uses atomic operations for state management. A scheduler tracks whether a continuation is stored, whether the future has been waked, and whether it's been cancelled. State transitions use compare-and-swap operations, so multiple threads can interact with the future without locks.
+
+## Cancellation
+
+When the target language cancels an async operation, the bindings call the cancel function. This marks the future as cancelled and immediately invokes any stored continuation with a ready signal. The next call to complete will return a cancellation status. The Rust future itself is not forcibly aborted - cancellation is cooperative.

@@ -1,0 +1,13 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "astro",
+  "ignoreCommand": "git diff HEAD^ HEAD --quiet -- .",
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/docs/overview",
+      "permanent": true
+    }
+  ]
+}

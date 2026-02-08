@@ -1,0 +1,254 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 14% 10%;
+    --foreground: 210 20% 90%;
+
+    --card: 220 14% 13%;
+    --card-foreground: 210 20% 90%;
+
+    --popover: 220 14% 13%;
+    --popover-foreground: 210 20% 90%;
+
+    --primary: 8 72% 53%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 16%;
+    --secondary-foreground: 210 20% 85%;
+
+    --muted: 220 14% 18%;
+    --muted-foreground: 215 12% 55%;
+
+    --accent: 220 14% 20%;
+    --accent-foreground: 210 20% 90%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 14% 20%;
+    --input: 220 14% 20%;
+    --ring: 8 72% 53%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 220 14% 8%;
+    --sidebar-foreground: 210 20% 75%;
+    --sidebar-primary: 8 72% 53%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 14%;
+    --sidebar-accent-foreground: 210 20% 90%;
+    --sidebar-border: 220 14% 16%;
+    --sidebar-ring: 8 72% 53%;
+
+    --code-bg: 220 14% 7%;
+    --code-border: 220 14% 18%;
+    --code-keyword: 8 72% 60%;
+    --code-string: 142 50% 55%;
+    --code-comment: 215 12% 40%;
+    --code-function: 200 70% 65%;
+    --code-type: 38 80% 65%;
+
+    --astro-code-foreground: hsl(210 20% 90%);
+    --astro-code-background: hsl(220 14% 7%);
+    --astro-code-token-constant: hsl(38 80% 65%);
+    --astro-code-token-string: hsl(142 50% 55%);
+    --astro-code-token-comment: hsl(215 12% 40%);
+    --astro-code-token-keyword: hsl(8 72% 60%);
+    --astro-code-token-parameter: hsl(210 20% 90%);
+    --astro-code-token-function: hsl(200 70% 65%);
+    --astro-code-token-string-expression: hsl(142 50% 55%);
+    --astro-code-token-punctuation: hsl(215 12% 55%);
+    --astro-code-token-link: hsl(200 70% 65%);
+  }
+}
+
+@layer base {
+  *:not(code) {
+    @apply border-border;
+  }
+
+  html {
+    scroll-padding-top: 5rem;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    scroll-margin-top: 5rem;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  code {
+    border: none !important;
+    border-width: 0 !important;
+    outline: none !important;
+    box-shadow: none !important;
+  }
+
+  code::before,
+  code::after {
+    content: none !important;
+  }
+
+  :not(pre) > code {
+    background: hsl(var(--muted) / 0.5);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+  }
+
+  pre code {
+    background: transparent !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  pre {
+    background: hsl(var(--code-bg)) !important;
+    border: 1px solid hsl(var(--code-border)) !important;
+    border-radius: 0.5rem !important;
+    margin: 1.5rem 0 !important;
+    padding: 1rem !important;
+    line-height: 1.5 !important;
+    font-size: 13px !important;
+    overflow-x: auto !important;
+  }
+
+  pre * {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  pre[class*="language-"] {
+    background: hsl(var(--code-bg)) !important;
+    padding: 1rem !important;
+    border-radius: 0.5rem !important;
+    border: 1px solid hsl(var(--code-border)) !important;
+    line-height: 1.6 !important;
+    font-size: 13px !important;
+    overflow-x: auto !important;
+    margin: 1.5rem 0 !important;
+  }
+
+  pre[class*="language-"] code {
+    background: transparent !important;
+    padding: 0 !important;
+    border: none !important;
+  }
+}
+
+@layer utilities {
+  .code-block {
+    @apply bg-[hsl(var(--code-bg))] border border-[hsl(var(--code-border))] rounded-lg p-4 overflow-x-auto;
+  }
+
+  .glow-line {
+    @apply h-px w-full;
+    background: linear-gradient(90deg, transparent, hsl(var(--primary) / 0.4), transparent);
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted)) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted));
+    border-radius: 3px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+}
+
+/* Prism syntax highlighting — uses design tokens */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: hsl(var(--code-comment));
+  font-style: italic;
+}
+
+.token.punctuation {
+  color: hsl(215 12% 55%);
+}
+
+.token.keyword,
+.token.tag,
+.token.operator,
+.token.builtin {
+  color: hsl(var(--code-keyword));
+}
+
+.token.string,
+.token.char,
+.token.attr-value,
+.token.regex {
+  color: hsl(var(--code-string));
+}
+
+.token.function,
+.token.method {
+  color: hsl(var(--code-function));
+}
+
+.token.class-name,
+.token.type-definition,
+.token.constant,
+.token.symbol {
+  color: hsl(var(--code-type));
+}
+
+.token.number,
+.token.boolean {
+  color: hsl(30 80% 65%);
+}
+
+.token.attr-name {
+  color: hsl(var(--code-type));
+}
+
+.token.macro .token.punctuation,
+.token.attribute .token.punctuation {
+  color: hsl(var(--code-keyword));
+}
+
+.token.namespace,
+.token.module {
+  color: hsl(var(--code-type));
+  opacity: 0.85;
+}
+
+.token.property {
+  color: hsl(var(--code-function));
+}
+
+.token.annotation {
+  color: hsl(var(--code-keyword));
+}
+
+.token.decorator {
+  color: hsl(var(--code-keyword));
+}

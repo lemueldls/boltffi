@@ -1,0 +1,407 @@
+import CodeComparison from "../../components/CodeComparisonWrapper.astro";
+import TypeTable from "../../components/TypeTable";
+
+# Types
+
+When you design a Rust API for BoltFFI, you need to know what happens to your types on the other side. This page shows the mapping for each target language.
+
+## Quick Reference
+
+<TypeTable 
+  title="Integers"
+  mappings={[
+    { rust: "i8", swift: "Int8", kotlin: "Byte" },
+    { rust: "i16", swift: "Int16", kotlin: "Short" },
+    { rust: "i32", swift: "Int32", kotlin: "Int" },
+    { rust: "i64", swift: "Int64", kotlin: "Long" },
+    { rust: "u8", swift: "UInt8", kotlin: "UByte" },
+    { rust: "u16", swift: "UInt16", kotlin: "UShort" },
+    { rust: "u32", swift: "UInt32", kotlin: "UInt" },
+    { rust: "u64", swift: "UInt64", kotlin: "ULong" },
+  ]}
+/>
+
+<TypeTable 
+  title="Floats & Primitives"
+  mappings={[
+    { rust: "f32", swift: "Float", kotlin: "Float" },
+    { rust: "f64", swift: "Double", kotlin: "Double" },
+    { rust: "bool", swift: "Bool", kotlin: "Boolean" },
+    { rust: "String", swift: "String", kotlin: "String" },
+  ]}
+/>
+
+<TypeTable 
+  title="Collections & Wrappers"
+  mappings={[
+    { rust: "Vec<T>", swift: "[T]", kotlin: "List<T>" },
+    { rust: "Option<T>", swift: "T?", kotlin: "T?" },
+    { rust: "Result<T, E>", swift: "throws", kotlin: "throws" },
+  ]}
+/>
+
+## Primitives
+
+Primitives are the foundation of BoltFFI's performance. When you pass an `i32` or `f64` across the FFI boundary, the bytes copy directly. There's no serialization, no intermediate buffer, no allocation. The value moves from one side to the other as raw memory.
+
+This matters because every FFI call has overhead. If you're making thousands of calls per second, or processing real-time data, that overhead adds up. By keeping your hot-path types primitive, you minimize the cost of each crossing.
+
+Choose your integer size deliberately. `i32` handles most application logic. `i64` is necessary for timestamps, file sizes, or any value that might exceed 2 billion. `u8` is the right choice for byte buffers, binary protocols, or any raw data manipulation. Using the smallest size that fits your data isn't premature optimization here; it directly affects how much memory moves across the boundary.
+
+<CodeComparison
+  title="Integer sizes"
+  rust={`#[export]
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[export]
+pub fn timestamp_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+#[export]
+pub fn byte_at(
+    data: &[u8],
+    index: usize
+) -> u8 {
+    data[index]
+}`}
+  swift={`func add(a: Int32, b: Int32) -> Int32
+func timestampMs() -> Int64
+func byteAt(data: [UInt8], index: UInt) -> UInt8
+
+let sum = add(a: 5, b: 3)
+let ts = timestampMs()
+let b = byteAt(data: [0x48, 0x69], index: 0)`}
+  kotlin={`fun add(a: Int, b: Int): Int
+fun timestampMs(): Long
+fun byteAt(data: ByteArray, index: ULong): UByte
+
+val sum = add(5, 3)
+val ts = timestampMs()
+val b = byteAt(byteArrayOf(0x48, 0x69), 0uL)`}
+/>
+
+For floating point, `f64` is the default choice. It matches what most languages use for their default float type, and the extra precision rarely hurts. Use `f32` when you're interfacing with graphics APIs, audio processing, or other domains where single precision is the standard.
+
+<CodeComparison
+  title="Floating point"
+  rust={`#[export]
+pub fn circle_area(radius: f64) -> f64 {
+    std::f64::consts::PI * radius * radius
+}
+
+#[export]
+pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}`}
+  swift={`func circleArea(radius: Double) -> Double
+func lerp(a: Float, b: Float, t: Float) -> Float
+
+let area = circleArea(radius: 5.0)
+let mid = lerp(a: 0.0, b: 10.0, t: 0.5)`}
+  kotlin={`fun circleArea(radius: Double): Double
+fun lerp(a: Float, b: Float, t: Float): Float
+
+val area = circleArea(5.0)
+val mid = lerp(0.0f, 10.0f, 0.5f)`}
+/>
+
+## Strings
+
+Strings are where the FFI cost becomes visible. Unlike primitives, strings require memory allocation and copying. Rust's string data lives in Rust's heap; the target language's string lives in its own heap. Crossing the boundary means allocating new memory and copying bytes.
+
+Both `&str` and `String` on the Rust side become owned strings in the target language. There's no way to pass a reference that the target language can use without copying, because Rust's memory model doesn't extend across the FFI boundary. The target language needs its own copy that it can manage with its own garbage collector or reference counting.
+
+The practical rule: use `&str` for parameters (you're borrowing the caller's data) and `String` for return values (you're transferring ownership). This matches idiomatic Rust and works cleanly with BoltFFI's generated code.
+
+<CodeComparison
+  title="String parameters and returns"
+  rust={`#[export]
+pub fn greet(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+
+#[export]
+pub fn repeat(s: &str, n: usize) -> String {
+    s.repeat(n)
+}
+
+#[export]
+pub fn first_word(s: &str) -> String {
+    s.split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string()
+}`}
+  swift={`func greet(name: String) -> String
+func repeat(s: String, n: UInt) -> String
+func firstWord(s: String) -> String
+
+let msg = greet(name: "World")
+let ha = repeat(s: "ha", n: 3)  // "hahaha"
+let word = firstWord(s: "hello world")`}
+  kotlin={`fun greet(name: String): String
+fun repeat(s: String, n: ULong): String
+fun firstWord(s: String): String
+
+val msg = greet("World")
+val ha = repeat("ha", 3uL)  // "hahaha"
+val word = firstWord("hello world")`}
+/>
+
+If string handling is your bottleneck, rethink the API. Instead of calling a function once per string in a loop, pass a batch of strings and process them all in one call. Or do the string-heavy work entirely on the Rust side and only return the final result.
+
+## Records
+
+Records are value types: structs and enums marked with `#[data]`. When a record crosses the boundary, it gets copied. The target language receives its own copy of the data.
+
+The cost depends on the contents: primitive-only records are fast, records with strings or collections require allocations.
+
+```rust
+#[data]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[data]
+pub enum Status {
+    Pending,
+    Active,
+    Done,
+}
+```
+
+See [Records](/docs/records) for nested structs, default values, enums with data, and performance characteristics.
+
+## Classes
+
+Classes are reference types. The object lives in Rust, and the target language holds a handle to it. Use classes for stateful objects, resources, or anything with methods.
+
+```rust
+pub struct Counter { value: i32 }
+
+#[export]
+impl Counter {
+    pub fn new() -> Self { Counter { value: 0 } }
+    pub fn increment(&mut self) { self.value += 1; }
+    pub fn get(&self) -> i32 { self.value }
+}
+```
+
+See [Classes](/docs/classes) for constructors, methods, thread safety, and memory management.
+
+## Option
+
+`Option<T>` in Rust becomes a nullable type in the target language. `None` becomes `null` or `nil` on the other side.
+
+<CodeComparison
+  title=""
+  rust={`#[export]
+pub fn find_user(id: u64) -> Option<String> {
+    if id == 42 {
+        Some("alice".to_string())
+    } else {
+        None
+    }
+}
+
+#[export]
+pub fn parse_int(s: &str) -> Option<i32> {
+    s.parse().ok()
+}`}
+  swift={`func findUser(id: UInt64) -> String?
+func parseInt(s: String) -> Int32?
+
+let user = findUser(id: 42)  // Optional("alice")
+let num = parseInt(s: "123") // Optional(123)
+let bad = parseInt(s: "abc") // nil`}
+  kotlin={`fun findUser(id: ULong): String?
+fun parseInt(s: String): Int?
+
+val user = findUser(42uL)  // "alice"
+val num = parseInt("123")  // 123
+val bad = parseInt("abc")  // null`}
+/>
+
+## Result and errors
+
+`Result<T, E>` becomes a throwing function. The `Ok` value is returned normally; the `Err` value becomes a thrown exception. The error type must be marked with `#[error]`.
+
+<CodeComparison
+  title=""
+  rust={`#[error]
+pub enum ParseError {
+    Empty,
+    InvalidFormat,
+    OutOfRange,
+}
+
+#[export]
+pub fn parse_port(s: &str) -> Result<u16, ParseError> {
+    if s.is_empty() {
+        return Err(ParseError::Empty);
+    }
+    let n: i32 = s.parse()
+        .map_err(|_| ParseError::InvalidFormat)?;
+    if n < 0 || n > 65535 {
+        return Err(ParseError::OutOfRange);
+    }
+    Ok(n as u16)
+}`}
+  swift={`public enum ParseError: Error {
+    case empty
+    case invalidFormat
+    case outOfRange
+}
+
+func parsePort(s: String) throws -> UInt16
+
+do {
+    let port = try parsePort(s: "8080")
+} catch ParseError.empty {
+    print("empty input")
+} catch {
+    print("other error")
+}`}
+  kotlin={`sealed class ParseError : Exception() {
+    object Empty : ParseError()
+    object InvalidFormat : ParseError()
+    object OutOfRange : ParseError()
+}
+
+@Throws(ParseError::class)
+fun parsePort(s: String): UShort
+
+try {
+    val port = parsePort("8080")
+} catch (e: ParseError.Empty) {
+    println("empty input")
+} catch (e: ParseError) {
+    println("other error")
+}`}
+/>
+
+## Collections
+
+Collections let you pass multiple values in a single call. `Vec<T>` in Rust becomes a native array or list in the target language. Slices (`&[T]`) work the same way for input parameters.
+
+The cost scales with the number of elements. A `Vec<i32>` with 1000 elements moves 1000 integers across the boundary. A `Vec<User>` with 1000 users moves 1000 structs, each with their own strings and fields. For large collections of complex types, this can become the dominant cost in your FFI call.
+
+If performance matters, prefer collections of primitives over collections of complex types.
+
+### Basic collections
+
+<CodeComparison
+  title=""
+  rust={`#[export]
+pub fn sum(values: &[i32]) -> i32 {
+    values.iter().sum()
+}
+
+#[export]
+pub fn range(start: i32, end: i32) -> Vec<i32> {
+    (start..end).collect()
+}
+
+#[export]
+pub fn filter_positive(
+    values: &[i32]
+) -> Vec<i32> {
+    values.iter()
+        .copied()
+        .filter(|&x| x > 0)
+        .collect()
+}`}
+  swift={`func sum(values: [Int32]) -> Int32
+func range(start: Int32, end: Int32) -> [Int32]
+func filterPositive(values: [Int32]) -> [Int32]
+
+let total = sum(values: [1, 2, 3, 4, 5])
+let nums = range(start: 0, end: 10)
+let pos = filterPositive(values: [-1, 2, -3, 4])`}
+  kotlin={`fun sum(values: IntArray): Int
+fun range(start: Int, end: Int): IntArray
+fun filterPositive(values: IntArray): IntArray
+
+val total = sum(intArrayOf(1, 2, 3, 4, 5))
+val nums = range(0, 10)
+val pos = filterPositive(intArrayOf(-1, 2, -3, 4))`}
+/>
+
+### Nested collections
+
+`Vec<Vec<T>>` and deeper nesting are supported. The deeper you nest, the more work it takes to move across the boundary.
+
+<CodeComparison
+  title=""
+  rust={`#[export]
+pub fn transpose(
+    matrix: &[Vec<i32>]
+) -> Vec<Vec<i32>> {
+    if matrix.is_empty() {
+        return vec![];
+    }
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    (0..cols)
+        .map(|c| {
+            (0..rows)
+                .map(|r| matrix[r][c])
+                .collect()
+        })
+        .collect()
+}`}
+  swift={`func transpose(matrix: [[Int32]]) -> [[Int32]]
+
+let m = [[1, 2, 3], [4, 5, 6]]
+let t = transpose(matrix: m)
+// [[1, 4], [2, 5], [3, 6]]`}
+  kotlin={`fun transpose(matrix: List<IntArray>): List<IntArray>
+
+val m = listOf(intArrayOf(1, 2, 3), intArrayOf(4, 5, 6))
+val t = transpose(m)
+// [[1, 4], [2, 5], [3, 6]]`}
+/>
+
+## Callbacks
+
+Pass functions from the target language into Rust. Use `impl Fn`, `impl FnMut`, or `impl FnOnce` for simple callbacks.
+
+```rust
+#[export]
+pub fn foreach_range(start: i32, end: i32, mut cb: impl FnMut(i32)) {
+    (start..end).for_each(|i| cb(i));
+}
+```
+
+For callbacks with multiple methods or that need to be stored, use callback traits with `#[export]`.
+
+```rust
+#[export]
+pub trait Logger {
+    fn log(&self, message: &str);
+    fn flush(&self);
+}
+```
+
+See [Callbacks](/docs/callbacks) for closures, callback traits, and async callbacks.
+
+## What's not supported
+
+Some Rust types can't cross the FFI boundary. This isn't a limitation of BoltFFI specifically; these types don't have meaningful representations in other languages, or would require runtime support that doesn't exist.
+
+- Generic structs like `struct Wrapper<T>` require monomorphization. Define concrete types like `struct StringWrapper { value: String }` instead.
+
+- Trait objects like `dyn Trait` rely on Rust's vtable mechanism. Use an enum with variants for each concrete type you need to support.
+
+- Raw pointers are inherently unsafe. Handle pointer manipulation inside Rust and expose safe types at the boundary.
+
+- Non-static lifetimes like `&'a str` can't be enforced across FFI. Return owned data (`String`) instead of borrowed references.
+
+- HashSet doesn't have a universal representation. Convert to `Vec<T>` instead.

@@ -1,0 +1,400 @@
+# Configuration
+
+BoltFFI reads its configuration from a file called `boltffi.toml` in your project's root directory. This file tells BoltFFI how to name your modules, where to put generated files, and how to structure the output packages. Run `boltffi init` to create one with sensible defaults, then customize it for your needs.
+
+## Package Identity
+
+Every `boltffi.toml` starts with a `[package]` section that identifies your library:
+
+```toml
+[package]
+name = "mylib"
+```
+
+The `name` field is used to derive default names throughout the pipeline. For example, if your package name is `mylib`, BoltFFI generates a Swift module called `MyLib` and a Kotlin class called `MyLib`. All output paths also use this name as a base.
+
+If your Rust crate has a different name than what you want to expose (perhaps your crate is `my_lib` with underscores but you want `mylib`), specify both:
+
+```toml
+[package]
+name = "mylib"
+crate = "my_lib"
+```
+
+BoltFFI scans and builds the crate specified by `crate`, but uses `name` for all generated module names and paths.
+
+## Apple Configuration
+
+The `[apple]` section controls iOS, iOS Simulator, and optionally macOS builds.
+
+### Output Directory
+
+All Apple artifacts go into a single root directory. By default this is `dist/apple`, but you can change it:
+
+```toml
+[apple]
+output = "build/ios"
+```
+
+After running `boltffi pack apple`, this directory contains your xcframework, Package.swift, and generated Swift sources.
+
+### Deployment Target
+
+The deployment target sets the minimum iOS version your library supports. This affects which APIs are available and which devices can run your code:
+
+```toml
+[apple]
+deployment_target = "15.0"
+```
+
+The default is `16.0`. Lower this if you need to support older devices, but be aware that some Swift concurrency features require iOS 13+ and full async/await requires iOS 15+.
+
+### Including macOS
+
+By default, BoltFFI only builds for iOS and iOS Simulator. If your library also needs to run on Mac, enable macOS builds:
+
+```toml
+[apple]
+include_macos = true
+```
+
+This adds macOS slices to your xcframework, making it usable in Mac Catalyst apps and native macOS applications.
+
+### Swift Module Name
+
+The generated Swift code is organized into a module. By default, BoltFFI converts your package name to PascalCase (`mylib` becomes `MyLib`). Override this if you want a different name:
+
+```toml
+[apple.swift]
+module_name = "MyLibrary"
+```
+
+This name appears in your Swift import statements: `import MyLibrary`.
+
+### SwiftPM Layouts
+
+The layout determines how BoltFFI structures the SwiftPM package. This is the most important configuration choice for Apple because it affects how you integrate the library into your Xcode project.
+
+#### ffi-only Layout
+
+This is the default and simplest option. BoltFFI creates a self-contained SwiftPM package with everything inside:
+
+```toml
+[apple.spm]
+layout = "ffi-only"
+```
+
+**When to use:** You want a drop-in package that works immediately. No additional setup required.
+
+**Output structure:**
+```
+dist/apple/
+├── MyLib.xcframework/
+│   ├── ios-arm64/
+│   │   ├── Headers/mylib.h
+│   │   └── libmylib.a
+│   └── ios-arm64_x86_64-simulator/
+│       ├── Headers/mylib.h
+│       └── libmylib.a
+├── Package.swift
+└── Sources/
+    └── BoltFFI/
+        └── MyLibBoltFFI.swift
+```
+
+**Generated Package.swift:**
+```swift
+// swift-tools-version: 5.9
+import PackageDescription
+
+let package = Package(
+    name: "MyLib",
+    platforms: [.iOS(.v16)],
+    products: [
+        .library(name: "MyLib", targets: ["MyLib"])
+    ],
+    targets: [
+        .binaryTarget(
+            name: "MyLibFFI",
+            path: "MyLib.xcframework"
+        ),
+        .target(
+            name: "MyLib",
+            dependencies: ["MyLibFFI"],
+            path: "Sources/BoltFFI"
+        )
+    ]
+)
+```
+
+To use this package in Xcode, add it as a local package dependency pointing to `dist/apple`, then `import MyLib` in your Swift code.
+
+#### bundled Layout
+
+Use this when you have an existing Swift package and want to add BoltFFI-generated bindings to it. BoltFFI places the generated Swift inside your existing source directory:
+
+```toml
+[apple.spm]
+layout = "bundled"
+wrapper_sources = "Sources/MyWrapper"
+```
+
+**When to use:** You're adding Rust functionality to an existing Swift package, or you want to write additional Swift wrapper code alongside the generated bindings.
+
+**Output structure:**
+```
+dist/apple/
+├── MyLib.xcframework/
+├── Package.swift
+└── Sources/
+    └── MyWrapper/
+        ├── YourExistingCode.swift
+        └── BoltFFI/
+            └── MyLibBoltFFI.swift
+```
+
+The `wrapper_sources` path tells BoltFFI where your existing Swift target lives. Generated bindings go into a `Riff` subdirectory inside that path. Your Package.swift should already have a target pointing at `Sources/MyWrapper`.
+
+#### split Layout
+
+Use this when you want maximum control. BoltFFI creates a binary-only package containing just the xcframework, and writes the generated Swift to a separate location:
+
+```toml
+[apple.spm]
+layout = "split"
+
+[apple.swift]
+output = "Sources/Generated"
+```
+
+**When to use:** You maintain your own SwiftPM package structure and just need the xcframework and generated code as raw ingredients.
+
+**Output structure:**
+```
+dist/apple/
+├── MyLib.xcframework/
+└── Package.swift          # binary target only
+
+Sources/
+└── Generated/
+    └── BoltFFI/
+        └── MyLibBoltFFI.swift
+```
+
+**Generated Package.swift:**
+```swift
+// swift-tools-version: 5.9
+import PackageDescription
+
+let package = Package(
+    name: "MyLibFFI",
+    platforms: [.iOS(.v16)],
+    products: [
+        .library(name: "MyLibFFI", targets: ["MyLibFFI"])
+    ],
+    targets: [
+        .binaryTarget(
+            name: "MyLibFFI",
+            path: "MyLib.xcframework"
+        )
+    ]
+)
+```
+
+You then create your own package that depends on `MyLibFFI` and includes the generated Swift from `Sources/Generated`.
+
+### Remote Distribution
+
+By default, Package.swift references the xcframework via a local file path. This works for development and when you bundle the package directly in your app repository. For distributing your library to others, switch to remote distribution:
+
+```toml
+[apple.spm]
+distribution = "remote"
+repo_url = "https://github.com/yourname/mylib/releases/download"
+```
+
+Then package with a version:
+
+```bash
+boltffi pack apple --release --version 1.0.0
+```
+
+**Generated Package.swift:**
+```swift
+.binaryTarget(
+    name: "MyLibFFI",
+    url: "https://github.com/yourname/mylib/releases/download/1.0.0/MyLib.xcframework.zip",
+    checksum: "abc123..."
+)
+```
+
+Upload `MyLib.xcframework.zip` to your GitHub release. Consumers can then add your package by URL without needing the source.
+
+### Type Mappings
+
+If you use custom types that should map to native Swift types, configure type mappings. For example, if your Rust code uses a `Uuid` type that should become Swift's `UUID`:
+
+```toml
+[apple.swift.type_mappings]
+Uuid = { type = "UUID", conversion = "uuid_string" }
+```
+
+The generated Swift uses `UUID` directly instead of a wrapper type. BoltFFI handles the string conversion automatically at the FFI boundary.
+
+Available conversions:
+- `uuid_string`: Converts between String and UUID
+- `url_string`: Converts between String and URL
+
+## Android Configuration
+
+The `[android]` section controls builds for all Android ABIs.
+
+### Output Directory
+
+All Android artifacts go into a single root directory:
+
+```toml
+[android]
+output = "build/android"
+```
+
+The default is `dist/android`. After running `boltffi pack android`, this directory contains your jniLibs and Kotlin sources.
+
+### Minimum SDK
+
+Set the minimum Android API level:
+
+```toml
+[android]
+min_sdk = 21
+```
+
+The default is `24` (Android 7.0). Lower values support more devices but may limit available APIs.
+
+### Kotlin Package
+
+Generated Kotlin code needs a package name. By default, BoltFFI uses `com.example.{name}`:
+
+```toml
+[android.kotlin]
+package = "com.mycompany.mylib"
+```
+
+This determines the directory structure of the generated files and the package declaration in the Kotlin source.
+
+### API Style
+
+Choose how exported functions appear in Kotlin:
+
+```toml
+[android.kotlin]
+api_style = "top_level"
+```
+
+**top_level** (default): Functions are top-level Kotlin functions. Import the package and call directly:
+
+```kotlin
+import com.mycompany.mylib.*
+
+val result = processData(input)
+```
+
+**module_object**: Functions are methods on an object. Useful if you want to namespace everything:
+
+```toml
+[android.kotlin]
+api_style = "module_object"
+module_name = "MyLib"
+```
+
+```kotlin
+import com.mycompany.mylib.MyLib
+
+val result = MyLib.processData(input)
+```
+
+### Factory Style
+
+When your Rust code has factory functions (functions that create class instances), choose how they appear in Kotlin:
+
+```toml
+[android.kotlin]
+factory_style = "constructors"
+```
+
+**constructors** (default): Factory functions become Kotlin constructors:
+
+```kotlin
+val client = HttpClient(baseUrl)
+```
+
+**companion_methods**: Factory functions become companion object methods:
+
+```kotlin
+val client = HttpClient.create(baseUrl)
+```
+
+### Output Structure
+
+After running `boltffi pack android`, you get:
+
+```
+dist/android/
+├── jniLibs/
+│   ├── arm64-v8a/
+│   │   └── libmylib.so
+│   ├── armeabi-v7a/
+│   │   └── libmylib.so
+│   ├── x86/
+│   │   └── libmylib.so
+│   └── x86_64/
+│       └── libmylib.so
+└── kotlin/
+    ├── com/mycompany/mylib/
+    │   └── MyLib.kt
+    └── jni/
+        └── jni_glue.c
+```
+
+Copy `jniLibs` to your Android project's `src/main/` directory. Copy the Kotlin sources to your source set. The native libraries are loaded automatically when you first use the Kotlin bindings.
+
+## Complete Example
+
+Here's a full configuration for a library that targets both platforms:
+
+```toml
+[package]
+name = "mylib"
+
+[apple]
+output = "dist/apple"
+deployment_target = "15.0"
+include_macos = true
+
+[apple.swift]
+module_name = "MyLib"
+
+[apple.swift.type_mappings]
+Uuid = { type = "UUID", conversion = "uuid_string" }
+
+[apple.spm]
+layout = "ffi-only"
+distribution = "local"
+
+[android]
+output = "dist/android"
+min_sdk = 24
+
+[android.kotlin]
+package = "com.mycompany.mylib"
+api_style = "top_level"
+factory_style = "constructors"
+```
+
+This configuration:
+- Names the library `mylib`, generating `MyLib` modules
+- Builds for iOS 15+, iOS Simulator, and macOS
+- Uses the simple ffi-only SwiftPM layout
+- Maps `Uuid` to native Swift `UUID`
+- Builds for Android API 24+
+- Generates top-level Kotlin functions with constructor-style factories

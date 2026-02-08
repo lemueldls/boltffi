@@ -1,0 +1,51 @@
+# Installation
+
+## Prerequisites
+
+- **Rust 1.70+** - Install from [rustup.rs](https://rustup.rs)
+- **For iOS**: Xcode 15+ with command line tools
+- **For Android**: Android Studio with NDK installed
+
+## Install the CLI
+
+```bash
+cargo install boltffi_cli
+```
+
+## Add to your project
+
+Add BoltFFI dependencies to your `Cargo.toml`:
+
+```toml
+[package]
+name = "mylib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+boltffi = "0.1"
+
+[build-dependencies]
+boltffi = "0.1"
+```
+
+## Create build.rs
+
+Create a `build.rs` file in your project root:
+
+```rust
+fn main() {
+    boltffi::build::generate();
+}
+```
+
+## Verify installation
+
+```bash
+boltffi check
+```
+
+This verifies you have the required tools and Rust targets installed. Run `boltffi check --fix` to auto-install missing targets.
