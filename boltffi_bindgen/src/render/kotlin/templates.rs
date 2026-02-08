@@ -450,11 +450,10 @@ mod tests {
     use askama::Template;
 
     use super::super::plan::{
-        KotlinAsyncCall, KotlinAsyncCallbackMethod, KotlinCallbackMethod, KotlinCallbackParam,
-        KotlinCallbackReturn, KotlinCallbackTrait, KotlinClass, KotlinConstructor,
-        KotlinDataEnumField, KotlinDataEnumVariant, KotlinEnumField, KotlinEnumVariant,
-        KotlinFunction, KotlinMethod, KotlinMethodImpl, KotlinRecordField, KotlinReturnAbi,
-        KotlinSignatureParam, KotlinWireWriter,
+        KotlinAsyncCallbackMethod, KotlinCallbackMethod, KotlinCallbackParam, KotlinCallbackReturn,
+        KotlinClass, KotlinConstructor, KotlinDataEnumField, KotlinDataEnumVariant,
+        KotlinEnumField, KotlinEnumVariant, KotlinMethod, KotlinMethodImpl, KotlinRecordField,
+        KotlinReturnAbi, KotlinSignatureParam, KotlinWireWriter,
     };
     use super::*;
 
@@ -725,7 +724,9 @@ mod tests {
             throws: false,
             err_type: "",
             ffi_name: "boltffi_add",
-            return_abi: &KotlinReturnAbi::Direct { kotlin_cast: "".to_string() },
+            return_abi: &KotlinReturnAbi::Direct {
+                kotlin_cast: "".to_string(),
+            },
             decode_expr: "",
             is_blittable_return: false,
             doc: &None,
@@ -904,7 +905,8 @@ mod tests {
             constructors: vec![],
             methods: vec![KotlinMethod {
                 impl_: KotlinMethodImpl::SyncMethod(
-                    "fun getDefault(): Logger = Logger(Native.boltffi_logger_get_default())".to_string(),
+                    "fun getDefault(): Logger = Logger(Native.boltffi_logger_get_default())"
+                        .to_string(),
                 ),
                 is_static: true,
             }],
@@ -1151,7 +1153,8 @@ mod tests {
                     kotlin_type: "List<String>".to_string(),
                     default_value: None,
                     wire_decode_expr: "reader.readList { it.readString() }".to_string(),
-                    wire_size_expr: "wire.sizeList(members) { w, v -> w.sizeString(v) }".to_string(),
+                    wire_size_expr: "wire.sizeList(members) { w, v -> w.sizeString(v) }"
+                        .to_string(),
                     wire_encode: "wire.writeList(members) { w, v -> w.writeString(v) }".to_string(),
                     padding_after: 0,
                     doc: None,
@@ -1371,7 +1374,10 @@ mod tests {
                     encode_expr: "BoltFFIWire.writeBytes(body)".to_string(),
                 },
             ],
-            wire_writer_closes: &["urlWire.close()".to_string(), "bodyWire.close()".to_string()],
+            wire_writer_closes: &[
+                "urlWire.close()".to_string(),
+                "bodyWire.close()".to_string(),
+            ],
             native_args: &[
                 "urlWire.ptr".to_string(),
                 "urlWire.len".to_string(),
@@ -1459,8 +1465,10 @@ mod tests {
                         name: "item".to_string(),
                         kotlin_type: "String?".to_string(),
                         wire_decode_expr: "reader.readOption { it.readString() }".to_string(),
-                        wire_size_expr: "wire.sizeOption(item) { w, v -> w.sizeString(v) }".to_string(),
-                        wire_encode: "wire.writeOption(item) { w, v -> w.writeString(v) }".to_string(),
+                        wire_size_expr: "wire.sizeOption(item) { w, v -> w.sizeString(v) }"
+                            .to_string(),
+                        wire_encode: "wire.writeOption(item) { w, v -> w.writeString(v) }"
+                            .to_string(),
                     }],
                     doc: None,
                 },

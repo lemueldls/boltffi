@@ -1,7 +1,7 @@
-use heck::ToLowerCamelCase;
 use boltffi_ffi_rules::naming::{
     self, snake_to_camel as camel_case, to_upper_camel_case as pascal_case,
 };
+use heck::ToLowerCamelCase;
 
 use std::collections::HashMap;
 

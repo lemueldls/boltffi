@@ -1,6 +1,6 @@
+use boltffi_ffi_rules::naming;
 use proc_macro2::Span;
 use quote::quote;
-use boltffi_ffi_rules::naming;
 use std::collections::HashMap;
 use std::env;
 use std::fs;

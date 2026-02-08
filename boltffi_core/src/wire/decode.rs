@@ -491,9 +491,7 @@ mod tests {
 
         #[test]
         fn nested_vecs_roundtrip() {
-            let original: Vec<Vec<i32>> = (0..100)
-                .map(|_| (0..1000).collect())
-                .collect();
+            let original: Vec<Vec<i32>> = (0..100).map(|_| (0..1000).collect()).collect();
 
             let mut buf = vec![0u8; original.wire_size()];
             original.encode_to(&mut buf);
@@ -662,9 +660,18 @@ mod tests {
         fn empty_buffer() {
             let buf: [u8; 0] = [];
 
-            assert!(matches!(String::decode_from(&buf), Err(DecodeError::BufferTooSmall)));
-            assert!(matches!(Vec::<i32>::decode_from(&buf), Err(DecodeError::BufferTooSmall)));
-            assert!(matches!(i32::decode_from(&buf), Err(DecodeError::BufferTooSmall)));
+            assert!(matches!(
+                String::decode_from(&buf),
+                Err(DecodeError::BufferTooSmall)
+            ));
+            assert!(matches!(
+                Vec::<i32>::decode_from(&buf),
+                Err(DecodeError::BufferTooSmall)
+            ));
+            assert!(matches!(
+                i32::decode_from(&buf),
+                Err(DecodeError::BufferTooSmall)
+            ));
         }
     }
 }

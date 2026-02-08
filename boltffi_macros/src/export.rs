@@ -1,6 +1,6 @@
+use boltffi_ffi_rules::naming;
 use proc_macro::TokenStream;
 use quote::quote;
-use boltffi_ffi_rules::naming;
 use syn::ItemFn;
 
 use crate::callback_registry;

@@ -1,5 +1,5 @@
-use heck::{ToLowerCamelCase, ToShoutySnakeCase, ToUpperCamelCase};
 use boltffi_ffi_rules::naming;
+use heck::{ToLowerCamelCase, ToShoutySnakeCase, ToUpperCamelCase};
 
 pub struct NamingConvention;
 

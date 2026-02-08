@@ -307,10 +307,12 @@ mod tests {
         let mut contract = FfiContract::new("bench_boltffi", "boltffi");
 
         contract.add_function(
-            FfiFunction::new("echo_string", "boltffi_echo_string").with_output(FfiOutput::OutParam {
-                param_type: FfiType::String,
-                ownership: Ownership::Returned,
-            }),
+            FfiFunction::new("echo_string", "boltffi_echo_string").with_output(
+                FfiOutput::OutParam {
+                    param_type: FfiType::String,
+                    ownership: Ownership::Returned,
+                },
+            ),
         );
 
         contract.add_class(

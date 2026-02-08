@@ -1,6 +1,6 @@
+use boltffi_ffi_rules::naming;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use boltffi_ffi_rules::naming;
 use syn::parse::Parse;
 
 struct CustomTypeSpec {
@@ -56,7 +56,8 @@ impl Parse for CustomTypeSpec {
 
         let remote = remote.ok_or_else(|| input.error("custom_type!: missing `remote = ...`"))?;
         let repr = repr.ok_or_else(|| input.error("custom_type!: missing `repr = ...`"))?;
-        let error = error.unwrap_or_else(|| syn::parse_quote!(::boltffi::CustomTypeConversionError));
+        let error =
+            error.unwrap_or_else(|| syn::parse_quote!(::boltffi::CustomTypeConversionError));
         let into_ffi =
             into_ffi.ok_or_else(|| input.error("custom_type!: missing `into_ffi = ...`"))?;
         let try_from_ffi = try_from_ffi

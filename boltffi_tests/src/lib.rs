@@ -469,11 +469,7 @@ impl FallibleService {
     }
 
     pub fn get_optional(&self, key: i32) -> Option<i32> {
-        if key > 0 {
-            Some(key * 3)
-        } else {
-            None
-        }
+        if key > 0 { Some(key * 3) } else { None }
     }
 
     pub fn get_nested_result(&self, key: i32) -> Result<Option<i32>, FixtureError> {

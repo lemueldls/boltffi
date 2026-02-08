@@ -13,9 +13,9 @@ pub use model::{
     Parameter, Primitive, Receiver, Record, RecordField, StreamMethod, StreamMode, Type, Variant,
 };
 
+pub use boltffi_ffi_rules::naming::ffi_prefix;
 pub use render::kotlin::{FactoryStyle, KotlinApiStyle, KotlinOptions};
 pub use render::{Renderer, TypeConversion, TypeMapping, TypeMappings, swift::SwiftLowerer};
-pub use boltffi_ffi_rules::naming::ffi_prefix;
 pub use scan::{SourceScanner, scan_crate};
 
 #[cfg(test)]

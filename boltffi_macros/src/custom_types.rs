@@ -3,9 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use boltffi_ffi_rules::naming;
 use proc_macro2::Span;
 use quote::{format_ident, quote};
-use boltffi_ffi_rules::naming;
 use syn::parse::Parse;
 use syn::{GenericArgument, PathArguments, Type};
 

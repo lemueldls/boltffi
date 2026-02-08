@@ -1,4 +1,6 @@
-use boltffi_ffi_rules::naming::{CreateFn, GlobalSymbol, Name, RegisterFn, VtableField, VtableType};
+use boltffi_ffi_rules::naming::{
+    CreateFn, GlobalSymbol, Name, RegisterFn, VtableField, VtableType,
+};
 
 use crate::ir::contract::PackageInfo;
 use crate::ir::definitions::StreamMode;

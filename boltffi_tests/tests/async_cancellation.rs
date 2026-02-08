@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU32, Ordering};
 use std::task::{Context, Poll};
 
 use boltffi::__private::rustfuture::{self, RustFuturePoll};
@@ -40,8 +40,8 @@ fn make_pending_future(
     }
 }
 
-fn make_instant_future() -> impl Future<Output = i32> + Send + 'static {
-    async move { 99 }
+async fn make_instant_future() -> i32 {
+    99
 }
 
 mod complete_returns_result_only_if_future_finished {
