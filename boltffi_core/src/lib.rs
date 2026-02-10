@@ -14,6 +14,7 @@ pub mod safety;
 pub mod status;
 pub mod subscription;
 pub mod types;
+pub mod wasm;
 pub mod wire;
 
 pub use boltffi_macros::{
@@ -35,6 +36,7 @@ pub use subscription::{
     SubscriptionHandle, WaitResult,
 };
 pub use types::{FfiBuf, FfiError, FfiOption, FfiSlice, FfiString};
+pub use wasm::WASM_ABI_VERSION;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnexpectedFfiCallbackError(pub String);
