@@ -129,10 +129,10 @@
 {%- match method.impl_ %}
 {%- when AsyncMethod with (async_method) %}
 
-        {{ async_method }}
+{{ async_method|indent(8, true) }}
 {%- when SyncMethod with (wire_method) %}
 
-        {{ wire_method }}
+{{ wire_method|indent(8, true) }}
 {%- endmatch %}
 {%- endif %}{% endfor %}
     }
@@ -141,10 +141,10 @@
 {%- match method.impl_ %}
 {%- when AsyncMethod with (async_method) %}
 
-    {{ async_method }}
+{{ async_method|indent(4, true) }}
 {%- when SyncMethod with (wire_method) %}
 
-    {{ wire_method }}
+{{ wire_method|indent(4, true) }}
 {%- endmatch %}
 {%- endif %}{% endfor %}
 {%- for stream in streams %}

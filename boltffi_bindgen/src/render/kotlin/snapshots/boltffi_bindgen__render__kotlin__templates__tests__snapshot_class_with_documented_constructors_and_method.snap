@@ -30,7 +30,7 @@ class DataStore private constructor(internal val handle: Long) : AutoCloseable {
     }
 
     /**
- * Inserts a value into the store by key.
- */
-fun insert(key: String) { Native.boltffi_data_store_insert(handle, key) }
+     * Inserts a value into the store by key.
+     */
+    fun insert(key: String) { Native.boltffi_data_store_insert(handle, key) }
 }
