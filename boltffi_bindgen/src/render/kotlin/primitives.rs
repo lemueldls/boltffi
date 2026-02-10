@@ -27,7 +27,7 @@ pub const fn info(p: Primitive) -> JniPrimitiveInfo {
             kotlin_type: "Boolean",
             jni_type: "jboolean",
             signature: "Z",
-            c_type: "uint8_t",
+            c_type: "bool",
             call_suffix: "Boolean",
             invoker_suffix: "Bool",
             default_value: "false",

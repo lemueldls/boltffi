@@ -403,6 +403,63 @@ func boltffiAsyncCall<T>(
         }
     }
 }
+
+func boltffiAsyncCallDirect<T>(
+    futureHandle: RustFutureHandle?,
+    pollFn: @escaping (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
+    completeFn: @escaping (RustFutureHandle?, UnsafeMutablePointer<FfiStatus>?) -> T,
+    cancelFn: @escaping (RustFutureHandle?) -> Void,
+    freeFn: @escaping (RustFutureHandle?) -> Void
+) async throws -> T {
+    typealias Ctx = FfiFutureState<T>
+    let state = Ctx(handle: futureHandle)
+
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            guard state.installContinuation(continuation) else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+
+            let driver = BoltFFIAsyncPollDriver(
+                futureHandle: futureHandle,
+                pollFn: pollFn,
+                onReady: {
+                    let decision = state.decideFinish()
+                    if case .alreadyFinished = decision { return }
+                    var status = FfiStatus()
+                    let value = completeFn(futureHandle, &status)
+                    freeFn(futureHandle)
+                    switch decision {
+                    case .finishWithContinuation(let cont):
+                        if status.code == 0 {
+                            cont.resume(returning: value)
+                        } else {
+                            cont.resume(throwing: FfiError(message: "async call failed"))
+                        }
+                    case .finishWithoutContinuation, .alreadyFinished:
+                        break
+                    }
+                },
+                canContinuePolling: { state.canPoll() }
+            )
+            driver.startPoll()
+        }
+    } onCancel: {
+        let decision = state.decideFinish()
+        switch decision {
+        case .alreadyFinished:
+            break
+        case .finishWithoutContinuation:
+            cancelFn(state.handle)
+            freeFn(state.handle)
+        case .finishWithContinuation(let continuation):
+            cancelFn(state.handle)
+            freeFn(state.handle)
+            continuation.resume(throwing: CancellationError())
+        }
+    }
+}
 {%- endif %}
 {%- if has_streams %}
 

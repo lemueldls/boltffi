@@ -69,6 +69,15 @@
 {%- endfor %}
         let futureHandle = {% for w in method.closure_wrappers() %}{{ w }} {% endfor %}{{ method.start_call_expr() }}{% for _ in method.closure_wrappers() %} }{% endfor %}
 
+{%- if result.is_direct() || result.is_unit() %}
+        return try await boltffiAsyncCallDirect(
+            futureHandle: futureHandle,
+            pollFn: {{ poll }},
+            completeFn: {{ complete }},
+            cancelFn: {{ cancel }},
+            freeFn: {{ free }}
+        )
+{%- else %}
         return try await boltffiAsyncCall(
             futureHandle: futureHandle,
             pollFn: {{ poll }},
@@ -76,12 +85,6 @@
             cancelFn: {{ cancel }},
             freeFn: {{ free }}
         ) { buf, status in
-{%- if result.is_unit() %}
-            guard status.code == 0 else { throw FfiError(message: "ffi call failed") }
-{%- elif result.is_direct() %}
-            guard status.code == 0 else { throw FfiError(message: "ffi call failed") }
-            return buf
-{%- elif result.is_wire_encoded() %}
             guard status.code == 0 else { {{ prefix }}_free_buf_u8(buf); throw FfiError(message: "ffi call failed") }
 {%- if result.throws() %}
             defer { {{ prefix }}_free_buf_u8(buf) }
@@ -90,8 +93,8 @@
             defer { {{ prefix }}_free_buf_u8(buf) }
             return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
 {%- endif %}
-{%- endif %}
         }
+{%- endif %}
 {%- when SwiftCallMode::Sync { symbol } %}
 {%- for param in method.params %}
 {%- if let Some(wrapper) = param.wrapper_code() %}

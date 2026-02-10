@@ -170,6 +170,7 @@ impl<'a> KotlinLowerer<'a> {
                 "kotlinx.coroutines.CoroutineScope".to_string(),
                 "kotlinx.coroutines.Dispatchers".to_string(),
                 "kotlinx.coroutines.SupervisorJob".to_string(),
+                "kotlinx.coroutines.Job".to_string(),
                 "kotlinx.coroutines.launch".to_string(),
             ]
         } else {

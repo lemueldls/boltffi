@@ -41,7 +41,7 @@ object BoltFFIScope : CoroutineScope {
     override val coroutineContext = Dispatchers.Default + SupervisorJob()
 
     fun launchOnMain(block: suspend CoroutineScope.() -> Unit): Job =
-        launch(Dispatchers.Main, block = block)
+        launch(Dispatchers.Default, block = block)
 }
 
 class BoltFFIException(val errorBuffer: ByteBuffer) : Exception("Structured error") {
@@ -83,13 +83,13 @@ private val boltffiContinuationMap = BoltFFIHandleMap<CancellableContinuation<By
 internal fun boltffiFutureContinuationCallback(handle: Long, pollResult: Byte) {
     val continuation = boltffiContinuationMap.tryRemove(handle)
     if (continuation == null) {
-        android.util.Log.w("BoltFFI", "boltffiFutureContinuationCallback: handle $handle not found (already completed or cancelled)")
+        System.err.println("BoltFFI: boltffiFutureContinuationCallback: handle $handle not found (already completed or cancelled)")
         return
     }
     try {
         continuation.resume(pollResult)
     } catch (e: Exception) {
-        android.util.Log.e("BoltFFI", "boltffiFutureContinuationCallback: resume failed for handle $handle", e)
+        System.err.println("BoltFFI: boltffiFutureContinuationCallback: resume failed for handle $handle: $e")
     }
 }
 

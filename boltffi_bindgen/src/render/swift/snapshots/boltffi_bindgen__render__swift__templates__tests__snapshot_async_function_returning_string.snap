@@ -5,7 +5,6 @@ expression: "render_function(&func, \"boltffi\")"
 public func fetchData(url: String) async throws -> String {
     var url = url
     let futureHandle = url.withUTF8 { urlBuf in boltffi_fetch_data_start(urlBuf.baseAddress!, UInt(urlBuf.count)) }
-
     return try await boltffiAsyncCall(
         futureHandle: futureHandle,
         pollFn: boltffi_fetch_data_poll,

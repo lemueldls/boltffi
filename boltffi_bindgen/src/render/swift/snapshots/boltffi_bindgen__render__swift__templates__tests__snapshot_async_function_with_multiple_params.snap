@@ -6,7 +6,6 @@ public func uploadFile(path: String, to destination: String) async throws -> Str
     var path = path
     var destination = destination
     let futureHandle = path.withUTF8 { pathBuf in destination.withUTF8 { destinationBuf in boltffi_upload_file_start(pathBuf.baseAddress!, UInt(pathBuf.count), destinationBuf.baseAddress!, UInt(destinationBuf.count)) } }
-
     return try await boltffiAsyncCall(
         futureHandle: futureHandle,
         pollFn: boltffi_upload_file_poll,
