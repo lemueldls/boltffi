@@ -9,7 +9,7 @@ use crate::ir::abi::{
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{EnumDef, FunctionDef, RecordDef};
 use crate::ir::ids::{EnumId, FieldName, RecordId};
-use crate::ir::ops::{ReadOp, ReadSeq, WriteOp, WriteSeq};
+use crate::ir::ops::{ReadOp, ReadSeq, SizeExpr, WireShape, WriteOp, WriteSeq};
 use crate::ir::plan::AbiType;
 use crate::ir::types::{PrimitiveType, TypeExpr};
 use crate::render::typescript::emit;
@@ -127,27 +127,28 @@ impl<'a> TypeScriptLowerer<'a> {
                 let ts_type_str = emit::ts_type(&field.type_expr);
                 let field_name = camel_case(field.name.as_str());
 
-                let decode_seq = decode_fields.get(&field.name).cloned().unwrap_or_else(|| {
-                    ReadSeq {
-                        size: crate::ir::ops::SizeExpr::Fixed(0),
+                let decode = decode_fields
+                    .get(&field.name)
+                    .cloned()
+                    .unwrap_or_else(|| ReadSeq {
+                        size: SizeExpr::Fixed(0),
                         ops: vec![],
-                        shape: crate::ir::ops::WireShape::Value,
-                    }
-                });
-                let encode_seq = encode_fields.get(&field.name).cloned().unwrap_or_else(|| {
-                    WriteSeq {
-                        size: crate::ir::ops::SizeExpr::Fixed(0),
+                        shape: WireShape::Value,
+                    });
+                let encode = encode_fields
+                    .get(&field.name)
+                    .cloned()
+                    .unwrap_or_else(|| WriteSeq {
+                        size: SizeExpr::Fixed(0),
                         ops: vec![],
-                        shape: crate::ir::ops::WireShape::Value,
-                    }
-                });
+                        shape: WireShape::Value,
+                    });
 
                 TsField {
                     name: emit::escape_ts_keyword(&field_name),
                     ts_type: ts_type_str,
-                    wire_decode_expr: emit::emit_reader_read(&decode_seq),
-                    wire_encode_expr: emit::emit_writer_write(&encode_seq),
-                    wire_size_expr: emit::emit_size_expr(&encode_seq.size),
+                    decode,
+                    encode,
                     doc: field.doc.clone(),
                 }
             })
@@ -185,9 +186,8 @@ impl<'a> TypeScriptLowerer<'a> {
                         .map(|field| TsVariantField {
                             name: camel_case(field.name.as_str()),
                             ts_type: emit::ts_type(&field.type_expr),
-                            wire_decode_expr: emit::emit_reader_read(&field.decode),
-                            wire_encode_expr: emit::emit_writer_write(&field.encode),
-                            wire_size_expr: emit::emit_size_expr(&field.encode.size),
+                            decode: field.decode.clone(),
+                            encode: field.encode.clone(),
                         })
                         .collect(),
                 };
@@ -267,18 +267,13 @@ impl<'a> TypeScriptLowerer<'a> {
                 encode_ops,
                 decode_ops: _,
                 ..
-            } => {
-                let encode_expr = emit::emit_writer_write(encode_ops);
-                let size_expr = emit::emit_size_expr(&encode_ops.size);
-                TsParam {
-                    name: emit::escape_ts_keyword(&name),
-                    ts_type: "unknown".to_string(),
-                    conversion: TsParamConversion::WireEncoded {
-                        encode_expr,
-                        size_expr,
-                    },
-                }
-            }
+            } => TsParam {
+                name: emit::escape_ts_keyword(&name),
+                ts_type: "unknown".to_string(),
+                conversion: TsParamConversion::WireEncoded {
+                    encode: encode_ops.clone(),
+                },
+            },
             _ => TsParam {
                 name: emit::escape_ts_keyword(&name),
                 ts_type: "unknown".to_string(),

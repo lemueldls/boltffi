@@ -1,3 +1,6 @@
+use crate::ir::ops::{ReadSeq, WriteSeq};
+use crate::render::typescript::emit;
+
 #[derive(Debug, Clone)]
 pub struct TsModule {
     pub module_name: String,
@@ -21,10 +24,23 @@ pub struct TsRecord {
 pub struct TsField {
     pub name: String,
     pub ts_type: String,
-    pub wire_decode_expr: String,
-    pub wire_encode_expr: String,
-    pub wire_size_expr: String,
+    pub decode: ReadSeq,
+    pub encode: WriteSeq,
     pub doc: Option<String>,
+}
+
+impl TsField {
+    pub fn wire_decode_expr(&self) -> String {
+        emit::emit_reader_read(&self.decode)
+    }
+
+    pub fn wire_encode_expr(&self, writer: &str, value: &str) -> String {
+        emit::emit_writer_write(&self.encode, writer, value)
+    }
+
+    pub fn wire_size_expr(&self, value: &str) -> String {
+        emit::emit_size_expr(&self.encode.size, value)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -65,9 +81,22 @@ impl TsVariant {
 pub struct TsVariantField {
     pub name: String,
     pub ts_type: String,
-    pub wire_decode_expr: String,
-    pub wire_encode_expr: String,
-    pub wire_size_expr: String,
+    pub decode: ReadSeq,
+    pub encode: WriteSeq,
+}
+
+impl TsVariantField {
+    pub fn wire_decode_expr(&self) -> String {
+        emit::emit_reader_read(&self.decode)
+    }
+
+    pub fn wire_encode_expr(&self, writer: &str, value: &str) -> String {
+        emit::emit_writer_write(&self.encode, writer, value)
+    }
+
+    pub fn wire_size_expr(&self, value: &str) -> String {
+        emit::emit_size_expr(&self.encode.size, value)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -94,15 +123,16 @@ impl TsParam {
     pub fn wrapper_code(&self) -> Option<String> {
         match &self.conversion {
             TsParamConversion::Direct => None,
-            TsParamConversion::String => {
-                Some(format!("const {}_alloc = _module.allocString({});", self.name, self.name))
-            }
-            TsParamConversion::WireEncoded { encode_expr, size_expr } => {
+            TsParamConversion::String => Some(format!(
+                "const {}_alloc = _module.allocString({});",
+                self.name, self.name
+            )),
+            TsParamConversion::WireEncoded { encode, .. } => {
+                let writer_name = format!("{}_writer", self.name);
+                let size_expr = emit::emit_size_expr(&encode.size, &self.name);
+                let encode_expr = emit::emit_writer_write(encode, &writer_name, &self.name);
                 Some(format!(
-                    "const {name}_writer = _module.allocWriter({size_expr});\n  {encode_expr};\n  const {name}_ptr = {name}_writer.ptr;",
-                    name = self.name,
-                    size_expr = size_expr,
-                    encode_expr = encode_expr.replace("writer", &format!("{}_writer", self.name)).replace("value", &self.name),
+                    "const {writer_name} = _module.allocWriter({size_expr});\n  {encode_expr};",
                 ))
             }
         }
@@ -118,7 +148,10 @@ impl TsParam {
                 ]
             }
             TsParamConversion::WireEncoded { .. } => {
-                vec![format!("{}_ptr", self.name)]
+                vec![
+                    format!("{}_writer.ptr", self.name),
+                    format!("{}_writer.len", self.name),
+                ]
             }
         }
     }
@@ -126,13 +159,15 @@ impl TsParam {
     pub fn cleanup_code(&self) -> Option<String> {
         match &self.conversion {
             TsParamConversion::Direct => None,
-            TsParamConversion::String => {
-                Some(format!("_module.freeAlloc({}_alloc);", self.name))
-            }
+            TsParamConversion::String => Some(format!("_module.freeAlloc({}_alloc);", self.name)),
             TsParamConversion::WireEncoded { .. } => {
                 Some(format!("_module.freeWriter({}_writer);", self.name))
             }
         }
+    }
+
+    pub fn needs_cleanup(&self) -> bool {
+        !matches!(self.conversion, TsParamConversion::Direct)
     }
 }
 
@@ -140,10 +175,7 @@ impl TsParam {
 pub enum TsParamConversion {
     Direct,
     String,
-    WireEncoded {
-        encode_expr: String,
-        size_expr: String,
-    },
+    WireEncoded { encode: WriteSeq },
 }
 
 #[derive(Debug, Clone)]

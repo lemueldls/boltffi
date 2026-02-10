@@ -110,13 +110,18 @@ pub fn ts_builtin(id: &BuiltinId) -> String {
     .to_string()
 }
 
-pub fn render_value(expr: &ValueExpr) -> String {
+fn render_value(expr: &ValueExpr, root_value: &str) -> String {
     match expr {
         ValueExpr::Instance => "this".to_string(),
+        ValueExpr::Var(name) if name == "value" => root_value.to_string(),
         ValueExpr::Var(name) => name.clone(),
         ValueExpr::Named(name) => camel_case(name),
         ValueExpr::Field(parent, field) => {
-            format!("{}.{}", render_value(parent), camel_case(field.as_str()))
+            format!(
+                "{}.{}",
+                render_value(parent, root_value),
+                camel_case(field.as_str())
+            )
         }
     }
 }
@@ -153,7 +158,7 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
         },
         ReadOp::Option { some, .. } => {
             let inner = emit_reader_read(some);
-            format!("reader.readOptional(() => {})", inner)
+            format!("reader.readOptional(() => {inner})")
         }
         ReadOp::Vec {
             element_type,
@@ -166,11 +171,11 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
             }
             match layout {
                 VecLayout::Blittable { element_size } => {
-                    format!("reader.readBlittableArray({})", element_size)
+                    format!("reader.readBlittableArray({element_size})")
                 }
                 VecLayout::Encoded => {
                     let inner = emit_reader_read(element);
-                    format!("reader.readArray(() => {})", inner)
+                    format!("reader.readArray(() => {inner})")
                 }
             }
         }
@@ -188,58 +193,61 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
         ReadOp::Result { ok, err, .. } => {
             let ok_read = emit_reader_read(ok);
             let err_read = emit_reader_read(err);
-            format!("reader.readResult(() => {}, () => {})", ok_read, err_read)
+            format!("reader.readResult(() => {ok_read}, () => {err_read})")
         }
         ReadOp::Custom { underlying, .. } => emit_reader_read(underlying),
     }
 }
 
-pub fn emit_writer_write(seq: &WriteSeq) -> String {
+pub fn emit_writer_write(seq: &WriteSeq, writer: &str, value: &str) -> String {
     seq.ops
         .iter()
-        .map(emit_writer_write_op)
+        .map(|op| emit_writer_write_op(op, writer, value))
         .collect::<Vec<_>>()
         .join("; ")
 }
 
-fn emit_writer_write_op(op: &WriteOp) -> String {
+fn emit_writer_write_op(op: &WriteOp, w: &str, root_value: &str) -> String {
     match op {
         WriteOp::Primitive { primitive, value } => {
-            let val = render_value(value);
+            let val = render_value(value, root_value);
             match primitive {
-                PrimitiveType::Bool => format!("writer.writeBool({})", val),
-                PrimitiveType::I8 => format!("writer.writeI8({})", val),
-                PrimitiveType::U8 => format!("writer.writeU8({})", val),
-                PrimitiveType::I16 => format!("writer.writeI16({})", val),
-                PrimitiveType::U16 => format!("writer.writeU16({})", val),
-                PrimitiveType::I32 => format!("writer.writeI32({})", val),
-                PrimitiveType::U32 => format!("writer.writeU32({})", val),
-                PrimitiveType::I64 => format!("writer.writeI64({})", val),
-                PrimitiveType::U64 => format!("writer.writeU64({})", val),
-                PrimitiveType::ISize => format!("writer.writeISize({})", val),
-                PrimitiveType::USize => format!("writer.writeUSize({})", val),
-                PrimitiveType::F32 => format!("writer.writeF32({})", val),
-                PrimitiveType::F64 => format!("writer.writeF64({})", val),
+                PrimitiveType::Bool => format!("{w}.writeBool({val})"),
+                PrimitiveType::I8 => format!("{w}.writeI8({val})"),
+                PrimitiveType::U8 => format!("{w}.writeU8({val})"),
+                PrimitiveType::I16 => format!("{w}.writeI16({val})"),
+                PrimitiveType::U16 => format!("{w}.writeU16({val})"),
+                PrimitiveType::I32 => format!("{w}.writeI32({val})"),
+                PrimitiveType::U32 => format!("{w}.writeU32({val})"),
+                PrimitiveType::I64 => format!("{w}.writeI64({val})"),
+                PrimitiveType::U64 => format!("{w}.writeU64({val})"),
+                PrimitiveType::ISize => format!("{w}.writeISize({val})"),
+                PrimitiveType::USize => format!("{w}.writeUSize({val})"),
+                PrimitiveType::F32 => format!("{w}.writeF32({val})"),
+                PrimitiveType::F64 => format!("{w}.writeF64({val})"),
             }
         }
-        WriteOp::String { value } => format!("writer.writeString({})", render_value(value)),
-        WriteOp::Bytes { value } => format!("writer.writeBytes({})", render_value(value)),
+        WriteOp::String { value } => {
+            format!("{w}.writeString({})", render_value(value, root_value))
+        }
+        WriteOp::Bytes { value } => {
+            format!("{w}.writeBytes({})", render_value(value, root_value))
+        }
         WriteOp::Builtin { id, value } => {
-            let val = render_value(value);
+            let val = render_value(value, root_value);
             match id.as_str() {
-                "Duration" => format!("writer.writeDuration({})", val),
-                "SystemTime" => format!("writer.writeTimestamp({})", val),
-                "Uuid" => format!("writer.writeUuid({})", val),
-                "Url" => format!("writer.writeString({})", val),
-                _ => format!("encode{}(writer, {})", to_pascal_case(id.as_str()), val),
+                "Duration" => format!("{w}.writeDuration({val})"),
+                "SystemTime" => format!("{w}.writeTimestamp({val})"),
+                "Uuid" => format!("{w}.writeUuid({val})"),
+                "Url" => format!("{w}.writeString({val})"),
+                _ => format!("encode{}({w}, {val})", to_pascal_case(id.as_str())),
             }
         }
         WriteOp::Option { value, some } => {
-            let inner = emit_writer_write(some);
+            let inner = emit_writer_write(some, w, root_value);
             format!(
-                "writer.writeOptional({}, (v) => {{ {} }})",
-                render_value(value),
-                inner
+                "{w}.writeOptional({}, (v) => {{ {inner} }})",
+                render_value(value, root_value),
             )
         }
         WriteOp::Vec {
@@ -248,91 +256,84 @@ fn emit_writer_write_op(op: &WriteOp) -> String {
             element,
             layout,
         } => {
-            let val = render_value(value);
+            let val = render_value(value, root_value);
             if matches!(element_type, TypeExpr::Primitive(PrimitiveType::U8)) {
-                return format!("writer.writeBytes({})", val);
+                return format!("{w}.writeBytes({val})");
             }
             match layout {
                 VecLayout::Blittable { element_size } => {
-                    format!("writer.writeBlittableArray({}, {})", val, element_size)
+                    format!("{w}.writeBlittableArray({val}, {element_size})")
                 }
                 VecLayout::Encoded => {
-                    let inner = emit_writer_write(element);
-                    format!("writer.writeArray({}, (item) => {{ {} }})", val, inner)
+                    let inner = emit_writer_write(element, w, "item");
+                    format!("{w}.writeArray({val}, (item) => {{ {inner} }})")
                 }
             }
         }
         WriteOp::Record { id, value, .. } => {
             format!(
-                "encode{}(writer, {})",
+                "encode{}({w}, {})",
                 to_pascal_case(id.as_str()),
-                render_value(value)
+                render_value(value, root_value)
             )
         }
         WriteOp::Enum {
             id, value, layout, ..
         } => {
-            let val = render_value(value);
+            let val = render_value(value, root_value);
             match layout {
-                EnumLayout::CStyle { .. } => {
-                    format!("writer.writeI32({})", val)
-                }
+                EnumLayout::CStyle { .. } => format!("{w}.writeI32({val})"),
                 EnumLayout::Data { .. } | EnumLayout::Recursive => {
-                    format!("encode{}(writer, {})", to_pascal_case(id.as_str()), val)
+                    format!("encode{}({w}, {val})", to_pascal_case(id.as_str()))
                 }
             }
         }
         WriteOp::Result { value, ok, err } => {
-            let val = render_value(value);
-            let ok_write = emit_writer_write(ok);
-            let err_write = emit_writer_write(err);
-            format!(
-                "writer.writeResult({}, () => {{ {} }}, () => {{ {} }})",
-                val, ok_write, err_write
-            )
+            let val = render_value(value, root_value);
+            let ok_write = emit_writer_write(ok, w, root_value);
+            let err_write = emit_writer_write(err, w, root_value);
+            format!("{w}.writeResult({val}, () => {{ {ok_write} }}, () => {{ {err_write} }})")
         }
-        WriteOp::Custom { underlying, .. } => emit_writer_write(underlying),
+        WriteOp::Custom { underlying, .. } => emit_writer_write(underlying, w, root_value),
     }
 }
 
-pub fn emit_size_expr(size: &SizeExpr) -> String {
+pub fn emit_size_expr(size: &SizeExpr, root_value: &str) -> String {
     match size {
         SizeExpr::Fixed(value) => value.to_string(),
         SizeExpr::Runtime => "0".to_string(),
         SizeExpr::StringLen(value) => {
-            format!("wireStringSize({})", render_value(value))
+            format!("wireStringSize({})", render_value(value, root_value))
         }
         SizeExpr::BytesLen(value) => {
-            format!("(4 + {}.byteLength)", render_value(value))
+            format!("(4 + {}.byteLength)", render_value(value, root_value))
         }
-        SizeExpr::ValueSize(expr) => render_value(expr),
+        SizeExpr::ValueSize(expr) => render_value(expr, root_value),
         SizeExpr::WireSize { value } => {
-            format!("wireSize({})", render_value(value))
+            format!("wireSize({})", render_value(value, root_value))
         }
         SizeExpr::BuiltinSize { id, value } => {
-            let val = render_value(value);
+            let val = render_value(value, root_value);
             match id.as_str() {
-                "Url" => format!("wireStringSize({})", val),
-                "Duration" => "12".to_string(),
-                "SystemTime" => "12".to_string(),
+                "Url" => format!("wireStringSize({val})"),
+                "Duration" | "SystemTime" => "12".to_string(),
                 "Uuid" => "16".to_string(),
-                _ => format!("wireSize({})", val),
+                _ => format!("wireSize({val})"),
             }
         }
         SizeExpr::Sum(parts) => {
             let rendered = parts
                 .iter()
-                .map(emit_size_expr)
+                .map(|p| emit_size_expr(p, root_value))
                 .collect::<Vec<_>>()
                 .join(" + ");
-            format!("({})", rendered)
+            format!("({rendered})")
         }
         SizeExpr::OptionSize { value, inner } => {
-            let inner_size = emit_size_expr(inner);
+            let inner_size = emit_size_expr(inner, root_value);
             format!(
-                "({} !== null ? 1 + {} : 1)",
-                render_value(value),
-                inner_size
+                "({} !== null ? 1 + {inner_size} : 1)",
+                render_value(value, root_value),
             )
         }
         SizeExpr::VecSize {
@@ -340,25 +341,22 @@ pub fn emit_size_expr(size: &SizeExpr) -> String {
             inner,
             layout,
         } => {
-            let val = render_value(value);
+            let val = render_value(value, root_value);
             match layout {
                 VecLayout::Blittable { element_size } => {
-                    format!("(4 + {}.length * {})", val, element_size)
+                    format!("(4 + {val}.length * {element_size})")
                 }
                 VecLayout::Encoded => {
-                    let inner_size = emit_size_expr(inner);
-                    format!("(4 + {}.length * {})", val, inner_size)
+                    let inner_size = emit_size_expr(inner, "item");
+                    format!("(4 + {val}.reduce((acc, item) => acc + {inner_size}, 0))")
                 }
             }
         }
         SizeExpr::ResultSize { value, ok, err } => {
-            let val = render_value(value);
-            let ok_size = emit_size_expr(ok);
-            let err_size = emit_size_expr(err);
-            format!(
-                "(1 + ({} instanceof Error ? {} : {}))",
-                val, err_size, ok_size
-            )
+            let val = render_value(value, root_value);
+            let ok_size = emit_size_expr(ok, root_value);
+            let err_size = emit_size_expr(err, root_value);
+            format!("(1 + ({val} instanceof Error ? {err_size} : {ok_size}))")
         }
     }
 }

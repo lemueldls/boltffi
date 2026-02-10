@@ -2,28 +2,35 @@
 {%- if !wrapper_code.is_empty() %}
   {{ wrapper_code }}
 {%- endif %}
+{%- if cleanup_code.is_empty() %}
 {%- match return_abi %}
 {%- when TsReturnAbi::Void %}
   _module.exports.{{ ffi_name }}({{ call_args }});
-{%- if !cleanup_code.is_empty() %}
-  {{ cleanup_code }}
-{%- endif %}
 {%- when TsReturnAbi::Direct with { ts_cast } %}
-{%- if cleanup_code.is_empty() %}
   return _module.exports.{{ ffi_name }}({{ call_args }}){{ ts_cast }};
-{%- else %}
-  const _result = _module.exports.{{ ffi_name }}({{ call_args }}){{ ts_cast }};
-  {{ cleanup_code }}
-  return _result;
-{%- endif %}
 {%- when TsReturnAbi::WireEncoded %}
   const bufPtr = _module.exports.{{ ffi_name }}({{ call_args }});
-{%- if !cleanup_code.is_empty() %}
-  {{ cleanup_code }}
-{%- endif %}
   const reader = _module.readerFromBuf(bufPtr);
   const result = {{ decode_expr }};
   _module.freeBuf(bufPtr);
   return result;
 {%- endmatch %}
+{%- else %}
+  try {
+{%- match return_abi %}
+{%- when TsReturnAbi::Void %}
+    _module.exports.{{ ffi_name }}({{ call_args }});
+{%- when TsReturnAbi::Direct with { ts_cast } %}
+    return _module.exports.{{ ffi_name }}({{ call_args }}){{ ts_cast }};
+{%- when TsReturnAbi::WireEncoded %}
+    const bufPtr = _module.exports.{{ ffi_name }}({{ call_args }});
+    const reader = _module.readerFromBuf(bufPtr);
+    const result = {{ decode_expr }};
+    _module.freeBuf(bufPtr);
+    return result;
+{%- endmatch %}
+  } finally {
+    {{ cleanup_code }}
+  }
+{%- endif %}
 }

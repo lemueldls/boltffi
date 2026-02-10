@@ -205,6 +205,75 @@ impl TypeScriptEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ids::FieldName;
+    use crate::ir::ops::{
+        OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq,
+    };
+    use crate::ir::types::PrimitiveType;
+
+    fn primitive_size(p: PrimitiveType) -> usize {
+        match p {
+            PrimitiveType::Bool | PrimitiveType::I8 | PrimitiveType::U8 => 1,
+            PrimitiveType::I16 | PrimitiveType::U16 => 2,
+            PrimitiveType::I32 | PrimitiveType::U32 | PrimitiveType::F32 => 4,
+            PrimitiveType::I64
+            | PrimitiveType::U64
+            | PrimitiveType::F64
+            | PrimitiveType::ISize
+            | PrimitiveType::USize => 8,
+        }
+    }
+
+    fn primitive_read(primitive: PrimitiveType) -> ReadSeq {
+        ReadSeq {
+            size: SizeExpr::Fixed(primitive_size(primitive)),
+            ops: vec![ReadOp::Primitive {
+                primitive,
+                offset: OffsetExpr::Base,
+            }],
+            shape: WireShape::Value,
+        }
+    }
+
+    fn primitive_write(primitive: PrimitiveType, field: &str) -> WriteSeq {
+        WriteSeq {
+            size: SizeExpr::Fixed(primitive_size(primitive)),
+            ops: vec![WriteOp::Primitive {
+                primitive,
+                value: ValueExpr::Field(
+                    Box::new(ValueExpr::Var("value".to_string())),
+                    FieldName::new(field),
+                ),
+            }],
+            shape: WireShape::Value,
+        }
+    }
+
+    fn string_read() -> ReadSeq {
+        ReadSeq {
+            size: SizeExpr::Runtime,
+            ops: vec![ReadOp::String {
+                offset: OffsetExpr::Base,
+            }],
+            shape: WireShape::Value,
+        }
+    }
+
+    fn string_write(field: &str) -> WriteSeq {
+        WriteSeq {
+            size: SizeExpr::StringLen(ValueExpr::Field(
+                Box::new(ValueExpr::Var("value".to_string())),
+                FieldName::new(field),
+            )),
+            ops: vec![WriteOp::String {
+                value: ValueExpr::Field(
+                    Box::new(ValueExpr::Var("value".to_string())),
+                    FieldName::new(field),
+                ),
+            }],
+            shape: WireShape::Value,
+        }
+    }
 
     #[test]
     fn snapshot_preamble() {
@@ -220,17 +289,15 @@ mod tests {
                 TsField {
                     name: "x".to_string(),
                     ts_type: "number".to_string(),
-                    wire_decode_expr: "reader.readF64()".to_string(),
-                    wire_encode_expr: "writer.writeF64(value.x)".to_string(),
-                    wire_size_expr: "8".to_string(),
+                    decode: primitive_read(PrimitiveType::F64),
+                    encode: primitive_write(PrimitiveType::F64, "x"),
                     doc: None,
                 },
                 TsField {
                     name: "y".to_string(),
                     ts_type: "number".to_string(),
-                    wire_decode_expr: "reader.readF64()".to_string(),
-                    wire_encode_expr: "writer.writeF64(value.y)".to_string(),
-                    wire_size_expr: "8".to_string(),
+                    decode: primitive_read(PrimitiveType::F64),
+                    encode: primitive_write(PrimitiveType::F64, "y"),
                     doc: None,
                 },
             ],
@@ -251,17 +318,15 @@ mod tests {
                 TsField {
                     name: "id".to_string(),
                     ts_type: "number".to_string(),
-                    wire_decode_expr: "reader.readI32()".to_string(),
-                    wire_encode_expr: "writer.writeI32(value.id)".to_string(),
-                    wire_size_expr: "4".to_string(),
+                    decode: primitive_read(PrimitiveType::I32),
+                    encode: primitive_write(PrimitiveType::I32, "id"),
                     doc: None,
                 },
                 TsField {
                     name: "name".to_string(),
                     ts_type: "string".to_string(),
-                    wire_decode_expr: "reader.readString()".to_string(),
-                    wire_encode_expr: "writer.writeString(value.name)".to_string(),
-                    wire_size_expr: "wireStringSize(value.name)".to_string(),
+                    decode: string_read(),
+                    encode: string_write("name"),
                     doc: Some("The user's display name".to_string()),
                 },
             ],
@@ -315,9 +380,8 @@ mod tests {
                 fields: vec![TsVariantField {
                     name: "radius".to_string(),
                     ts_type: "number".to_string(),
-                    wire_decode_expr: "reader.readF64()".to_string(),
-                    wire_encode_expr: "writer.writeF64(value.radius)".to_string(),
-                    wire_size_expr: "8".to_string(),
+                    decode: primitive_read(PrimitiveType::F64),
+                    encode: primitive_write(PrimitiveType::F64, "radius"),
                 }],
                 doc: None,
             },
@@ -328,16 +392,14 @@ mod tests {
                     TsVariantField {
                         name: "width".to_string(),
                         ts_type: "number".to_string(),
-                        wire_decode_expr: "reader.readF64()".to_string(),
-                        wire_encode_expr: "writer.writeF64(value.width)".to_string(),
-                        wire_size_expr: "8".to_string(),
+                        decode: primitive_read(PrimitiveType::F64),
+                        encode: primitive_write(PrimitiveType::F64, "width"),
                     },
                     TsVariantField {
                         name: "height".to_string(),
                         ts_type: "number".to_string(),
-                        wire_decode_expr: "reader.readF64()".to_string(),
-                        wire_encode_expr: "writer.writeF64(value.height)".to_string(),
-                        wire_size_expr: "8".to_string(),
+                        decode: primitive_read(PrimitiveType::F64),
+                        encode: primitive_write(PrimitiveType::F64, "height"),
                     },
                 ],
                 doc: None,
