@@ -16,6 +16,14 @@ import {
   echoClassroom, makeClassroom,
   Status, echoStatus, statusToString,
   echoShape, shapeArea, makeCircle, makeRectangle,
+  echoOptionalI32, echoOptionalString, echoOptionalPoint,
+  unwrapOrDefaultI32, isSomeString, makeSomePoint, makeNonePoint,
+  MathError, safeDivide, safeSqrt, parsePoint, alwaysOk, alwaysErr,
+  echoBytes, bytesLength, bytesSum, makeBytes, reverseBytes,
+  echoDuration, makeDuration, durationAsMillis,
+  echoSystemTime, systemTimeToMillis, millisToSystemTime,
+  echoUuid, uuidToString,
+  echoUrl, urlToString,
 } from './dist/wasm/pkg/node.js';
 
 await initialized;
@@ -170,5 +178,113 @@ assert(echoedCircle.radius === 2.5, 'echoShape circle radius');
 const echoedPoint = echoShape({ tag: 'Point' });
 assert(echoedPoint.tag === 'Point', 'echoShape point tag');
 assert(shapeArea({ tag: 'Point' }) === 0.0, 'shapeArea point');
+
+console.log('Testing Option<T>...');
+assert(echoOptionalI32(42) === 42, 'echoOptionalI32 some');
+assert(echoOptionalI32(null) === null, 'echoOptionalI32 none');
+assert(echoOptionalI32(0) === 0, 'echoOptionalI32 zero');
+
+assert(echoOptionalString('hello') === 'hello', 'echoOptionalString some');
+assert(echoOptionalString(null) === null, 'echoOptionalString none');
+assert(echoOptionalString('') === '', 'echoOptionalString empty');
+
+const optPoint = echoOptionalPoint({ x: 1, y: 2 });
+assert(optPoint !== null && optPoint.x === 1 && optPoint.y === 2, 'echoOptionalPoint some');
+assert(echoOptionalPoint(null) === null, 'echoOptionalPoint none');
+
+assert(unwrapOrDefaultI32(10, 5) === 10, 'unwrapOrDefaultI32 some');
+assert(unwrapOrDefaultI32(null, 5) === 5, 'unwrapOrDefaultI32 none');
+
+assert(isSomeString('test') === true, 'isSomeString true');
+assert(isSomeString(null) === false, 'isSomeString false');
+
+const somePoint = makeSomePoint(3, 4);
+assert(somePoint !== null && somePoint.x === 3 && somePoint.y === 4, 'makeSomePoint');
+assert(makeNonePoint() === null, 'makeNonePoint');
+
+console.log('Testing Result<T, E>...');
+assert(safeDivide(10, 2) === 5, 'safeDivide ok');
+try {
+  safeDivide(10, 0);
+  assert(false, 'safeDivide should throw on division by zero');
+} catch (e) {
+  assert(e === MathError.DivisionByZero, 'safeDivide err');
+}
+
+assert(Math.abs(safeSqrt(16) - 4) < 0.0001, 'safeSqrt ok');
+try {
+  safeSqrt(-1);
+  assert(false, 'safeSqrt should throw on negative input');
+} catch (e) {
+  assert(e === MathError.NegativeInput, 'safeSqrt err');
+}
+
+const point = parsePoint('3.5, 4.5');
+assert(Math.abs(point.x - 3.5) < 0.0001 && Math.abs(point.y - 4.5) < 0.0001, 'parsePoint ok');
+try {
+  parsePoint('invalid');
+  assert(false, 'parsePoint should throw on invalid input');
+} catch (e) {
+  assert(typeof e === 'string', 'parsePoint err is string');
+}
+
+assert(alwaysOk(5) === 10, 'alwaysOk');
+try {
+  alwaysErr('test error');
+  assert(false, 'alwaysErr should throw');
+} catch (e) {
+  assert(e === 'test error', 'alwaysErr');
+}
+
+console.log('Testing Vec<u8>/Bytes...');
+const testBytes = new Uint8Array([1, 2, 3, 4, 5]);
+const echoed = echoBytes(testBytes);
+assert(echoed.length === 5, 'echoBytes length');
+assert(echoed[0] === 1 && echoed[4] === 5, 'echoBytes content');
+
+assert(bytesLength(testBytes) === 5, 'bytesLength');
+assert(bytesSum(testBytes) === 15, 'bytesSum');
+
+const generated = makeBytes(10);
+assert(generated.length === 10, 'makeBytes length');
+assert(generated[0] === 0 && generated[9] === 9, 'makeBytes content');
+
+const reversed = reverseBytes(new Uint8Array([1, 2, 3]));
+assert(reversed[0] === 3 && reversed[1] === 2 && reversed[2] === 1, 'reverseBytes');
+
+const empty = echoBytes(new Uint8Array(0));
+assert(empty.length === 0, 'echoBytes empty');
+
+console.log('Testing Duration...');
+const duration = makeDuration(5n, 500000000);
+assert(duration.secs === 5n, 'makeDuration secs');
+assert(duration.nanos === 500000000, 'makeDuration nanos');
+
+const echoDur = echoDuration({ secs: 10n, nanos: 123456789 });
+assert(echoDur.secs === 10n && echoDur.nanos === 123456789, 'echoDuration');
+
+assert(durationAsMillis({ secs: 1n, nanos: 500000000 }) === 1500n, 'durationAsMillis');
+
+console.log('Testing SystemTime...');
+const now = new Date();
+const echoedTime = echoSystemTime(now);
+assert(Math.abs(echoedTime.getTime() - now.getTime()) < 1000, 'echoSystemTime');
+
+const msTime = systemTimeToMillis(new Date(1700000000000));
+assert(msTime === 1700000000000n, 'systemTimeToMillis');
+
+const fromMs = millisToSystemTime(1700000000000n);
+assert(fromMs.getTime() === 1700000000000, 'millisToSystemTime');
+
+console.log('Testing Uuid...');
+const testUuid = '550e8400-e29b-41d4-a716-446655440000';
+assert(uuidToString(testUuid).toLowerCase() === testUuid.toLowerCase(), 'uuidToString');
+assert(echoUuid(testUuid).toLowerCase() === testUuid.toLowerCase(), 'echoUuid');
+
+console.log('Testing Url...');
+const testUrl = 'https://example.com/path?query=1';
+const echoedUrl = echoUrl(testUrl);
+assert(echoedUrl === testUrl, 'echoUrl');
+assert(urlToString(testUrl) === testUrl, 'urlToString');
 
 console.log('\nAll tests passed!');
