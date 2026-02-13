@@ -93,6 +93,12 @@ pub struct FunctionTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "render_typescript/class.txt", escape = "none")]
+pub struct ClassTemplate<'a> {
+    pub cls: &'a TsClass,
+}
+
+#[derive(Template)]
 #[template(path = "render_typescript/callback.txt", escape = "none")]
 pub struct CallbackTemplate<'a> {
     pub callback: &'a TsCallback,
@@ -268,6 +274,11 @@ impl TypeScriptEmitter {
                 .render()
                 .unwrap(),
             );
+            output.push_str("\n\n");
+        }
+
+        for class in &module.classes {
+            output.push_str(&ClassTemplate { cls: class }.render().unwrap());
             output.push_str("\n\n");
         }
 
@@ -584,6 +595,64 @@ mod tests {
             decode_expr: "reader.readArray(() => decodeUser(reader))",
             doc: &doc,
         };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    #[test]
+    fn snapshot_class_with_constructor_and_methods() {
+        let class = TsClass {
+            class_name: "Counter".to_string(),
+            ffi_free: "boltffi_counter_free".to_string(),
+            constructors: vec![TsClassConstructor {
+                ts_name: "new".to_string(),
+                ffi_name: "boltffi_counter_new".to_string(),
+                is_default: true,
+                params: vec![],
+                returns_nullable_handle: false,
+                doc: Some("Creates a counter".to_string()),
+            }],
+            methods: vec![
+                TsClassMethod {
+                    ts_name: "increment".to_string(),
+                    ffi_name: "boltffi_counter_increment".to_string(),
+                    is_static: false,
+                    params: vec![TsParam {
+                        name: "delta".to_string(),
+                        ts_type: "number".to_string(),
+                        conversion: TsParamConversion::Direct,
+                    }],
+                    return_type: Some("number".to_string()),
+                    return_handle: None,
+                    mode: TsClassMethodMode::Sync(TsClassSyncMethod {
+                        return_abi: TsReturnAbi::Direct {
+                            ts_cast: String::new(),
+                        },
+                        decode_expr: String::new(),
+                    }),
+                    doc: None,
+                },
+                TsClassMethod {
+                    ts_name: "nextValue".to_string(),
+                    ffi_name: "boltffi_counter_next_value".to_string(),
+                    is_static: false,
+                    params: vec![],
+                    return_type: Some("number".to_string()),
+                    return_handle: None,
+                    mode: TsClassMethodMode::Async(TsClassAsyncMethod {
+                        poll_sync_ffi_name: "boltffi_counter_next_value_poll_sync".to_string(),
+                        complete_ffi_name: "boltffi_counter_next_value_complete".to_string(),
+                        panic_message_ffi_name: "boltffi_counter_next_value_panic_message"
+                            .to_string(),
+                        cancel_ffi_name: "boltffi_counter_next_value_cancel".to_string(),
+                        free_ffi_name: "boltffi_counter_next_value_free".to_string(),
+                        decode_expr: "reader.readI32()".to_string(),
+                    }),
+                    doc: None,
+                },
+            ],
+            doc: Some("A counter class".to_string()),
+        };
+        let template = ClassTemplate { cls: &class };
         insta::assert_snapshot!(template.render().unwrap());
     }
 

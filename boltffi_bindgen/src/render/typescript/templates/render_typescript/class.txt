@@ -1,0 +1,90 @@
+{%- let registry_name = format!("_{}Registry", cls.class_name.to_lowercase()) -%}
+const {{ registry_name }} = new FinalizationRegistry<number>((handle) => {
+  if (_module.isAlive) {
+    (_module.exports.{{ cls.ffi_free }} as Function)(handle);
+  }
+});
+
+{%- if let Some(text) = cls.doc %}
+/**
+{%- for line in text.lines() %}
+ * {{ line }}
+{%- endfor %}
+ */
+{% endif -%}
+export class {{ cls.class_name }} {
+  private _handle: number;
+  private _freed: boolean = false;
+
+{%- if cls.has_default_constructor() %}
+{%- if let Some(ctor) = cls.default_constructor() %}
+{%- if let Some(doc_text) = ctor.doc %}
+  /**
+{%- for line in doc_text.lines() %}
+   * {{ line }}
+{%- endfor %}
+   */
+{%- endif %}
+  constructor({% for p in ctor.params %}{{ p.name }}: {{ p.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}) {
+{%- let wrapper_code = ctor.wrapper_code() %}
+{%- if !wrapper_code.is_empty() %}
+    {{ wrapper_code }}
+{%- endif %}
+    this._handle = (_module.exports.{{ ctor.ffi_name }} as Function)({{ ctor.ffi_call_args() }});
+{%- let cleanup_code = ctor.cleanup_code() %}
+{%- if !cleanup_code.is_empty() %}
+    {{ cleanup_code }}
+{%- endif %}
+{%- if ctor.returns_nullable_handle %}
+    if (this._handle === 0) {
+      throw new Error("{{ cls.class_name }} constructor failed");
+    }
+{%- endif %}
+    {{ registry_name }}.register(this, this._handle);
+  }
+{%- endif %}
+{%- else %}
+  private constructor(handle: number) {
+    this._handle = handle;
+    {{ registry_name }}.register(this, handle);
+  }
+{%- endif %}
+
+{%- for ctor in cls.named_constructors() %}
+{%- if let Some(doc_text) = ctor.doc %}
+  /**
+{%- for line in doc_text.lines() %}
+   * {{ line }}
+{%- endfor %}
+   */
+{%- endif %}
+  static {{ ctor.ts_name }}({% for p in ctor.params %}{{ p.name }}: {{ p.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ cls.class_name }}{% if ctor.returns_nullable_handle %} | null{% endif %} {
+{%- let wrapper_code = ctor.wrapper_code() %}
+{%- if !wrapper_code.is_empty() %}
+    {{ wrapper_code }}
+{%- endif %}
+    const handle = (_module.exports.{{ ctor.ffi_name }} as Function)({{ ctor.ffi_call_args() }});
+{%- let cleanup_code = ctor.cleanup_code() %}
+{%- if !cleanup_code.is_empty() %}
+    {{ cleanup_code }}
+{%- endif %}
+{%- if ctor.returns_nullable_handle %}
+    if (handle === 0) {
+      return null;
+    }
+{%- endif %}
+    const instance = Object.create({{ cls.class_name }}.prototype) as {{ cls.class_name }};
+    instance._handle = handle;
+    instance._freed = false;
+    {{ registry_name }}.register(instance, handle);
+    return instance;
+  }
+{%- endfor %}
+
+  [Symbol.dispose](): void {
+    if (!this._freed) {
+      this._freed = true;
+      (_module.exports.{{ cls.ffi_free }} as Function)(this._handle);
+    }
+  }
+}

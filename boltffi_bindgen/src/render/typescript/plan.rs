@@ -10,6 +10,7 @@ pub struct TsModule {
     pub enums: Vec<TsEnum>,
     pub functions: Vec<TsFunction>,
     pub async_functions: Vec<TsAsyncFunction>,
+    pub classes: Vec<TsClass>,
     pub callbacks: Vec<TsCallback>,
     pub wasm_imports: Vec<TsWasmImport>,
 }
@@ -29,6 +30,146 @@ pub struct TsAsyncFunction {
     pub throws: bool,
     pub err_type: String,
     pub doc: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TsClass {
+    pub class_name: String,
+    pub ffi_free: String,
+    pub constructors: Vec<TsClassConstructor>,
+    pub methods: Vec<TsClassMethod>,
+    pub doc: Option<String>,
+}
+
+impl TsClass {
+    pub fn has_default_constructor(&self) -> bool {
+        self.constructors.iter().any(|constructor| constructor.is_default)
+    }
+
+    pub fn default_constructor(&self) -> Option<&TsClassConstructor> {
+        self.constructors
+            .iter()
+            .find(|constructor| constructor.is_default)
+    }
+
+    pub fn named_constructors(&self) -> Vec<&TsClassConstructor> {
+        self.constructors
+            .iter()
+            .filter(|constructor| !constructor.is_default)
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TsClassConstructor {
+    pub ts_name: String,
+    pub ffi_name: String,
+    pub is_default: bool,
+    pub params: Vec<TsParam>,
+    pub returns_nullable_handle: bool,
+    pub doc: Option<String>,
+}
+
+impl TsClassConstructor {
+    pub fn wrapper_code(&self) -> String {
+        self.params
+            .iter()
+            .filter_map(TsParam::wrapper_code)
+            .collect::<Vec<_>>()
+            .join("\n    ")
+    }
+
+    pub fn cleanup_code(&self) -> String {
+        self.params
+            .iter()
+            .filter_map(TsParam::cleanup_code)
+            .collect::<Vec<_>>()
+            .join("\n      ")
+    }
+
+    pub fn ffi_call_args(&self) -> String {
+        flatten_ffi_args(&self.params).join(", ")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TsClassMethod {
+    pub ts_name: String,
+    pub ffi_name: String,
+    pub is_static: bool,
+    pub params: Vec<TsParam>,
+    pub return_type: Option<String>,
+    pub return_handle: Option<TsHandleReturn>,
+    pub mode: TsClassMethodMode,
+    pub doc: Option<String>,
+}
+
+impl TsClassMethod {
+    pub fn wrapper_code(&self) -> String {
+        self.params
+            .iter()
+            .filter_map(TsParam::wrapper_code)
+            .collect::<Vec<_>>()
+            .join("\n    ")
+    }
+
+    pub fn cleanup_code(&self) -> String {
+        self.params
+            .iter()
+            .filter_map(TsParam::cleanup_code)
+            .collect::<Vec<_>>()
+            .join("\n      ")
+    }
+
+    pub fn ffi_call_args(&self) -> String {
+        let mut call_args = Vec::new();
+        if !self.is_static {
+            call_args.push("this._handle".to_string());
+        }
+        call_args.extend(flatten_ffi_args(&self.params));
+        call_args.join(", ")
+    }
+
+    pub fn ffi_call_args_with_out(&self) -> String {
+        let call_args = self.ffi_call_args();
+        if call_args.is_empty() {
+            "outPtr".to_string()
+        } else {
+            format!("outPtr, {call_args}")
+        }
+    }
+
+    pub fn is_async(&self) -> bool {
+        matches!(self.mode, TsClassMethodMode::Async(_))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TsHandleReturn {
+    pub class_name: String,
+    pub nullable: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum TsClassMethodMode {
+    Sync(TsClassSyncMethod),
+    Async(TsClassAsyncMethod),
+}
+
+#[derive(Debug, Clone)]
+pub struct TsClassSyncMethod {
+    pub return_abi: TsReturnAbi,
+    pub decode_expr: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TsClassAsyncMethod {
+    pub poll_sync_ffi_name: String,
+    pub complete_ffi_name: String,
+    pub panic_message_ffi_name: String,
+    pub cancel_ffi_name: String,
+    pub free_ffi_name: String,
+    pub decode_expr: String,
 }
 
 #[derive(Debug, Clone)]
@@ -299,6 +440,10 @@ impl TsParam {
     pub fn needs_cleanup(&self) -> bool {
         !matches!(self.conversion, TsParamConversion::Direct)
     }
+}
+
+fn flatten_ffi_args(params: &[TsParam]) -> Vec<String> {
+    params.iter().flat_map(TsParam::ffi_args).collect()
 }
 
 #[derive(Debug, Clone)]

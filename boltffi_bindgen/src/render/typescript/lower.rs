@@ -8,7 +8,8 @@ use crate::ir::abi::{
 };
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{
-    CallbackTraitDef, EnumDef, FunctionDef, ParamDef, RecordDef, ReturnDef,
+    CallbackTraitDef, ClassDef, ConstructorDef, EnumDef, FunctionDef, MethodDef, ParamDef,
+    RecordDef, Receiver, ReturnDef,
 };
 use crate::ir::ids::{CallbackId, EnumId, FieldName, RecordId};
 use crate::ir::ops::{
@@ -129,6 +130,13 @@ impl<'a> TypeScriptLowerer<'a> {
             .filter_map(|def| self.lower_async_function(def, &index))
             .collect();
 
+        let classes = self
+            .contract
+            .catalog
+            .all_classes()
+            .map(|def| self.lower_class(def, &index))
+            .collect();
+
         let wasm_imports = self.collect_wasm_imports(&index);
 
         let callbacks = self
@@ -145,6 +153,7 @@ impl<'a> TypeScriptLowerer<'a> {
             enums,
             functions,
             async_functions,
+            classes,
             callbacks,
             wasm_imports,
         }
@@ -243,6 +252,188 @@ impl<'a> TypeScriptLowerer<'a> {
             variants,
             kind,
             doc: def.doc.clone(),
+        }
+    }
+
+    fn lower_class(&self, def: &ClassDef, index: &AbiIndex) -> TsClass {
+        let class_name = naming::to_upper_camel_case(def.id.as_str());
+        let ffi_free = naming::class_ffi_free(def.id.as_str())
+            .as_str()
+            .to_string();
+
+        let constructors = def
+            .constructors
+            .iter()
+            .enumerate()
+            .map(|(constructor_index, constructor)| {
+                self.lower_class_constructor(def, constructor, constructor_index, index)
+            })
+            .collect();
+
+        let methods = def
+            .methods
+            .iter()
+            .map(|method| self.lower_class_method(def, method, index))
+            .collect();
+
+        TsClass {
+            class_name,
+            ffi_free,
+            constructors,
+            methods,
+            doc: def.doc.clone(),
+        }
+    }
+
+    fn lower_class_constructor(
+        &self,
+        class_def: &ClassDef,
+        constructor: &ConstructorDef,
+        constructor_index: usize,
+        index: &AbiIndex,
+    ) -> TsClassConstructor {
+        let call_id = CallId::Constructor {
+            class_id: class_def.id.clone(),
+            index: constructor_index,
+        };
+        let abi_call = index.call(self.abi, &call_id);
+
+        let ts_name = constructor
+            .name()
+            .map(|method_id| emit::escape_ts_keyword(&camel_case(method_id.as_str())))
+            .unwrap_or_else(|| "new".to_string());
+
+        let param_defs: HashMap<&str, &ParamDef> = constructor
+            .params()
+            .into_iter()
+            .map(|param| (param.name.as_str(), param))
+            .collect();
+
+        let params = abi_call
+            .params
+            .iter()
+            .filter(|parameter| {
+                !matches!(
+                    parameter.role,
+                    ParamRole::SyntheticLen { .. } | ParamRole::OutLen { .. } | ParamRole::StatusOut
+                )
+            })
+            .map(|abi_param| {
+                let param_def = param_defs.get(abi_param.name.as_str()).copied();
+                self.lower_param(param_def, abi_param)
+            })
+            .collect();
+
+        TsClassConstructor {
+            ts_name,
+            ffi_name: abi_call.symbol.as_str().to_string(),
+            is_default: constructor.name().is_none(),
+            params,
+            returns_nullable_handle: matches!(
+                abi_call.return_,
+                ReturnTransport::Handle { nullable: true, .. }
+            ),
+            doc: constructor.doc().map(String::from),
+        }
+    }
+
+    fn lower_class_method(
+        &self,
+        class_def: &ClassDef,
+        method_def: &MethodDef,
+        index: &AbiIndex,
+    ) -> TsClassMethod {
+        let call_id = CallId::Method {
+            class_id: class_def.id.clone(),
+            method_id: method_def.id.clone(),
+        };
+        let abi_call = index.call(self.abi, &call_id);
+        let is_static = method_def.receiver == Receiver::Static;
+
+        let param_defs: HashMap<&str, &ParamDef> = method_def
+            .params
+            .iter()
+            .map(|param| (param.name.as_str(), param))
+            .collect();
+
+        let params = abi_call
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(param_index, parameter)| {
+                if matches!(
+                    parameter.role,
+                    ParamRole::SyntheticLen { .. } | ParamRole::OutLen { .. } | ParamRole::StatusOut
+                ) {
+                    return false;
+                }
+                if !is_static
+                    && *param_index == 0
+                    && matches!(parameter.role, ParamRole::InHandle { .. })
+                {
+                    return false;
+                }
+                true
+            })
+            .map(|(_, abi_param)| {
+                let param_def = param_defs.get(abi_param.name.as_str()).copied();
+                self.lower_param(param_def, abi_param)
+            })
+            .collect();
+
+        let (return_type, return_handle, mode) = match &abi_call.mode {
+            CallMode::Sync => {
+                let (return_type, return_abi, decode_expr) = self.lower_return(&abi_call.return_);
+                let return_handle = match &abi_call.return_ {
+                    ReturnTransport::Handle { class_id, nullable } => Some(TsHandleReturn {
+                        class_name: naming::to_upper_camel_case(class_id.as_str()),
+                        nullable: *nullable,
+                    }),
+                    _ => None,
+                };
+                (
+                    return_type,
+                    return_handle,
+                    TsClassMethodMode::Sync(TsClassSyncMethod {
+                        return_abi,
+                        decode_expr,
+                    }),
+                )
+            }
+            CallMode::Async(async_call) => {
+                let entry_ffi_name = abi_call.symbol.as_str().to_string();
+                let (return_type, decode_expr) = self.lower_async_result(&async_call.result);
+                let return_handle = match &async_call.result {
+                    AsyncResultTransport::Handle { class_id, nullable } => Some(TsHandleReturn {
+                        class_name: naming::to_upper_camel_case(class_id.as_str()),
+                        nullable: *nullable,
+                    }),
+                    _ => None,
+                };
+                (
+                    return_type,
+                    return_handle,
+                    TsClassMethodMode::Async(TsClassAsyncMethod {
+                        poll_sync_ffi_name: format!("{entry_ffi_name}_poll_sync"),
+                        complete_ffi_name: format!("{entry_ffi_name}_complete"),
+                        panic_message_ffi_name: format!("{entry_ffi_name}_panic_message"),
+                        cancel_ffi_name: format!("{entry_ffi_name}_cancel"),
+                        free_ffi_name: format!("{entry_ffi_name}_free"),
+                        decode_expr,
+                    }),
+                )
+            }
+        };
+
+        TsClassMethod {
+            ts_name: emit::escape_ts_keyword(&camel_case(method_def.id.as_str())),
+            ffi_name: abi_call.symbol.as_str().to_string(),
+            is_static,
+            params,
+            return_type,
+            return_handle,
+            mode,
+            doc: method_def.doc.clone(),
         }
     }
 
@@ -1127,8 +1318,11 @@ mod tests {
     use super::*;
     use crate::ir::Lowerer as IrLowerer;
     use crate::ir::contract::{FfiContract, PackageInfo};
-    use crate::ir::definitions::{FunctionDef, ParamDef, ParamPassing, ReturnDef};
-    use crate::ir::ids::{FunctionId, ParamName};
+    use crate::ir::definitions::{
+        ClassDef, ConstructorDef, FunctionDef, MethodDef, ParamDef, ParamPassing, Receiver,
+        ReturnDef,
+    };
+    use crate::ir::ids::{ClassId, FunctionId, MethodId, ParamName};
 
     fn empty_contract() -> FfiContract {
         FfiContract {
@@ -1178,6 +1372,41 @@ mod tests {
     fn lower_contract(contract: &FfiContract) -> TsModule {
         let abi = IrLowerer::new(contract).to_abi_contract();
         TypeScriptLowerer::new(contract, &abi, "Test".to_string()).lower()
+    }
+
+    fn class_with_sync_and_async_methods() -> ClassDef {
+        ClassDef {
+            id: ClassId::new("Counter"),
+            constructors: vec![ConstructorDef::Default {
+                params: vec![],
+                is_fallible: false,
+                doc: None,
+                deprecated: None,
+            }],
+            methods: vec![
+                MethodDef {
+                    id: MethodId::new("increment"),
+                    receiver: Receiver::RefSelf,
+                    params: vec![primitive_param("delta", PrimitiveType::I32)],
+                    returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+                    is_async: false,
+                    doc: None,
+                    deprecated: None,
+                },
+                MethodDef {
+                    id: MethodId::new("next_value"),
+                    receiver: Receiver::RefSelf,
+                    params: vec![],
+                    returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+                    is_async: true,
+                    doc: None,
+                    deprecated: None,
+                },
+            ],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        }
     }
 
     #[test]
@@ -1256,6 +1485,65 @@ mod tests {
 
         assert_eq!(module.wasm_imports.len(), 1);
         assert_eq!(module.wasm_imports[0].ffi_name, "boltffi_sync_value");
+    }
+
+    #[test]
+    fn class_instance_methods_exclude_receiver_from_public_params() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(class_with_sync_and_async_methods());
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.class_name == "Counter")
+            .expect("class should be lowered");
+        let method = class
+            .methods
+            .iter()
+            .find(|method| method.ts_name == "increment")
+            .expect("instance method should be lowered");
+
+        assert_eq!(method.params.len(), 1);
+        assert_eq!(method.params[0].name, "delta");
+        assert_eq!(method.ffi_call_args(), "this._handle, delta");
+    }
+
+    #[test]
+    fn class_async_methods_generate_wasm_poll_sync_symbol_names() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(class_with_sync_and_async_methods());
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.class_name == "Counter")
+            .expect("class should be lowered");
+        let method = class
+            .methods
+            .iter()
+            .find(|method| method.ts_name == "nextValue")
+            .expect("async method should be lowered");
+
+        match &method.mode {
+            TsClassMethodMode::Async(async_method) => {
+                assert_eq!(method.ffi_name, "boltffi_counter_next_value");
+                assert_eq!(
+                    async_method.poll_sync_ffi_name,
+                    "boltffi_counter_next_value_poll_sync"
+                );
+                assert_eq!(
+                    async_method.complete_ffi_name,
+                    "boltffi_counter_next_value_complete"
+                );
+                assert_eq!(
+                    async_method.panic_message_ffi_name,
+                    "boltffi_counter_next_value_panic_message"
+                );
+            }
+            TsClassMethodMode::Sync(_) => panic!("expected async class method mode"),
+        }
     }
 
     #[test]
