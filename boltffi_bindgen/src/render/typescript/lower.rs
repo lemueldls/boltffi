@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use boltffi_ffi_rules::naming::{self, snake_to_camel as camel_case};
 
@@ -116,14 +116,14 @@ impl<'a> TypeScriptLowerer<'a> {
             .map(|def| self.lower_enum(def, &index))
             .collect();
 
-        let functions = self
+        let functions: Vec<TsFunction> = self
             .contract
             .functions
             .iter()
             .filter_map(|def| self.lower_function(def, &index))
             .collect();
 
-        let async_functions = self
+        let async_functions: Vec<TsAsyncFunction> = self
             .contract
             .functions
             .iter()
@@ -146,17 +146,67 @@ impl<'a> TypeScriptLowerer<'a> {
             .map(|def| self.lower_callback(def, &index))
             .collect();
 
+        let error_exceptions = self.collect_error_exceptions(&functions, &async_functions, &index);
+
         TsModule {
             module_name: self.module_name.clone(),
             abi_version: 1,
             records,
             enums,
+            error_exceptions,
             functions,
             async_functions,
             classes,
             callbacks,
             wasm_imports,
         }
+    }
+
+    fn collect_error_exceptions(
+        &self,
+        functions: &[TsFunction],
+        async_functions: &[TsAsyncFunction],
+        index: &AbiIndex,
+    ) -> Vec<TsErrorException> {
+        let mut error_types: HashSet<String> = HashSet::new();
+
+        for func in functions {
+            if func.throws && !func.err_type.is_empty() && !is_excluded_error_type(&func.err_type)
+            {
+                error_types.insert(func.err_type.clone());
+            }
+        }
+
+        for func in async_functions {
+            if func.throws
+                && !func.err_type.is_empty()
+                && !is_excluded_error_type(&func.err_type)
+            {
+                error_types.insert(func.err_type.clone());
+            }
+        }
+
+        error_types
+            .into_iter()
+            .map(|type_name| {
+                let is_c_style_enum = self
+                    .contract
+                    .catalog
+                    .all_enums()
+                    .find(|e| naming::to_upper_camel_case(e.id.as_str()) == type_name)
+                    .map(|e| {
+                        let abi_enum = index.enumeration(self.abi, &e.id);
+                        abi_enum.is_c_style
+                    })
+                    .unwrap_or(false);
+
+                TsErrorException {
+                    class_name: format!("{}Exception", type_name),
+                    type_name,
+                    is_c_style_enum,
+                }
+            })
+            .collect()
     }
 
     fn lower_record(&self, def: &RecordDef, index: &AbiIndex) -> TsRecord {
@@ -983,6 +1033,13 @@ impl<'a> TypeScriptLowerer<'a> {
 
         imports
     }
+}
+
+fn is_excluded_error_type(err_type: &str) -> bool {
+    matches!(
+        err_type,
+        "String" | "string" | "FfiError" | "Error" | "unknown"
+    )
 }
 
 fn ts_abi_type(abi_type: &AbiType) -> String {

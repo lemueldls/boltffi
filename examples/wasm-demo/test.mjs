@@ -18,7 +18,7 @@ import {
   echoShape, shapeArea, makeCircle, makeRectangle,
   echoOptionalI32, echoOptionalString, echoOptionalPoint,
   unwrapOrDefaultI32, isSomeString, makeSomePoint, makeNonePoint,
-  MathError, safeDivide, safeSqrt, parsePoint, alwaysOk, alwaysErr,
+  MathError, MathErrorException, safeDivide, safeSqrt, parsePoint, alwaysOk, alwaysErr,
   echoBytes, bytesLength, bytesSum, makeBytes, reverseBytes,
   echoDuration, makeDuration, durationAsMillis,
   echoSystemTime, systemTimeToMillis, millisToSystemTime,
@@ -219,7 +219,8 @@ try {
   safeDivide(10, 0);
   assert(false, 'safeDivide should throw on division by zero');
 } catch (e) {
-  assert(e === MathError.DivisionByZero, 'safeDivide err');
+  assert(e instanceof MathErrorException, 'safeDivide err type');
+  assert(e.code === MathError.DivisionByZero, 'safeDivide err code');
 }
 
 assert(Math.abs(safeSqrt(16) - 4) < 0.0001, 'safeSqrt ok');
@@ -227,7 +228,8 @@ try {
   safeSqrt(-1);
   assert(false, 'safeSqrt should throw on negative input');
 } catch (e) {
-  assert(e === MathError.NegativeInput, 'safeSqrt err');
+  assert(e instanceof MathErrorException, 'safeSqrt err type');
+  assert(e.code === MathError.NegativeInput, 'safeSqrt err code');
 }
 
 const point = parsePoint('3.5, 4.5');
@@ -236,7 +238,8 @@ try {
   parsePoint('invalid');
   assert(false, 'parsePoint should throw on invalid input');
 } catch (e) {
-  assert(typeof e === 'string', 'parsePoint err is string');
+  assert(e instanceof Error, 'parsePoint err is Error');
+  assert(typeof e.message === 'string', 'parsePoint err has message');
 }
 
 assert(alwaysOk(5) === 10, 'alwaysOk');
@@ -244,7 +247,8 @@ try {
   alwaysErr('test error');
   assert(false, 'alwaysErr should throw');
 } catch (e) {
-  assert(e === 'test error', 'alwaysErr');
+  assert(e instanceof Error, 'alwaysErr is Error');
+  assert(e.message === 'test error', 'alwaysErr message');
 }
 
 console.log('Testing Vec<u8>/Bytes...');

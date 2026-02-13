@@ -8,11 +8,19 @@ pub struct TsModule {
     pub abi_version: u32,
     pub records: Vec<TsRecord>,
     pub enums: Vec<TsEnum>,
+    pub error_exceptions: Vec<TsErrorException>,
     pub functions: Vec<TsFunction>,
     pub async_functions: Vec<TsAsyncFunction>,
     pub classes: Vec<TsClass>,
     pub callbacks: Vec<TsCallback>,
     pub wasm_imports: Vec<TsWasmImport>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TsErrorException {
+    pub type_name: String,
+    pub class_name: String,
+    pub is_c_style_enum: bool,
 }
 
 #[derive(Debug, Clone)]

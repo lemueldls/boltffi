@@ -180,10 +180,32 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
         ReadOp::Result { ok, err, .. } => {
             let ok_read = emit_reader_read(ok);
             let err_read = emit_reader_read(err);
-            format!("reader.readResult(() => {ok_read}, () => {err_read})")
+            let wrapped_err = wrap_error_in_exception(err, &err_read);
+            format!("reader.readResult(() => {ok_read}, () => {wrapped_err})")
         }
         ReadOp::Custom { underlying, .. } => emit_reader_read(underlying),
     }
+}
+
+fn wrap_error_in_exception(err_seq: &ReadSeq, err_read: &str) -> String {
+    err_seq
+        .ops
+        .first()
+        .map(|op| match op {
+            ReadOp::Enum { id, .. } => {
+                let exception_name = format!("{}Exception", to_pascal_case(id.as_str()));
+                format!("new {exception_name}({err_read})")
+            }
+            ReadOp::Record { id, .. } => {
+                let exception_name = format!("{}Exception", to_pascal_case(id.as_str()));
+                format!("new {exception_name}({err_read})")
+            }
+            ReadOp::String { .. } => {
+                format!("new Error({err_read})")
+            }
+            _ => format!("new Error(String({err_read}))")
+        })
+        .unwrap_or_else(|| format!("new Error(String({err_read}))"))
 }
 
 pub fn emit_writer_write(seq: &WriteSeq, writer: &str, value: &str) -> String {

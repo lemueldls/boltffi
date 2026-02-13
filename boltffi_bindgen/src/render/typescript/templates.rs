@@ -77,6 +77,14 @@ pub struct EnumDataTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "render_typescript/error_exception.txt", escape = "none")]
+pub struct ErrorExceptionTemplate<'a> {
+    pub type_name: &'a str,
+    pub class_name: &'a str,
+    pub is_c_style_enum: bool,
+}
+
+#[derive(Template)]
 #[template(path = "render_typescript/function.txt", escape = "none")]
 pub struct FunctionTemplate<'a> {
     pub name: &'a str,
@@ -177,6 +185,19 @@ impl TypeScriptEmitter {
                     .unwrap(),
                 );
             }
+            output.push_str("\n\n");
+        }
+
+        for error_exception in &module.error_exceptions {
+            output.push_str(
+                &ErrorExceptionTemplate {
+                    type_name: &error_exception.type_name,
+                    class_name: &error_exception.class_name,
+                    is_c_style_enum: error_exception.is_c_style_enum,
+                }
+                .render()
+                .unwrap(),
+            );
             output.push_str("\n\n");
         }
 
