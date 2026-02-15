@@ -750,7 +750,7 @@ mod tests {
             name: "reset",
             params: &[],
             return_type_str: "void",
-            return_route: &TsOutputRoute::Void,
+            return_route: &TsOutputRoute::void(),
             ffi_name: "boltffi_reset",
             call_args: "",
             call_args_with_out: "outPtr",
@@ -780,9 +780,7 @@ mod tests {
             name: "add",
             params: &params,
             return_type_str: "number",
-            return_route: &TsOutputRoute::Direct {
-                ts_cast: String::new(),
-            },
+            return_route: &TsOutputRoute::direct(String::new()),
             ffi_name: "boltffi_add",
             call_args: "a, b",
             call_args_with_out: "outPtr, a, b",
@@ -800,9 +798,9 @@ mod tests {
             name: "getUsers",
             params: &[],
             return_type_str: "User[]",
-            return_route: &TsOutputRoute::Packed {
-                decode_expr: "reader.readArray(() => decodeUser(reader))".to_string(),
-            },
+            return_route: &TsOutputRoute::packed(
+                "reader.readArray(() => decodeUser(reader))".to_string(),
+            ),
             ffi_name: "boltffi_get_users",
             call_args: "",
             call_args_with_out: "",
@@ -953,9 +951,7 @@ mod tests {
                     return_type: Some("number".to_string()),
                     return_handle: None,
                     mode: TsClassMethodMode::Sync(TsClassSyncMethod {
-                        return_route: TsOutputRoute::Direct {
-                            ts_cast: String::new(),
-                        },
+                        return_route: TsOutputRoute::direct(String::new()),
                     }),
                     doc: None,
                 },
@@ -973,9 +969,7 @@ mod tests {
                             .to_string(),
                         cancel_ffi_name: "boltffi_counter_next_value_cancel".to_string(),
                         free_ffi_name: "boltffi_counter_next_value_free".to_string(),
-                        return_route: TsOutputRoute::Packed {
-                            decode_expr: "reader.readI32()".to_string(),
-                        },
+                        return_route: TsOutputRoute::packed("reader.readI32()".to_string()),
                     }),
                     doc: None,
                 },
@@ -1031,9 +1025,7 @@ mod tests {
                     panic_message_ffi_name: "boltffi_counter_next_value_panic_message".to_string(),
                     cancel_ffi_name: "boltffi_counter_next_value_cancel".to_string(),
                     free_ffi_name: "boltffi_counter_next_value_free".to_string(),
-                    return_route: TsOutputRoute::Packed {
-                        decode_expr: "reader.readI32()".to_string(),
-                    },
+                    return_route: TsOutputRoute::packed("reader.readI32()".to_string()),
                 }),
                 doc: None,
             }],
@@ -1073,9 +1065,9 @@ mod tests {
                     panic_message_ffi_name: "boltffi_database_query_panic_message".to_string(),
                     cancel_ffi_name: "boltffi_database_query_cancel".to_string(),
                     free_ffi_name: "boltffi_database_query_free".to_string(),
-                    return_route: TsOutputRoute::Packed {
-                        decode_expr: "QueryResultCodec.decode(reader)".to_string(),
-                    },
+                    return_route: TsOutputRoute::packed(
+                        "QueryResultCodec.decode(reader)".to_string(),
+                    ),
                 }),
                 doc: None,
             }],
@@ -1162,9 +1154,7 @@ mod tests {
                 return_type: Some("number".to_string()),
                 return_handle: None,
                 mode: TsClassMethodMode::Sync(TsClassSyncMethod {
-                    return_route: TsOutputRoute::Direct {
-                        ts_cast: String::new(),
-                    },
+                    return_route: TsOutputRoute::direct(String::new()),
                 }),
                 doc: None,
             }],
@@ -1199,7 +1189,7 @@ mod tests {
                 return_type: None,
                 return_handle: None,
                 mode: TsClassMethodMode::Sync(TsClassSyncMethod {
-                    return_route: TsOutputRoute::Void,
+                    return_route: TsOutputRoute::void(),
                 }),
                 doc: None,
             }],
@@ -1226,9 +1216,7 @@ mod tests {
                     nullable: false,
                 }),
                 mode: TsClassMethodMode::Sync(TsClassSyncMethod {
-                    return_route: TsOutputRoute::Direct {
-                        ts_cast: String::new(),
-                    },
+                    return_route: TsOutputRoute::direct(String::new()),
                 }),
                 doc: None,
             }],
@@ -1259,9 +1247,7 @@ mod tests {
                     nullable: true,
                 }),
                 mode: TsClassMethodMode::Sync(TsClassSyncMethod {
-                    return_route: TsOutputRoute::Direct {
-                        ts_cast: String::new(),
-                    },
+                    return_route: TsOutputRoute::direct(String::new()),
                 }),
                 doc: None,
             }],
@@ -1291,7 +1277,7 @@ mod tests {
                 return_type: None,
                 return_handle: None,
                 mode: TsClassMethodMode::Sync(TsClassSyncMethod {
-                    return_route: TsOutputRoute::Void,
+                    return_route: TsOutputRoute::void(),
                 }),
                 doc: None,
             }],
@@ -1324,9 +1310,9 @@ mod tests {
                     panic_message_ffi_name: "boltffi_database_query_panic_message".to_string(),
                     cancel_ffi_name: "boltffi_database_query_cancel".to_string(),
                     free_ffi_name: "boltffi_database_query_free".to_string(),
-                    return_route: TsOutputRoute::Packed {
-                        decode_expr: "QueryResultCodec.decode(reader)".to_string(),
-                    },
+                    return_route: TsOutputRoute::packed(
+                        "QueryResultCodec.decode(reader)".to_string(),
+                    ),
                 }),
                 doc: None,
             }],

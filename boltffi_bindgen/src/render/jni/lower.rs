@@ -23,9 +23,16 @@ use super::plan::{
     JniAsyncFunction, JniCallbackCParam, JniCallbackMethod, JniCallbackReturn, JniCallbackTrait,
     JniClass, JniClosureRecordParam, JniClosureTrampoline, JniFunction, JniInvokerResult,
     JniModule, JniOptionInnerKind, JniOptionView, JniParam, JniParamKind, JniResultVariant,
-    JniResultView, JniReturnAbi, JniReturnKind, JniStream, JniWireCtor, JniWireFunction,
-    JniWireMethod,
+    JniResultView, JniReturnKind, JniStream, JniWireCtor, JniWireFunction, JniWireMethod,
 };
+
+struct JniReturnMeta {
+    is_unit: bool,
+    is_direct: bool,
+    jni_return_type: String,
+    jni_c_return_type: String,
+    jni_result_cast: String,
+}
 
 pub struct JniLowerer<'a> {
     contract: &'a FfiContract,
@@ -169,10 +176,8 @@ impl<'a> JniLowerer<'a> {
     }
 
     fn collect_used_from_param(&self, param: &AbiParam, used: &mut HashSet<CallbackId>) {
-        if let Some(InputBinding::CallbackHandle { callback_id, .. }) =
-            InputBinding::from_abi_param(param)
-        {
-            used.insert(callback_id);
+        if let Some(InputBinding::CallbackHandle { callback_id, .. }) = param.input_binding() {
+            used.insert(callback_id.clone());
         }
     }
 
@@ -181,18 +186,16 @@ impl<'a> JniLowerer<'a> {
         output_shape: &crate::ir::abi::OutputShape,
         used: &mut HashSet<CallbackId>,
     ) {
-        if let OutputBinding::CallbackHandle { callback_id, .. } =
-            OutputBinding::from_output_shape(output_shape)
-        {
-            used.insert(callback_id);
+        if let OutputBinding::CallbackHandle { callback_id, .. } = output_shape.output_binding() {
+            used.insert(callback_id.clone());
         }
     }
 
     fn collect_used_from_async(&self, async_call: &AsyncCall, used: &mut HashSet<CallbackId>) {
         if let OutputBinding::CallbackHandle { callback_id, .. } =
-            OutputBinding::from_result_shape(&async_call.result_shape)
+            async_call.result_shape.output_binding()
         {
-            used.insert(callback_id);
+            used.insert(callback_id.clone());
         }
         self.collect_used_from_error(&async_call.error, used);
     }
@@ -299,14 +302,18 @@ impl<'a> JniLowerer<'a> {
             .collect();
 
         let jni_params = self.format_jni_params(&params);
-        let return_abi = self.return_abi(&func.returns);
+        let return_meta = self.return_meta(&func.returns);
 
         JniWireFunction {
             ffi_name,
             jni_name,
             jni_params,
             params,
-            return_abi,
+            return_is_unit: return_meta.is_unit,
+            return_is_direct: return_meta.is_direct,
+            jni_return_type: return_meta.jni_return_type,
+            jni_c_return_type: return_meta.jni_c_return_type,
+            jni_result_cast: return_meta.jni_result_cast,
         }
     }
 
@@ -496,14 +503,18 @@ impl<'a> JniLowerer<'a> {
             .collect();
 
         let jni_params = self.format_jni_params(&params);
-        let return_abi = self.return_abi(&method.returns);
+        let return_meta = self.return_meta(&method.returns);
 
         JniWireMethod {
             ffi_name,
             jni_name,
             jni_params,
             params,
-            return_abi,
+            return_is_unit: return_meta.is_unit,
+            return_is_direct: return_meta.is_direct,
+            jni_return_type: return_meta.jni_return_type,
+            jni_c_return_type: return_meta.jni_c_return_type,
+            jni_result_cast: return_meta.jni_result_cast,
             include_handle: !matches!(method.receiver, Receiver::Static),
         }
     }
@@ -545,8 +556,8 @@ impl<'a> JniLowerer<'a> {
 
         let jni_params = self.format_jni_params(&params);
 
-        let return_abi = self.return_abi(&func.returns);
-        let complete_kind = self.async_complete_kind(&return_abi);
+        let return_meta = self.return_meta(&func.returns);
+        let complete_kind = self.async_complete_kind(&return_meta);
 
         JniAsyncFunction {
             ffi_name: ffi_name.clone(),
@@ -582,8 +593,8 @@ impl<'a> JniLowerer<'a> {
 
         let jni_params = self.format_jni_params(&params);
 
-        let return_abi = self.return_abi(&method.returns);
-        let complete_kind = self.async_complete_kind(&return_abi);
+        let return_meta = self.return_meta(&method.returns);
+        let complete_kind = self.async_complete_kind(&return_meta);
 
         JniAsyncFunction {
             ffi_name: ffi_name.clone(),
@@ -950,13 +961,33 @@ impl<'a> JniLowerer<'a> {
         }
     }
 
-    fn return_abi(&self, returns: &ReturnDef) -> JniReturnAbi {
+    fn return_meta(&self, returns: &ReturnDef) -> JniReturnMeta {
         match returns {
-            ReturnDef::Void => JniReturnAbi::Unit,
-            ReturnDef::Result { .. } => JniReturnAbi::WireEncoded,
+            ReturnDef::Void => JniReturnMeta {
+                is_unit: true,
+                is_direct: false,
+                jni_return_type: "void".to_string(),
+                jni_c_return_type: String::new(),
+                jni_result_cast: String::new(),
+            },
+            ReturnDef::Result { .. } => JniReturnMeta {
+                is_unit: false,
+                is_direct: false,
+                jni_return_type: "jbyteArray".to_string(),
+                jni_c_return_type: String::new(),
+                jni_result_cast: String::new(),
+            },
             ReturnDef::Value(ty) => match ty {
-                TypeExpr::Void => JniReturnAbi::Unit,
-                TypeExpr::Primitive(p) => JniReturnAbi::Direct {
+                TypeExpr::Void => JniReturnMeta {
+                    is_unit: true,
+                    is_direct: false,
+                    jni_return_type: "void".to_string(),
+                    jni_c_return_type: String::new(),
+                    jni_result_cast: String::new(),
+                },
+                TypeExpr::Primitive(p) => JniReturnMeta {
+                    is_unit: false,
+                    is_direct: true,
                     jni_return_type: self.primitive_return_jni_type(*p),
                     jni_c_return_type: self.primitive_c_type(*p),
                     jni_result_cast: self.primitive_return_cast(*p),
@@ -966,8 +997,16 @@ impl<'a> JniLowerer<'a> {
                 | TypeExpr::Enum(_)
                 | TypeExpr::Vec(_)
                 | TypeExpr::Option(_)
-                | TypeExpr::Bytes => JniReturnAbi::WireEncoded,
-                _ => JniReturnAbi::Direct {
+                | TypeExpr::Bytes => JniReturnMeta {
+                    is_unit: false,
+                    is_direct: false,
+                    jni_return_type: "jbyteArray".to_string(),
+                    jni_c_return_type: String::new(),
+                    jni_result_cast: String::new(),
+                },
+                _ => JniReturnMeta {
+                    is_unit: false,
+                    is_direct: true,
                     jni_return_type: "jlong".to_string(),
                     jni_c_return_type: "int64_t".to_string(),
                     jni_result_cast: "".to_string(),
@@ -976,18 +1015,16 @@ impl<'a> JniLowerer<'a> {
         }
     }
 
-    fn async_complete_kind(&self, return_abi: &JniReturnAbi) -> JniAsyncCompleteKind {
-        match return_abi {
-            JniReturnAbi::Unit => JniAsyncCompleteKind::Void,
-            JniReturnAbi::WireEncoded => JniAsyncCompleteKind::WireEncoded,
-            JniReturnAbi::Direct {
-                jni_return_type,
-                jni_c_return_type,
-                ..
-            } => JniAsyncCompleteKind::Direct {
-                jni_return: jni_return_type.clone(),
-                c_type: jni_c_return_type.clone(),
-            },
+    fn async_complete_kind(&self, return_meta: &JniReturnMeta) -> JniAsyncCompleteKind {
+        if return_meta.is_unit {
+            JniAsyncCompleteKind::Void
+        } else if return_meta.is_direct {
+            JniAsyncCompleteKind::Direct {
+                jni_return: return_meta.jni_return_type.clone(),
+                c_type: return_meta.jni_c_return_type.clone(),
+            }
+        } else {
+            JniAsyncCompleteKind::WireEncoded
         }
     }
 
@@ -1607,7 +1644,7 @@ impl<'a> JniLowerer<'a> {
 
     fn callback_param(&self, param: &AbiParam, is_async: bool) -> LoweredCallbackParam {
         let param_name = param.name.as_str();
-        match InputBinding::from_abi_param(param) {
+        match param.input_binding() {
             Some(InputBinding::Scalar) => {
                 self.lower_callback_direct_param(param_name, &param.ffi_type)
             }

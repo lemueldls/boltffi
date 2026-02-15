@@ -4,7 +4,7 @@ use askama::Template;
 
 use super::plan::{
     JniAsyncCallbackInvoker, JniAsyncFunction, JniCallbackTrait, JniClass, JniClosureTrampoline,
-    JniFunction, JniModule, JniParam, JniReturnAbi, JniWireCtor, JniWireFunction, JniWireMethod,
+    JniFunction, JniModule, JniParam, JniWireCtor, JniWireFunction, JniWireMethod,
 };
 
 #[derive(Template)]
@@ -54,7 +54,11 @@ pub struct JniWireFunctionTemplate<'a> {
     pub jni_name: &'a str,
     pub jni_params: &'a str,
     pub params: &'a [JniParam],
-    pub return_abi: &'a JniReturnAbi,
+    pub return_is_unit: bool,
+    pub return_is_direct: bool,
+    pub jni_return_type: &'a str,
+    pub jni_c_return_type: &'a str,
+    pub jni_result_cast: &'a str,
 }
 
 impl<'a> JniWireFunctionTemplate<'a> {
@@ -64,7 +68,11 @@ impl<'a> JniWireFunctionTemplate<'a> {
             jni_name: func.jni_name.as_str(),
             jni_params: func.jni_params.as_str(),
             params: &func.params,
-            return_abi: &func.return_abi,
+            return_is_unit: func.return_is_unit,
+            return_is_direct: func.return_is_direct,
+            jni_return_type: func.jni_return_type.as_str(),
+            jni_c_return_type: func.jni_c_return_type.as_str(),
+            jni_result_cast: func.jni_result_cast.as_str(),
         }
     }
 }
@@ -85,7 +93,11 @@ pub struct JniWireMethodTemplate<'a> {
     pub jni_name: &'a str,
     pub jni_params: &'a str,
     pub params: &'a [JniParam],
-    pub return_abi: &'a JniReturnAbi,
+    pub return_is_unit: bool,
+    pub return_is_direct: bool,
+    pub jni_return_type: &'a str,
+    pub jni_c_return_type: &'a str,
+    pub jni_result_cast: &'a str,
     pub include_handle: bool,
 }
 
@@ -96,7 +108,11 @@ impl<'a> JniWireMethodTemplate<'a> {
             jni_name: method.jni_name.as_str(),
             jni_params: method.jni_params.as_str(),
             params: &method.params,
-            return_abi: &method.return_abi,
+            return_is_unit: method.return_is_unit,
+            return_is_direct: method.return_is_direct,
+            jni_return_type: method.jni_return_type.as_str(),
+            jni_c_return_type: method.jni_c_return_type.as_str(),
+            jni_result_cast: method.jni_result_cast.as_str(),
             include_handle: method.include_handle,
         }
     }

@@ -83,10 +83,9 @@ export class {{ cls.class_name }} {
 {%- if method.cleanup_code().is_empty() %}
 {%- match method.mode %}
 {%- when TsClassMethodMode::Sync with (sync_method) %}
-{%- match sync_method.return_route %}
-{%- when TsOutputRoute::Void %}
+{%- if sync_method.return_route.is_void() %}
     (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
-{%- when TsOutputRoute::Direct with { ts_cast } %}
+{%- elif sync_method.return_route.is_direct() %}
 {%- if let Some(handle_return) = method.return_handle %}
     const result = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
 {%- if handle_return.nullable %}
@@ -96,16 +95,16 @@ export class {{ cls.class_name }} {
 {%- endif %}
     return {{ handle_return.class_name }}._fromHandle(result);
 {%- else %}
-    return (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}){{ ts_cast }};
+    return (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}){{ sync_method.return_route.ts_cast() }};
 {%- endif %}
-{%- when TsOutputRoute::Packed with { decode_expr } %}
+{%- elif sync_method.return_route.is_packed() %}
     const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as bigint;
     const reader = _module.takePackedBuffer(packed);
-    return {{ decode_expr }};
-{%- when TsOutputRoute::RawPacked with { decode_expr } %}
+    return {{ sync_method.return_route.decode_expr() }};
+{%- else %}
     const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as bigint;
-    return {{ decode_expr }};
-{%- endmatch %}
+    return {{ sync_method.return_route.decode_expr() }};
+{%- endif %}
 {%- when TsClassMethodMode::Async with (async_method) %}
     const handle = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
     const awaitedHandle = await _module.asyncManager.pollAsync(
@@ -114,15 +113,14 @@ export class {{ cls.class_name }} {
       (futureHandle: number) => (_exports.{{ async_method.panic_message_ffi_name }} as Function)(futureHandle),
       (futureHandle: number) => (_exports.{{ async_method.free_ffi_name }} as Function)(futureHandle)
     );
-{%- match async_method.return_route %}
-{%- when TsOutputRoute::Packed with { decode_expr } %}
+{%- if async_method.return_route.is_packed() %}
     const outPtr = _module.allocBufDescriptor();
     let completeCompleted = false;
     try {
       (_exports.{{ async_method.complete_ffi_name }} as Function)(outPtr, awaitedHandle, 0);
       completeCompleted = true;
       const reader = _module.readerFromBuf(outPtr);
-      const result = {{ decode_expr }};
+      const result = {{ async_method.return_route.decode_expr() }};
 {%- if let Some(handle_return) = method.return_handle %}
 {%- if handle_return.nullable %}
       if (result === 0) {
@@ -141,24 +139,23 @@ export class {{ cls.class_name }} {
       }
       (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
     }
-{%- when TsOutputRoute::Void %}
+{%- elif async_method.return_route.is_void() %}
     (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
-{%- when TsOutputRoute::Direct with { ts_cast } %}
+{%- elif async_method.return_route.is_direct() %}
     (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
-    throw new Error("Unsupported async return route: Direct{{ ts_cast }}");
-{%- when TsOutputRoute::RawPacked with { decode_expr } %}
+    throw new Error("Unsupported async return route: Direct{{ async_method.return_route.ts_cast() }}");
+{%- else %}
     (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
-    throw new Error("Unsupported async return route: RawPacked {{ decode_expr }}");
-{%- endmatch %}
+    throw new Error("Unsupported async return route: RawPacked {{ async_method.return_route.decode_expr() }}");
+{%- endif %}
 {%- endmatch %}
 {%- else %}
 {%- match method.mode %}
 {%- when TsClassMethodMode::Sync with (sync_method) %}
     try {
-{%- match sync_method.return_route %}
-{%- when TsOutputRoute::Void %}
+{%- if sync_method.return_route.is_void() %}
       (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
-{%- when TsOutputRoute::Direct with { ts_cast } %}
+{%- elif sync_method.return_route.is_direct() %}
 {%- if let Some(handle_return) = method.return_handle %}
       const result = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
 {%- if handle_return.nullable %}
@@ -168,16 +165,16 @@ export class {{ cls.class_name }} {
 {%- endif %}
       return {{ handle_return.class_name }}._fromHandle(result);
 {%- else %}
-      return (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}){{ ts_cast }};
+      return (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}){{ sync_method.return_route.ts_cast() }};
 {%- endif %}
-{%- when TsOutputRoute::Packed with { decode_expr } %}
+{%- elif sync_method.return_route.is_packed() %}
       const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as bigint;
       const reader = _module.takePackedBuffer(packed);
-      return {{ decode_expr }};
-{%- when TsOutputRoute::RawPacked with { decode_expr } %}
+      return {{ sync_method.return_route.decode_expr() }};
+{%- else %}
       const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as bigint;
-      return {{ decode_expr }};
-{%- endmatch %}
+      return {{ sync_method.return_route.decode_expr() }};
+{%- endif %}
     } finally {
       {{ method.cleanup_code() }}
     }
@@ -195,15 +192,14 @@ export class {{ cls.class_name }} {
       (futureHandle: number) => (_exports.{{ async_method.panic_message_ffi_name }} as Function)(futureHandle),
       (futureHandle: number) => (_exports.{{ async_method.free_ffi_name }} as Function)(futureHandle)
     );
-{%- match async_method.return_route %}
-{%- when TsOutputRoute::Packed with { decode_expr } %}
+{%- if async_method.return_route.is_packed() %}
     const outPtr = _module.allocBufDescriptor();
     let completeCompleted = false;
     try {
       (_exports.{{ async_method.complete_ffi_name }} as Function)(outPtr, awaitedHandle, 0);
       completeCompleted = true;
       const reader = _module.readerFromBuf(outPtr);
-      const result = {{ decode_expr }};
+      const result = {{ async_method.return_route.decode_expr() }};
 {%- if let Some(handle_return) = method.return_handle %}
 {%- if handle_return.nullable %}
       if (result === 0) {
@@ -222,15 +218,15 @@ export class {{ cls.class_name }} {
       }
       (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
     }
-{%- when TsOutputRoute::Void %}
+{%- elif async_method.return_route.is_void() %}
     (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
-{%- when TsOutputRoute::Direct with { ts_cast } %}
+{%- elif async_method.return_route.is_direct() %}
     (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
-    throw new Error("Unsupported async return route: Direct{{ ts_cast }}");
-{%- when TsOutputRoute::RawPacked with { decode_expr } %}
+    throw new Error("Unsupported async return route: Direct{{ async_method.return_route.ts_cast() }}");
+{%- else %}
     (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
-    throw new Error("Unsupported async return route: RawPacked {{ decode_expr }}");
-{%- endmatch %}
+    throw new Error("Unsupported async return route: RawPacked {{ async_method.return_route.decode_expr() }}");
+{%- endif %}
 {%- endmatch %}
 {%- endif %}
   }

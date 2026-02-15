@@ -378,7 +378,7 @@ impl<'a> TypeScriptLowerer<'a> {
         let params = abi_call
             .params
             .iter()
-            .filter(|parameter| InputBinding::from_abi_param(parameter).is_some())
+            .filter(|parameter| parameter.input_binding().is_some())
             .map(|abi_param| {
                 let param_def = param_defs.get(abi_param.name.as_str()).copied();
                 self.lower_param(param_def, abi_param)
@@ -391,7 +391,7 @@ impl<'a> TypeScriptLowerer<'a> {
             is_default: constructor.name().is_none(),
             params,
             returns_nullable_handle: matches!(
-                OutputBinding::from_abi_call(abi_call),
+                abi_call.output_binding(),
                 OutputBinding::Handle { nullable: true, .. }
             ),
             doc: constructor.doc().map(String::from),
@@ -422,7 +422,7 @@ impl<'a> TypeScriptLowerer<'a> {
             .iter()
             .enumerate()
             .filter(|(param_index, parameter)| {
-                let Some(input_abi) = InputBinding::from_abi_param(parameter) else {
+                let Some(input_abi) = parameter.input_binding() else {
                     return false;
                 };
                 if !is_static
@@ -443,7 +443,7 @@ impl<'a> TypeScriptLowerer<'a> {
             CallMode::Sync => {
                 let (return_type, return_route) =
                     self.select_output_route(&abi_call.output_shape, TsExecutionModel::Sync);
-                let return_handle = match OutputBinding::from_abi_call(abi_call) {
+                let return_handle = match abi_call.output_binding() {
                     OutputBinding::Handle { class_id, nullable } => Some(TsHandleReturn {
                         class_name: naming::to_upper_camel_case(class_id.as_str()),
                         nullable,
@@ -460,7 +460,7 @@ impl<'a> TypeScriptLowerer<'a> {
                 let entry_ffi_name = abi_call.symbol.as_str().to_string();
                 let (return_type, return_route) =
                     self.select_output_route(&async_call.result_shape, TsExecutionModel::Async);
-                let return_handle = match OutputBinding::from_async_call(async_call) {
+                let return_handle = match async_call.result_binding() {
                     OutputBinding::Handle { class_id, nullable } => Some(TsHandleReturn {
                         class_name: naming::to_upper_camel_case(class_id.as_str()),
                         nullable,
@@ -529,7 +529,7 @@ impl<'a> TypeScriptLowerer<'a> {
                             .find(|ap| ap.name.as_str() == param_name);
 
                         let kind = match abi_param {
-                            Some(abi_param) => match InputBinding::from_abi_param(abi_param) {
+                            Some(abi_param) => match abi_param.input_binding() {
                                 Some(InputBinding::WirePacket { decode_ops, .. }) => {
                                     let decode_expr = emit::emit_reader_read(&decode_ops);
                                     TsCallbackParamKind::WireEncoded { decode_expr }
@@ -552,7 +552,7 @@ impl<'a> TypeScriptLowerer<'a> {
                     })
                     .collect();
 
-                let return_kind = match OutputBinding::from_output_shape(&abi_method.output_shape) {
+                let return_kind = match abi_method.output_shape.output_binding() {
                     OutputBinding::Unit => TsCallbackReturnKind::Void,
                     OutputBinding::Fast(FastOutputBinding::Scalar { .. }) => {
                         let ts_type = match &method_def.returns {
@@ -626,7 +626,7 @@ impl<'a> TypeScriptLowerer<'a> {
                             .find(|ap| ap.name.as_str() == param_name);
 
                         let kind = match abi_param {
-                            Some(abi_param) => match InputBinding::from_abi_param(abi_param) {
+                            Some(abi_param) => match abi_param.input_binding() {
                                 Some(InputBinding::WirePacket { decode_ops, .. }) => {
                                     let decode_expr = emit::emit_reader_read(&decode_ops);
                                     TsCallbackParamKind::WireEncoded { decode_expr }
@@ -656,7 +656,7 @@ impl<'a> TypeScriptLowerer<'a> {
                     direct_write_method,
                     direct_write_value_expr,
                     direct_size,
-                ) = match OutputBinding::from_output_shape(&abi_method.output_shape) {
+                ) = match abi_method.output_shape.output_binding() {
                     OutputBinding::Unit => (None, None, None, None, None, None),
                     OutputBinding::Fast(FastOutputBinding::Scalar { abi_type: abi }) => {
                         let ts_type = match &method_def.returns {
@@ -765,7 +765,7 @@ impl<'a> TypeScriptLowerer<'a> {
         let params = abi_call
             .params
             .iter()
-            .filter(|p| InputBinding::from_abi_param(p).is_some())
+            .filter(|p| p.input_binding().is_some())
             .map(|abi_param| {
                 let param_def = param_defs.get(abi_param.name.as_str()).copied();
                 self.lower_param(param_def, abi_param)
@@ -807,7 +807,7 @@ impl<'a> TypeScriptLowerer<'a> {
         let params = abi_call
             .params
             .iter()
-            .filter(|p| InputBinding::from_abi_param(p).is_some())
+            .filter(|p| p.input_binding().is_some())
             .map(|abi_param| {
                 let param_def = param_defs.get(abi_param.name.as_str()).copied();
                 self.lower_param(param_def, abi_param)
@@ -837,7 +837,7 @@ impl<'a> TypeScriptLowerer<'a> {
 
     fn lower_param(&self, param_def: Option<&ParamDef>, abi_param: &AbiParam) -> TsParam {
         let name = camel_case(abi_param.name.as_str());
-        match InputBinding::from_abi_param(abi_param) {
+        match abi_param.input_binding() {
             Some(InputBinding::Scalar) => TsParam {
                 name: emit::escape_ts_keyword(&name),
                 ts_type: ts_abi_type(&abi_param.ffi_type),
@@ -925,8 +925,8 @@ impl<'a> TypeScriptLowerer<'a> {
         output_shape: &OutputShape,
         execution_model: TsExecutionModel,
     ) -> (Option<String>, TsOutputRoute) {
-        match OutputBinding::from_output_shape(output_shape) {
-            OutputBinding::Unit => (None, TsOutputRoute::Void),
+        match output_shape.output_binding() {
+            OutputBinding::Unit => (None, TsOutputRoute::void()),
             OutputBinding::Fast(FastOutputBinding::Scalar { abi_type }) => {
                 self.scalar_output_route(abi_type, execution_model)
             }
@@ -941,8 +941,8 @@ impl<'a> TypeScriptLowerer<'a> {
                 self.handle_output_route(class_id.as_str(), nullable, execution_model)
             }
             OutputBinding::CallbackHandle { .. } => match execution_model {
-                TsExecutionModel::Sync => (Some("unknown".to_string()), TsOutputRoute::Void),
-                TsExecutionModel::Async => (None, TsOutputRoute::Void),
+                TsExecutionModel::Sync => (Some("unknown".to_string()), TsOutputRoute::void()),
+                TsExecutionModel::Async => (None, TsOutputRoute::void()),
             },
         }
     }
@@ -967,15 +967,11 @@ impl<'a> TypeScriptLowerer<'a> {
         match execution_model {
             TsExecutionModel::Sync => (
                 Some(ts_type),
-                TsOutputRoute::Direct {
-                    ts_cast: ts_direct_cast(&abi_type),
-                },
+                TsOutputRoute::direct(ts_direct_cast(&abi_type)),
             ),
             TsExecutionModel::Async => (
                 Some(ts_type),
-                TsOutputRoute::Packed {
-                    decode_expr: scalar_async_decode_expr(&abi_type),
-                },
+                TsOutputRoute::packed(scalar_async_decode_expr(&abi_type)),
             ),
         }
     }
@@ -993,17 +989,10 @@ impl<'a> TypeScriptLowerer<'a> {
             class_name
         };
         match execution_model {
-            TsExecutionModel::Sync => (
-                Some(ts_type),
-                TsOutputRoute::Direct {
-                    ts_cast: String::new(),
-                },
-            ),
+            TsExecutionModel::Sync => (Some(ts_type), TsOutputRoute::direct(String::new())),
             TsExecutionModel::Async => (
                 Some(ts_type),
-                TsOutputRoute::Packed {
-                    decode_expr: "reader.readU32()".to_string(),
-                },
+                TsOutputRoute::packed("reader.readU32()".to_string()),
             ),
         }
     }
@@ -1024,9 +1013,7 @@ impl<'a> TypeScriptLowerer<'a> {
         if let Some(optional_decode) = emit_raw_optional_primitive_read(decode_ops) {
             return (
                 Some(ts_type_str),
-                TsOutputRoute::RawPacked {
-                    decode_expr: optional_decode,
-                },
+                TsOutputRoute::raw_packed(optional_decode),
             );
         }
         match decode_ops.ops.first() {
@@ -1035,30 +1022,15 @@ impl<'a> TypeScriptLowerer<'a> {
                 ..
             }) => {
                 let decode = emit::emit_raw_primitive_array_read(*prim);
-                (
-                    Some(ts_type_str),
-                    TsOutputRoute::RawPacked {
-                        decode_expr: decode,
-                    },
-                )
+                (Some(ts_type_str), TsOutputRoute::raw_packed(decode))
             }
             Some(ReadOp::String { .. }) => {
                 let decode = "_module.takePackedUtf8String(packed)".to_string();
-                (
-                    Some(ts_type_str),
-                    TsOutputRoute::RawPacked {
-                        decode_expr: decode,
-                    },
-                )
+                (Some(ts_type_str), TsOutputRoute::raw_packed(decode))
             }
             _ => {
                 let decode = emit::emit_reader_read(decode_ops);
-                (
-                    Some(ts_type_str),
-                    TsOutputRoute::Packed {
-                        decode_expr: decode,
-                    },
-                )
+                (Some(ts_type_str), TsOutputRoute::packed(decode))
             }
         }
     }
@@ -1066,7 +1038,7 @@ impl<'a> TypeScriptLowerer<'a> {
     fn async_encoded_output_route(&self, decode_ops: &ReadSeq) -> (Option<String>, TsOutputRoute) {
         let ts_type = infer_ts_type_from_read_ops(decode_ops);
         let decode_expr = emit::emit_reader_read(decode_ops);
-        (Some(ts_type), TsOutputRoute::Packed { decode_expr })
+        (Some(ts_type), TsOutputRoute::packed(decode_expr))
     }
 
     fn collect_wasm_imports(&self, _index: &AbiIndex) -> Vec<TsWasmImport> {
@@ -1088,20 +1060,21 @@ impl<'a> TypeScriptLowerer<'a> {
 
             let (_, return_route) =
                 self.select_output_route(&call.output_shape, TsExecutionModel::Sync);
-            let return_output = OutputBinding::from_abi_call(call);
-            let return_wasm_type = match (&return_output, &return_route) {
-                (_, TsOutputRoute::Void) => None,
-                (
-                    OutputBinding::Fast(FastOutputBinding::Scalar { abi_type }),
-                    TsOutputRoute::Direct { .. },
-                ) => Some(abi_type_to_wasm(&abi_type)),
-                (OutputBinding::Handle { .. }, TsOutputRoute::Direct { .. }) => {
-                    Some("number".to_string())
+            let return_output = call.output_binding();
+            let return_wasm_type = if return_route.is_void() {
+                None
+            } else if return_route.is_direct() {
+                match return_output {
+                    OutputBinding::Fast(FastOutputBinding::Scalar { abi_type }) => {
+                        Some(abi_type_to_wasm(&abi_type))
+                    }
+                    OutputBinding::Handle { .. } => Some("number".to_string()),
+                    _ => None,
                 }
-                (_, TsOutputRoute::Packed { .. }) | (_, TsOutputRoute::RawPacked { .. }) => {
-                    Some("bigint".to_string())
-                }
-                _ => None,
+            } else if return_route.is_packed() || return_route.is_raw_packed() {
+                Some("bigint".to_string())
+            } else {
+                None
             };
 
             imports.push(TsWasmImport {
@@ -1686,12 +1659,11 @@ mod tests {
             .find(|function| function.name == "findEven")
             .expect("findEven should be lowered");
 
-        match &function.return_route {
-            TsOutputRoute::RawPacked { decode_expr } => {
-                assert_eq!(decode_expr, "_module.takePackedOptionalI32(packed)");
-            }
-            route => panic!("expected raw packed route, got {:?}", route),
-        }
+        assert!(function.return_route.is_raw_packed());
+        assert_eq!(
+            function.return_route.decode_expr(),
+            "_module.takePackedOptionalI32(packed)"
+        );
     }
 
     #[test]

@@ -13,20 +13,20 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
     (h: number) => (_exports.{{ free_ffi_name }} as Function)(h)
   );
 
-{% match return_route %}{% when TsOutputRoute::Void %}
+{% if return_route.is_void() %}
   (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
-{% when TsOutputRoute::Packed with { decode_expr } %}
+{% elif return_route.is_packed() %}
   const outPtr = _module.allocBufDescriptor();
   (_exports.{{ complete_ffi_name }} as Function)(outPtr, awaitedHandle, 0);
   const reader = _module.readerFromBuf(outPtr);
-  const result = {{ decode_expr }};
+  const result = {{ return_route.decode_expr() }};
   _module.freeBuf(outPtr);
   (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
   return result;
-{% when TsOutputRoute::Direct with { ts_cast } %}
+{% elif return_route.is_direct() %}
   (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
-  throw new Error("Unsupported async return route: Direct{{ ts_cast }}");
-{% when TsOutputRoute::RawPacked with { decode_expr } %}
+  throw new Error("Unsupported async return route: Direct{{ return_route.ts_cast() }}");
+{% else %}
   (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
-  throw new Error("Unsupported async return route: RawPacked {{ decode_expr }}");
-{% endmatch %}}
+  throw new Error("Unsupported async return route: RawPacked {{ return_route.decode_expr() }}");
+{% endif %}}

@@ -538,28 +538,82 @@ mod tests {
 }
 
 #[derive(Debug, Clone)]
-pub enum TsOutputRoute {
-    Void,
-    Direct { ts_cast: String },
-    Packed { decode_expr: String },
-    RawPacked { decode_expr: String },
+pub struct TsOutputRoute {
+    is_void: bool,
+    is_direct: bool,
+    is_packed: bool,
+    is_raw_packed: bool,
+    ts_cast: String,
+    decode_expr: String,
 }
 
 impl TsOutputRoute {
+    pub fn void() -> Self {
+        Self {
+            is_void: true,
+            is_direct: false,
+            is_packed: false,
+            is_raw_packed: false,
+            ts_cast: String::new(),
+            decode_expr: String::new(),
+        }
+    }
+
+    pub fn direct(ts_cast: String) -> Self {
+        Self {
+            is_void: false,
+            is_direct: true,
+            is_packed: false,
+            is_raw_packed: false,
+            ts_cast,
+            decode_expr: String::new(),
+        }
+    }
+
+    pub fn packed(decode_expr: String) -> Self {
+        Self {
+            is_void: false,
+            is_direct: false,
+            is_packed: true,
+            is_raw_packed: false,
+            ts_cast: String::new(),
+            decode_expr,
+        }
+    }
+
+    pub fn raw_packed(decode_expr: String) -> Self {
+        Self {
+            is_void: false,
+            is_direct: false,
+            is_packed: false,
+            is_raw_packed: true,
+            ts_cast: String::new(),
+            decode_expr,
+        }
+    }
+
     pub fn is_void(&self) -> bool {
-        matches!(self, Self::Void)
+        self.is_void
     }
 
     pub fn is_direct(&self) -> bool {
-        matches!(self, Self::Direct { .. })
+        self.is_direct
     }
 
     pub fn is_packed(&self) -> bool {
-        matches!(self, Self::Packed { .. })
+        self.is_packed
     }
 
     pub fn is_raw_packed(&self) -> bool {
-        matches!(self, Self::RawPacked { .. })
+        self.is_raw_packed
+    }
+
+    pub fn ts_cast(&self) -> &str {
+        self.ts_cast.as_str()
+    }
+
+    pub fn decode_expr(&self) -> &str {
+        self.decode_expr.as_str()
     }
 }
 

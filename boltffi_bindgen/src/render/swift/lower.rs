@@ -627,7 +627,7 @@ impl<'a> SwiftLowerer<'a> {
                             .iter()
                             .filter(|param| {
                                 matches!(
-                                    InputBinding::from_abi_param(param),
+                                    param.input_binding(),
                                     Some(InputBinding::Scalar | InputBinding::WirePacket { .. })
                                 )
                             })
@@ -674,7 +674,7 @@ impl<'a> SwiftLowerer<'a> {
 
     fn lower_callback_param(&self, def: &ParamDef, param: &AbiParam) -> SwiftCallbackParam {
         let label = camel_case(param.name.as_str());
-        let (swift_type, ffi_args, decode_prelude) = match InputBinding::from_abi_param(param) {
+        let (swift_type, ffi_args, decode_prelude) = match param.input_binding() {
             Some(InputBinding::Scalar) => {
                 (self.swift_type(&def.type_expr), vec![label.clone()], None)
             }
@@ -754,8 +754,7 @@ impl<'a> SwiftLowerer<'a> {
         let abi_param = self.abi_param_for_semantic(call, &param.name);
         let swift_name = camel_case(param.name.as_str());
 
-        let (swift_type, conversion) = match InputBinding::from_abi_param(abi_param)
-            .expect("semantic param role")
+        let (swift_type, conversion) = match abi_param.input_binding().expect("semantic param role")
         {
             InputBinding::Scalar => (self.swift_type(&param.type_expr), SwiftConversion::Direct),
             InputBinding::PrimitiveSlice {
@@ -781,7 +780,9 @@ impl<'a> SwiftLowerer<'a> {
             InputBinding::Utf8Slice { .. } => ("String".to_string(), SwiftConversion::ToString),
             InputBinding::WirePacket { encode_ops, .. } => (
                 self.swift_type(&param.type_expr),
-                SwiftConversion::ToWireBuffer { encode: encode_ops },
+                SwiftConversion::ToWireBuffer {
+                    encode: encode_ops.clone(),
+                },
             ),
             InputBinding::Handle { class_id, nullable } => {
                 let class_name = self.swift_name_for_class(&class_id);
@@ -848,10 +849,7 @@ impl<'a> SwiftLowerer<'a> {
     fn abi_param_for_semantic<'b>(&self, call: &'b AbiCall, name: &ParamName) -> &'b AbiParam {
         call.params
             .iter()
-            .find(|param| {
-                param.name.as_str() == name.as_str()
-                    && InputBinding::from_abi_param(param).is_some()
-            })
+            .find(|param| param.name.as_str() == name.as_str() && param.input_binding().is_some())
             .expect("ABI param should exist")
     }
 }
@@ -867,7 +865,7 @@ impl<'a> SwiftLowerer<'a> {
         error: &ErrorTransport,
         returns: &ReturnDef,
     ) -> SwiftReturn {
-        let base = match OutputBinding::from_output_shape(output_shape) {
+        let base = match output_shape.output_binding() {
             OutputBinding::Unit => SwiftReturn::Void,
             OutputBinding::Fast(FastOutputBinding::Scalar { abi_type }) => SwiftReturn::Direct {
                 swift_type: self.abi_to_swift(abi_type),
@@ -893,13 +891,13 @@ impl<'a> SwiftLowerer<'a> {
                 ..
             }) => SwiftReturn::FromWireBuffer {
                 swift_type: self.swift_return_value_type(returns),
-                decode: decode_ops,
-                encode: encode_ops,
+                decode: decode_ops.clone(),
+                encode: encode_ops.clone(),
             },
             OutputBinding::Wire(wire) => SwiftReturn::FromWireBuffer {
                 swift_type: self.swift_return_value_type(returns),
-                decode: wire.decode_ops,
-                encode: wire.encode_ops,
+                decode: wire.decode_ops.clone(),
+                encode: wire.encode_ops.clone(),
             },
             OutputBinding::Handle { class_id, nullable } => {
                 let class_name = self.swift_name_for_class(&class_id);
@@ -1248,7 +1246,7 @@ impl<'a> SwiftLowerer<'a> {
             .iter()
             .filter(|param| {
                 matches!(
-                    InputBinding::from_abi_param(param),
+                    param.input_binding(),
                     Some(InputBinding::Scalar | InputBinding::WirePacket { .. })
                 )
             })
@@ -1281,7 +1279,7 @@ impl<'a> SwiftLowerer<'a> {
         param_def: &ParamDef,
         abi_param: &AbiParam,
     ) -> SwiftClosureTrampolineParam {
-        match InputBinding::from_abi_param(abi_param).expect("closure param role") {
+        match abi_param.input_binding().expect("closure param role") {
             InputBinding::WirePacket { decode_ops, .. } => {
                 let ptr_name = format!("ptr{}", idx);
                 let len_name = format!("len{}", idx);
@@ -1373,7 +1371,7 @@ impl<'a> SwiftLowerer<'a> {
         let returns_is_result = matches!(returns, ReturnDef::Result { .. });
         let throws = returns_is_result || matches!(error, ErrorTransport::Encoded { .. });
 
-        match OutputBinding::from_result_shape(result_shape) {
+        match result_shape.output_binding() {
             OutputBinding::Unit => SwiftAsyncResult::Void,
             OutputBinding::Fast(FastOutputBinding::Scalar { abi_type }) => {
                 SwiftAsyncResult::Direct {
@@ -1385,10 +1383,10 @@ impl<'a> SwiftLowerer<'a> {
             | OutputBinding::Fast(FastOutputBinding::ResultScalar { decode_ops, .. })
             | OutputBinding::Fast(FastOutputBinding::PrimitiveVec { decode_ops, .. })
             | OutputBinding::Fast(FastOutputBinding::BlittableRecord { decode_ops, .. }) => {
-                self.encoded_async_result(decode_ops, throws, error, returns)
+                self.encoded_async_result(decode_ops.clone(), throws, error, returns)
             }
             OutputBinding::Wire(wire) => {
-                self.encoded_async_result(wire.decode_ops, throws, error, returns)
+                self.encoded_async_result(wire.decode_ops.clone(), throws, error, returns)
             }
             OutputBinding::Handle { class_id, nullable } => SwiftAsyncResult::Direct {
                 swift_type: if nullable {

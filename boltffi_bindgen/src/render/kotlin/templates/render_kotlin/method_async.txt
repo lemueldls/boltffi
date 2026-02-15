@@ -26,10 +26,10 @@ suspend fun {{ method_name }}({% for param in signature_params %}{{ param.name }
 {%- endif %}
     poll = { future, contHandle -> Native.{{ ffi_poll }}({% if include_handle %}handle, {% endif %}future, contHandle) },
     complete = { future ->
-{%- if return_abi.is_unit() %}
+{%- if return_is_unit %}
         Native.{{ ffi_complete }}({% if include_handle %}handle, {% endif %}future)
-{%- elif return_abi.is_direct() %}
-        Native.{{ ffi_complete }}({% if include_handle %}handle, {% endif %}future){{ return_abi.kotlin_cast() }}
+{%- elif return_is_direct %}
+        Native.{{ ffi_complete }}({% if include_handle %}handle, {% endif %}future){{ return_cast }}
 {%- else %}
         val buf = Native.{{ ffi_complete }}({% if include_handle %}handle, {% endif %}future) ?: throw FfiException(-1, "Null buffer returned")
 {%- if is_blittable_return %}

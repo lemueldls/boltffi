@@ -656,7 +656,11 @@ pub struct JniWireFunction {
     pub jni_name: String,
     pub jni_params: String,
     pub params: Vec<JniParam>,
-    pub return_abi: JniReturnAbi,
+    pub return_is_unit: bool,
+    pub return_is_direct: bool,
+    pub jni_return_type: String,
+    pub jni_c_return_type: String,
+    pub jni_result_cast: String,
 }
 
 #[derive(Clone)]
@@ -665,7 +669,11 @@ pub struct JniWireMethod {
     pub jni_name: String,
     pub jni_params: String,
     pub params: Vec<JniParam>,
-    pub return_abi: JniReturnAbi,
+    pub return_is_unit: bool,
+    pub return_is_direct: bool,
+    pub jni_return_type: String,
+    pub jni_c_return_type: String,
+    pub jni_result_cast: String,
     pub include_handle: bool,
 }
 
@@ -675,59 +683,6 @@ pub struct JniWireCtor {
     pub jni_name: String,
     pub jni_params: String,
     pub params: Vec<JniParam>,
-}
-
-#[derive(Clone)]
-pub enum JniReturnAbi {
-    Unit,
-    Direct {
-        jni_return_type: String,
-        jni_c_return_type: String,
-        jni_result_cast: String,
-    },
-    WireEncoded,
-}
-
-impl JniReturnAbi {
-    pub fn is_unit(&self) -> bool {
-        matches!(self, Self::Unit)
-    }
-
-    pub fn is_direct(&self) -> bool {
-        matches!(self, Self::Direct { .. })
-    }
-
-    pub fn is_wire_encoded(&self) -> bool {
-        matches!(self, Self::WireEncoded)
-    }
-
-    pub fn jni_return_type(&self) -> String {
-        match self {
-            Self::Unit => "void".to_string(),
-            Self::Direct {
-                jni_return_type, ..
-            } => jni_return_type.clone(),
-            Self::WireEncoded => "jbyteArray".to_string(),
-        }
-    }
-
-    pub fn jni_c_return_type(&self) -> String {
-        match self {
-            Self::Direct {
-                jni_c_return_type, ..
-            } => jni_c_return_type.clone(),
-            _ => String::new(),
-        }
-    }
-
-    pub fn jni_result_cast(&self) -> String {
-        match self {
-            Self::Direct {
-                jni_result_cast, ..
-            } => jni_result_cast.clone(),
-            _ => String::new(),
-        }
-    }
 }
 
 #[derive(Clone)]
