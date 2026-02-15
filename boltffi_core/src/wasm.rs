@@ -105,10 +105,33 @@ fn boltffi_wasm_realloc_impl(ptr: usize, old_size: usize, new_size: usize) -> us
 }
 
 #[cfg(target_arch = "wasm32")]
+static mut RETURN_SLOT: [u32; 2] = [0, 0];
+
+#[cfg(target_arch = "wasm32")]
+#[inline(always)]
+pub fn write_return_slot(ptr: u32, len: u32) {
+    unsafe {
+        core::ptr::write_volatile(&raw mut RETURN_SLOT[0], ptr);
+        core::ptr::write_volatile(&raw mut RETURN_SLOT[1], len);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[inline(always)]
+pub fn return_slot_addr() -> u32 {
+    (&raw const RETURN_SLOT) as u32
+}
+
+#[cfg(target_arch = "wasm32")]
 mod exports {
     #[unsafe(no_mangle)]
     pub extern "C" fn boltffi_wasm_abi_version() -> u32 {
         super::WASM_ABI_VERSION
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn boltffi_wasm_return_slot_addr() -> u32 {
+        super::return_slot_addr()
     }
 
     #[unsafe(no_mangle)]

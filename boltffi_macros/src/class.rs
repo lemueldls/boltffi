@@ -6,6 +6,7 @@ use syn::{FnArg, ReturnType, Type};
 use crate::callback_registry;
 use crate::custom_types;
 use crate::params::{FfiParams, transform_method_params, transform_method_params_async};
+use boltffi_ffi_rules::transport::EncodedReturnStrategy;
 use crate::returns::{ReturnAbi, classify_return, encoded_return_body, lower_return_abi};
 
 pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -202,6 +203,93 @@ fn build_static_encoded_return_exports(
                 #(#ffi_params),*
             ) -> ::boltffi::__private::FfiBuf<u8> {
                 #encode_body
+            }
+        },
+    }
+}
+
+fn build_instance_f64_wasm_exports(
+    export_name: &syn::Ident,
+    type_name: &syn::Ident,
+    ffi_params: &[proc_macro2::TokenStream],
+    wasm_body: proc_macro2::TokenStream,
+    native_body: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    match ffi_params.is_empty() {
+        true => quote! {
+            #[cfg(target_arch = "wasm32")]
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn #export_name(
+                handle: *mut #type_name
+            ) -> f64 {
+                #wasm_body
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn #export_name(
+                handle: *mut #type_name
+            ) -> ::boltffi::__private::FfiBuf<u8> {
+                #native_body
+            }
+        },
+        false => quote! {
+            #[cfg(target_arch = "wasm32")]
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn #export_name(
+                handle: *mut #type_name,
+                #(#ffi_params),*
+            ) -> f64 {
+                #wasm_body
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn #export_name(
+                handle: *mut #type_name,
+                #(#ffi_params),*
+            ) -> ::boltffi::__private::FfiBuf<u8> {
+                #native_body
+            }
+        },
+    }
+}
+
+fn build_static_f64_wasm_exports(
+    export_name: &syn::Ident,
+    ffi_params: &[proc_macro2::TokenStream],
+    wasm_body: proc_macro2::TokenStream,
+    native_body: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    match ffi_params.is_empty() {
+        true => quote! {
+            #[cfg(target_arch = "wasm32")]
+            #[unsafe(no_mangle)]
+            pub extern "C" fn #export_name() -> f64 {
+                #wasm_body
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            #[unsafe(no_mangle)]
+            pub extern "C" fn #export_name() -> ::boltffi::__private::FfiBuf<u8> {
+                #native_body
+            }
+        },
+        false => quote! {
+            #[cfg(target_arch = "wasm32")]
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn #export_name(
+                #(#ffi_params),*
+            ) -> f64 {
+                #wasm_body
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn #export_name(
+                #(#ffi_params),*
+            ) -> ::boltffi::__private::FfiBuf<u8> {
+                #native_body
             }
         },
     }
@@ -424,6 +512,41 @@ fn generate_method_export(
             strategy,
         } => {
             let result_ident = syn::Ident::new("result", method_name.span());
+
+            if matches!(strategy, EncodedReturnStrategy::OptionScalar) {
+                let call_and_bind = if has_conversions {
+                    quote! {
+                        #(#conversions)*
+                        let #result_ident: #inner_ty = #call_expr;
+                    }
+                } else {
+                    quote! {
+                        let #result_ident: #inner_ty = #call_expr;
+                    }
+                };
+
+                let wasm_body = quote! {
+                    #call_and_bind
+                    match #result_ident {
+                        Some(v) => v as f64,
+                        None => f64::NAN,
+                    }
+                };
+
+                let native_body = quote! {
+                    #call_and_bind
+                    ::boltffi::__private::FfiBuf::wire_encode(&#result_ident)
+                };
+
+                return Some(build_instance_f64_wasm_exports(
+                    &export_name,
+                    type_name,
+                    &ffi_params,
+                    wasm_body,
+                    native_body,
+                ));
+            }
+
             let body = encoded_return_body(
                 &inner_ty,
                 strategy,
@@ -525,6 +648,40 @@ fn generate_static_method_export(
             strategy,
         } => {
             let result_ident = syn::Ident::new("result", method_name.span());
+
+            if matches!(strategy, EncodedReturnStrategy::OptionScalar) {
+                let call_and_bind = if has_conversions {
+                    quote! {
+                        #(#conversions)*
+                        let #result_ident: #inner_ty = #call_expr;
+                    }
+                } else {
+                    quote! {
+                        let #result_ident: #inner_ty = #call_expr;
+                    }
+                };
+
+                let wasm_body = quote! {
+                    #call_and_bind
+                    match #result_ident {
+                        Some(v) => v as f64,
+                        None => f64::NAN,
+                    }
+                };
+
+                let native_body = quote! {
+                    #call_and_bind
+                    ::boltffi::__private::FfiBuf::wire_encode(&#result_ident)
+                };
+
+                return Some(build_static_f64_wasm_exports(
+                    &export_name,
+                    &ffi_params,
+                    wasm_body,
+                    native_body,
+                ));
+            }
+
             let body = encoded_return_body(
                 &inner_ty,
                 strategy,

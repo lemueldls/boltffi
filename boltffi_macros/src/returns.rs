@@ -323,10 +323,7 @@ fn encoded_return_buffer_expression(
                 ::boltffi::__private::FfiBuf::wire_encode(&#result_ident)
             }
         },
-        EncodedReturnStrategy::OptionScalar => quote! {
-            ::boltffi::__private::FfiBuf::wire_encode(&#result_ident)
-        },
-        EncodedReturnStrategy::ResultScalar => quote! {
+        EncodedReturnStrategy::OptionScalar | EncodedReturnStrategy::ResultScalar => quote! {
             ::boltffi::__private::FfiBuf::wire_encode(&#result_ident)
         },
         EncodedReturnStrategy::WireEncoded => {
