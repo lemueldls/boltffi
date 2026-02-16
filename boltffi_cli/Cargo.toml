@@ -3,6 +3,13 @@ name = "boltffi_cli"
 version = "0.1.0"
 edition = "2024"
 authors = ["Ali A. Hilal <me@alihilal.com>"]
+license = "MIT"
+description = "CLI for BoltFFI - generate Swift, Kotlin, and WASM bindings from Rust"
+repository = "https://github.com/boltffi/boltffi"
+homepage = "https://boltffi.dev"
+readme = "../README.md"
+keywords = ["ffi", "cli", "codegen", "swift", "kotlin"]
+categories = ["development-tools::ffi", "development-tools::build-utils", "command-line-utilities"]
 
 [[bin]]
 name = "boltffi"

@@ -3,6 +3,11 @@ name = "boltffi_macros"
 version = "0.1.0"
 edition = "2024"
 authors = ["Ali A. Hilal <me@alihilal.com>"]
+license = "MIT"
+description = "Procedural macros for BoltFFI - #[data], #[export], #[class] attributes"
+repository = "https://github.com/boltffi/boltffi"
+keywords = ["ffi", "proc-macro", "codegen", "bindings"]
+categories = ["development-tools::ffi", "development-tools::procedural-macro-helpers"]
 
 [lib]
 proc-macro = true

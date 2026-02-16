@@ -3,6 +3,11 @@ name = "boltffi_bindgen"
 version = "0.1.0"
 edition = "2024"
 authors = ["Ali A. Hilal <me@alihilal.com>"]
+license = "MIT"
+description = "Code generation library for BoltFFI - generates Swift, Kotlin, and TypeScript bindings"
+repository = "https://github.com/boltffi/boltffi"
+keywords = ["ffi", "codegen", "swift", "kotlin", "typescript"]
+categories = ["development-tools::ffi", "development-tools::build-utils"]
 
 [dependencies]
 boltffi_ffi_rules = { path = "../boltffi_ffi_rules" }

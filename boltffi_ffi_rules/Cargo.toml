@@ -3,6 +3,11 @@ name = "boltffi_ffi_rules"
 version = "0.1.0"
 edition = "2024"
 authors = ["Ali A. Hilal <me@alihilal.com>"]
+license = "MIT"
+description = "FFI type rules and transport encoding for BoltFFI"
+repository = "https://github.com/boltffi/boltffi"
+keywords = ["ffi", "encoding", "transport", "bindings"]
+categories = ["development-tools::ffi"]
 
 [dependencies]
 

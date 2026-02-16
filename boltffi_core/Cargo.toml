@@ -3,6 +3,11 @@ name = "boltffi_core"
 version = "0.1.0"
 edition = "2024"
 authors = ["Ali A. Hilal <me@alihilal.com>"]
+license = "MIT"
+description = "Core runtime types for BoltFFI - high-performance FFI bindings generator"
+repository = "https://github.com/boltffi/boltffi"
+keywords = ["ffi", "runtime", "bindings", "interop"]
+categories = ["development-tools::ffi"]
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]

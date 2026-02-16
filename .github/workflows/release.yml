@@ -1,9 +1,12 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.2.0 or 0.2.0-beta.1)'
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,41 +15,64 @@ permissions:
   contents: write
 
 jobs:
-  test:
-    name: Test
+  release:
+    name: Release v${{ inputs.version }}
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Error: Invalid version format. Use semver (e.g., 0.2.0 or 0.2.0-beta.1)"
+            exit 1
+          fi
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-      - run: cargo test --workspace --all-features
 
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    needs: test
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-      version: ${{ steps.get_version.outputs.version }}
-    steps:
-      - uses: actions/checkout@v6
-      - name: Get version
-        id: get_version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-      - name: Create Release
-        id: create_release
+      - name: Run tests
+        run: cargo test --workspace --all-features
+
+      - name: Install cargo-edit
+        run: cargo install cargo-edit
+
+      - name: Bump versions
+        run: cargo set-version --workspace ${{ inputs.version }}
+
+      - name: Verify build
+        run: cargo build --workspace
+
+      - name: Commit, tag, and push
+        run: |
+          VERSION="${{ inputs.version }}"
+          git config user.name "boltffi-bot"
+          git config user.email "boltffi-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "release v$VERSION"
+          git tag "v$VERSION"
+          git push
+          git push --tags
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: BoltFFI ${{ github.ref_name }}
+          tag_name: v${{ inputs.version }}
+          name: BoltFFI v${{ inputs.version }}
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(inputs.version, '-') }}
           generate_release_notes: true
 
   build-release:
     name: Build ${{ matrix.target }}
-    needs: create-release
+    needs: release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -69,6 +95,8 @@ jobs:
             artifact: boltffi-windows-x86_64
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: v${{ needs.release.outputs.version }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -96,11 +124,7 @@ jobs:
           cd target/${{ matrix.target }}/release
           tar -czvf ../../../${{ matrix.artifact }}.tar.gz boltffi
           cd ../../..
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
-          else
-            shasum -a 256 ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
-          fi
+          sha256sum ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -115,6 +139,7 @@ jobs:
         if: runner.os != 'Windows'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.release.outputs.version }}
           files: |
             ${{ matrix.artifact }}.tar.gz
             ${{ matrix.artifact }}.tar.gz.sha256
@@ -123,58 +148,29 @@ jobs:
         if: runner.os == 'Windows'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.release.outputs.version }}
           files: |
             ${{ matrix.artifact }}.zip
             ${{ matrix.artifact }}.zip.sha256
 
-  # publish-crates:
-  #   name: Publish to crates.io
-  #   needs: [create-release, build-release]
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v6
-  #     - uses: dtolnay/rust-toolchain@stable
-  #     - uses: Swatinem/rust-cache@v2
-  #
-  #     - name: Publish boltffi_ffi_rules
-  #       run: cargo publish -p boltffi_ffi_rules --token ${{ secrets.CARGO_TOKEN }}
-  #       continue-on-error: true
-  #
-  #     - name: Publish boltffi_core
-  #       run: cargo publish -p boltffi_core --token ${{ secrets.CARGO_TOKEN }}
-  #       continue-on-error: true
-  #
-  #     - name: Publish boltffi_macros
-  #       run: cargo publish -p boltffi_macros --token ${{ secrets.CARGO_TOKEN }}
-  #       continue-on-error: true
-  #
-  #     - name: Publish boltffi
-  #       run: cargo publish -p boltffi --token ${{ secrets.CARGO_TOKEN }}
-  #       continue-on-error: true
-  #
-  #     - name: Publish boltffi_bindgen
-  #       run: cargo publish -p boltffi_bindgen --token ${{ secrets.CARGO_TOKEN }}
-  #       continue-on-error: true
-  #
-  #     - name: Publish boltffi_verify
-  #       run: cargo publish -p boltffi_verify --token ${{ secrets.CARGO_TOKEN }}
-  #       continue-on-error: true
-  #
-  #     - name: Publish boltffi_cli
-  #       run: cargo publish -p boltffi_cli --token ${{ secrets.CARGO_TOKEN }}
-  #       continue-on-error: true
-
-  update-homebrew:
-    name: Update Homebrew Formula
-    needs: [create-release, build-release]
+  publish-crates:
+    name: Publish to crates.io
+    needs: [release, build-release]
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.ref_name, '-') }}
     steps:
-      - name: Placeholder for Homebrew tap update
+      - uses: actions/checkout@v6
+        with:
+          ref: v${{ needs.release.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish crates
         run: |
-          echo "TODO: Update Homebrew formula"
-          echo "Version: ${{ needs.create-release.outputs.version }}"
-          # This would typically:
-          # 1. Checkout your homebrew-tap repo
-          # 2. Update the formula with new version and SHA256
-          # 3. Commit and push
+          cargo publish -p boltffi_ffi_rules --token ${{ secrets.CARGO_TOKEN }}
+          cargo publish -p boltffi_macros --token ${{ secrets.CARGO_TOKEN }}
+          cargo publish -p boltffi_core --token ${{ secrets.CARGO_TOKEN }}
+          cargo publish -p boltffi --token ${{ secrets.CARGO_TOKEN }}
+          cargo publish -p boltffi_bindgen --token ${{ secrets.CARGO_TOKEN }}
+          cargo publish -p boltffi_verify --token ${{ secrets.CARGO_TOKEN }}
+          cargo publish -p boltffi_cli --token ${{ secrets.CARGO_TOKEN }}
