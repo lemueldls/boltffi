@@ -183,11 +183,17 @@ jobs:
       - name: Publish crates
         run: |
           cargo publish -p boltffi_ffi_rules --token ${{ secrets.CARGO_TOKEN }} || true
+          sleep 30
           cargo publish -p boltffi_macros --token ${{ secrets.CARGO_TOKEN }} || true
+          sleep 30
           cargo publish -p boltffi_core --token ${{ secrets.CARGO_TOKEN }} || true
+          sleep 30
           cargo publish -p boltffi --token ${{ secrets.CARGO_TOKEN }} || true
+          sleep 30
           cargo publish -p boltffi_bindgen --token ${{ secrets.CARGO_TOKEN }} || true
+          sleep 30
           cargo publish -p boltffi_verify --token ${{ secrets.CARGO_TOKEN }} || true
+          sleep 30
           cargo publish -p boltffi_cli --token ${{ secrets.CARGO_TOKEN }} || true
 
   publish-npm:
