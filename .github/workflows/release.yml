@@ -203,10 +203,8 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Build and publish runtime
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd runtime/typescript
           npm ci
           npm run build
-          npm publish --access public
+          npm publish --access public --provenance
