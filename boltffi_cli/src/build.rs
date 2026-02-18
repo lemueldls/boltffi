@@ -10,20 +10,11 @@ use crate::target::{Platform, RustTarget};
 
 pub type OutputCallback = Box<dyn Fn(&str) + Send>;
 
+#[derive(Default)]
 pub struct BuildOptions {
     pub release: bool,
     pub package: Option<String>,
     pub on_output: Option<OutputCallback>,
-}
-
-impl Default for BuildOptions {
-    fn default() -> Self {
-        Self {
-            release: false,
-            package: None,
-            on_output: None,
-        }
-    }
 }
 
 pub struct Builder<'a> {
@@ -146,7 +137,10 @@ fn run_command_streaming(cmd: &mut Command, on_output: Option<&OutputCallback>) 
 
     let stdout_handle = stdout.map(|out| {
         thread::spawn(move || {
-            for line in BufReader::new(out).lines().flatten() {
+            for line in BufReader::new(out)
+                .lines()
+                .map_while(std::result::Result::ok)
+            {
                 let _ = tx.send(line);
             }
         })
@@ -154,7 +148,10 @@ fn run_command_streaming(cmd: &mut Command, on_output: Option<&OutputCallback>) 
 
     let stderr_handle = stderr.map(|err| {
         thread::spawn(move || {
-            for line in BufReader::new(err).lines().flatten() {
+            for line in BufReader::new(err)
+                .lines()
+                .map_while(std::result::Result::ok)
+            {
                 let _ = tx2.send(line);
             }
         })
