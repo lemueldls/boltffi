@@ -462,14 +462,44 @@ pub fn inc_u64(value: &mut [u64]) {
     }
 }
 
-/// A simple 64-bit unsigned counter.
-#[derive(Default)]
+/// Thread-safe 64-bit counter using Mutex (comparable to UniFFI).
 pub struct Counter {
-    value: u64,
+    value: std::sync::Mutex<u64>,
 }
 
 #[export]
 impl Counter {
+    /// Creates a new counter starting at zero.
+    pub fn new() -> Self {
+        Self {
+            value: std::sync::Mutex::new(0),
+        }
+    }
+
+    /// Sets the counter to the given value.
+    pub fn set(&self, value: u64) {
+        *self.value.lock().unwrap() = value;
+    }
+
+    /// Increments the counter by one.
+    pub fn increment(&self) {
+        *self.value.lock().unwrap() += 1;
+    }
+
+    /// Returns the current counter value.
+    pub fn get(&self) -> u64 {
+        *self.value.lock().unwrap()
+    }
+}
+
+/// Single-threaded 64-bit counter without Mutex (BoltFFI-only, not comparable to UniFFI).
+#[derive(Default)]
+pub struct CounterSingleThreaded {
+    value: u64,
+}
+
+#[export(single_threaded)]
+impl CounterSingleThreaded {
     /// Creates a new counter starting at zero.
     pub fn new() -> Self {
         Self { value: 0 }
@@ -509,7 +539,7 @@ pub struct DataStore {
     items: Vec<DataPoint>,
 }
 
-#[export]
+#[export(single_threaded)]
 impl DataStore {
     /// Creates an empty data store.
     pub fn new() -> Self {
@@ -602,14 +632,44 @@ impl DataStore {
     }
 }
 
-/// A signed 64-bit accumulator supporting add and reset operations.
-#[derive(Default)]
+/// Thread-safe signed 64-bit accumulator using Mutex (comparable to UniFFI).
 pub struct Accumulator {
-    value: i64,
+    value: std::sync::Mutex<i64>,
 }
 
 #[export]
 impl Accumulator {
+    /// Creates a new accumulator starting at zero.
+    pub fn new() -> Self {
+        Self {
+            value: std::sync::Mutex::new(0),
+        }
+    }
+
+    /// Adds the given amount to the accumulated value.
+    pub fn add(&self, amount: i64) {
+        *self.value.lock().unwrap() += amount;
+    }
+
+    /// Returns the current accumulated value.
+    pub fn get(&self) -> i64 {
+        *self.value.lock().unwrap()
+    }
+
+    /// Resets the accumulated value to zero.
+    pub fn reset(&self) {
+        *self.value.lock().unwrap() = 0;
+    }
+}
+
+/// Single-threaded signed 64-bit accumulator without Mutex (BoltFFI-only).
+#[derive(Default)]
+pub struct AccumulatorSingleThreaded {
+    value: i64,
+}
+
+#[export(single_threaded)]
+impl AccumulatorSingleThreaded {
     /// Creates a new accumulator starting at zero.
     pub fn new() -> Self {
         Self { value: 0 }
@@ -1008,7 +1068,7 @@ pub struct DataConsumer {
     provider: Option<Box<dyn DataProvider + Send + Sync>>,
 }
 
-#[export]
+#[export(single_threaded)]
 impl DataConsumer {
     /// Creates a new consumer with no provider set.
     pub fn new() -> Self {

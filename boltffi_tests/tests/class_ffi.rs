@@ -1263,3 +1263,139 @@ mod async_processor_ffi {
         }
     }
 }
+
+mod thread_safe_counter_ffi {
+    use super::*;
+    use std::thread;
+
+    #[test]
+    fn new_returns_valid_handle() {
+        let handle = unsafe { boltffi_thread_safe_counter_new(0) };
+        assert!(!handle.is_null());
+        unsafe { boltffi_thread_safe_counter_free(handle) };
+    }
+
+    #[test]
+    fn get_returns_initial_value() {
+        let handle = unsafe { boltffi_thread_safe_counter_new(42) };
+        assert_eq!(unsafe { boltffi_thread_safe_counter_get(handle) }, 42);
+        unsafe { boltffi_thread_safe_counter_free(handle) };
+    }
+
+    #[test]
+    fn set_modifies_value() {
+        let handle = unsafe { boltffi_thread_safe_counter_new(0) };
+        unsafe { boltffi_thread_safe_counter_set(handle, 100) };
+        assert_eq!(unsafe { boltffi_thread_safe_counter_get(handle) }, 100);
+        unsafe { boltffi_thread_safe_counter_free(handle) };
+    }
+
+    #[test]
+    fn add_returns_new_value() {
+        let handle = unsafe { boltffi_thread_safe_counter_new(10) };
+        let result = unsafe { boltffi_thread_safe_counter_add(handle, 5) };
+        assert_eq!(result, 15);
+        unsafe { boltffi_thread_safe_counter_free(handle) };
+    }
+
+    #[test]
+    fn increment_returns_new_value() {
+        let handle = unsafe { boltffi_thread_safe_counter_new(0) };
+        assert_eq!(unsafe { boltffi_thread_safe_counter_increment(handle) }, 1);
+        assert_eq!(unsafe { boltffi_thread_safe_counter_increment(handle) }, 2);
+        assert_eq!(unsafe { boltffi_thread_safe_counter_increment(handle) }, 3);
+        unsafe { boltffi_thread_safe_counter_free(handle) };
+    }
+
+    #[test]
+    fn concurrent_increments_are_safe() {
+        let handle = unsafe { boltffi_thread_safe_counter_new(0) };
+        let handle_ptr = handle as usize;
+
+        let threads: Vec<_> = (0..10)
+            .map(|_| {
+                thread::spawn(move || {
+                    let h = handle_ptr as *mut ThreadSafeCounter;
+                    for _ in 0..1000 {
+                        unsafe { boltffi_thread_safe_counter_increment(h) };
+                    }
+                })
+            })
+            .collect();
+
+        for t in threads {
+            t.join().unwrap();
+        }
+
+        let final_value = unsafe { boltffi_thread_safe_counter_get(handle) };
+        assert_eq!(final_value, 10_000);
+        unsafe { boltffi_thread_safe_counter_free(handle) };
+    }
+
+    #[test]
+    fn concurrent_adds_are_safe() {
+        let handle = unsafe { boltffi_thread_safe_counter_new(0) };
+        let handle_ptr = handle as usize;
+
+        let threads: Vec<_> = (0..4)
+            .map(|i| {
+                thread::spawn(move || {
+                    let h = handle_ptr as *mut ThreadSafeCounter;
+                    for _ in 0..250 {
+                        unsafe { boltffi_thread_safe_counter_add(h, (i + 1) as i32) };
+                    }
+                })
+            })
+            .collect();
+
+        for t in threads {
+            t.join().unwrap();
+        }
+
+        let final_value = unsafe { boltffi_thread_safe_counter_get(handle) };
+        assert_eq!(final_value, 250 * (1 + 2 + 3 + 4));
+        unsafe { boltffi_thread_safe_counter_free(handle) };
+    }
+
+    #[test]
+    fn concurrent_reads_and_writes_are_safe() {
+        let handle = unsafe { boltffi_thread_safe_counter_new(0) };
+        let handle_ptr = handle as usize;
+
+        let writers: Vec<_> = (0..4)
+            .map(|_| {
+                thread::spawn(move || {
+                    let h = handle_ptr as *mut ThreadSafeCounter;
+                    for _ in 0..500 {
+                        unsafe { boltffi_thread_safe_counter_increment(h) };
+                    }
+                })
+            })
+            .collect();
+
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                thread::spawn(move || {
+                    let h = handle_ptr as *mut ThreadSafeCounter;
+                    let mut last = 0;
+                    for _ in 0..500 {
+                        let current = unsafe { boltffi_thread_safe_counter_get(h) };
+                        assert!(current >= last);
+                        last = current;
+                    }
+                })
+            })
+            .collect();
+
+        for t in writers {
+            t.join().unwrap();
+        }
+        for t in readers {
+            t.join().unwrap();
+        }
+
+        let final_value = unsafe { boltffi_thread_safe_counter_get(handle) };
+        assert_eq!(final_value, 4 * 500);
+        unsafe { boltffi_thread_safe_counter_free(handle) };
+    }
+}

@@ -9,9 +9,37 @@ use crate::params::{FfiParams, transform_method_params, transform_method_params_
 use crate::returns::{ReturnAbi, classify_return, encoded_return_body, lower_return_abi};
 use boltffi_ffi_rules::transport::EncodedReturnStrategy;
 
+fn has_mut_self_methods(input: &syn::ItemImpl) -> bool {
+    input.items.iter().any(|item| {
+        if let syn::ImplItem::Fn(method) = item
+            && matches!(method.vis, syn::Visibility::Public(_))
+            && let Some(FnArg::Receiver(r)) = method.sig.inputs.first()
+        {
+            return r.mutability.is_some();
+        }
+        false
+    })
+}
+
 pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let thread_unsafe = attr.to_string().contains("thread_unsafe");
+    let attr_str = attr.to_string();
+    let single_threaded =
+        attr_str.contains("single_threaded") || attr_str.contains("thread_unsafe");
     let input = syn::parse_macro_input!(item as syn::ItemImpl);
+
+    if has_mut_self_methods(&input) && !single_threaded {
+        return syn::Error::new_spanned(
+            &input,
+            "BoltFFI: `&mut self` methods are not thread-safe in FFI contexts\n\n\
+             Two threads calling `&mut self` on the same instance = undefined behavior.\n\n\
+             Options:\n\
+             1. Use `&self` with interior mutability (Mutex, RefCell, etc.) [recommended]\n\
+             2. Add #[export(single_threaded)] ONLY if you enforce thread safety in the target \
+                language and want to avoid synchronization overhead you don't need",
+        )
+        .to_compile_error()
+        .into();
+    }
 
     let custom_types = match custom_types::registry_for_current_crate() {
         Ok(registry) => registry,
@@ -81,7 +109,7 @@ pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
 
-    let thread_safety_assertion = if thread_unsafe {
+    let thread_safety_assertion = if single_threaded {
         quote! {}
     } else {
         let span = type_name.span();
@@ -89,9 +117,9 @@ pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
             #[allow(dead_code)]
             const _: () = {
                 #[diagnostic::on_unimplemented(
-                    message = "BoltFFI: `{Self}` must be thread-safe (Send + Sync) to be exported via FFI",
-                    note = "exported classes can be called from any thread in the foreign language",
-                    note = "use #[boltffi::export(thread_unsafe)] to opt out if you guarantee single-threaded access"
+                    message = "BoltFFI: `{Self}` must be thread-safe (Send + Sync)",
+                    note = "exported types can be accessed from any thread in the foreign language",
+                    note = "add #[export(single_threaded)] if you guarantee single-threaded access"
                 )]
                 trait BoltFFIThreadSafe: Send + Sync {}
                 impl<T: Send + Sync> BoltFFIThreadSafe for T {}
@@ -1193,5 +1221,67 @@ mod tests {
 
         let output = instance_binding.to_string();
         assert!(output.contains("& mut * handle"));
+    }
+
+    #[test]
+    fn has_mut_self_methods_detects_mut_self() {
+        let impl_block = parse_impl(
+            r#"
+            impl Counter {
+                pub fn increment(&mut self) { self.value += 1; }
+            }
+            "#,
+        );
+        assert!(has_mut_self_methods(&impl_block));
+    }
+
+    #[test]
+    fn has_mut_self_methods_ignores_ref_self() {
+        let impl_block = parse_impl(
+            r#"
+            impl Counter {
+                pub fn get(&self) -> i32 { self.value }
+            }
+            "#,
+        );
+        assert!(!has_mut_self_methods(&impl_block));
+    }
+
+    #[test]
+    fn has_mut_self_methods_ignores_static() {
+        let impl_block = parse_impl(
+            r#"
+            impl Counter {
+                pub fn new() -> Self { Counter { value: 0 } }
+            }
+            "#,
+        );
+        assert!(!has_mut_self_methods(&impl_block));
+    }
+
+    #[test]
+    fn has_mut_self_methods_ignores_private() {
+        let impl_block = parse_impl(
+            r#"
+            impl Counter {
+                fn private_mut(&mut self) { self.value += 1; }
+            }
+            "#,
+        );
+        assert!(!has_mut_self_methods(&impl_block));
+    }
+
+    #[test]
+    fn has_mut_self_methods_mixed_methods() {
+        let impl_block = parse_impl(
+            r#"
+            impl Counter {
+                pub fn new() -> Self { Counter { value: 0 } }
+                pub fn get(&self) -> i32 { self.value }
+                pub fn increment(&mut self) { self.value += 1; }
+            }
+            "#,
+        );
+        assert!(has_mut_self_methods(&impl_block));
     }
 }

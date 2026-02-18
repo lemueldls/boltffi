@@ -17,22 +17,24 @@ Put `#[export]` on the impl block, not the struct. The struct stays private; onl
 
 <CodeComparison
   title=""
-  rust={`pub struct Counter {
-    value: i32,
+  rust={`use std::sync::Mutex;
+
+pub struct Counter {
+    value: Mutex<i32>,
 }
 
 #[export]
 impl Counter {
     pub fn new() -> Self {
-        Counter { value: 0 }
+        Counter { value: Mutex::new(0) }
     }
     
-    pub fn increment(&mut self) {
-        self.value += 1;
+    pub fn increment(&self) {
+        *self.value.lock().unwrap() += 1;
     }
     
     pub fn get(&self) -> i32 {
-        self.value
+        *self.value.lock().unwrap()
     }
 }`}
   swift={`public class Counter {
@@ -281,28 +283,35 @@ try {
 
 ## Methods
 
-Methods take `&self` (read-only access) or `&mut self` (mutable access).
+Methods take `&self`. For mutation, use interior mutability (`Mutex`, atomics, etc.).
 
 <CodeComparison
   title=""
-  rust={`#[export]
+  rust={`use std::sync::Mutex;
+
+pub struct Account {
+    balance: Mutex<i64>,
+}
+
+#[export]
 impl Account {
     pub fn balance(&self) -> i64 {
-        self.balance
+        *self.balance.lock().unwrap()
     }
     
-    pub fn deposit(&mut self, amount: i64) {
-        self.balance += amount;
+    pub fn deposit(&self, amount: i64) {
+        *self.balance.lock().unwrap() += amount;
     }
     
     pub fn withdraw(
-        &mut self,
+        &self,
         amount: i64
     ) -> Result<(), AccountError> {
-        if amount > self.balance {
+        let mut balance = self.balance.lock().unwrap();
+        if amount > *balance {
             return Err(AccountError::Insufficient);
         }
-        self.balance -= amount;
+        *balance -= amount;
         Ok(())
     }
 }`}
@@ -361,7 +370,54 @@ try {
 
 `&self` takes a shared reference. `&mut self` takes an exclusive reference.
 
-BoltFFI does not provide automatic locking. If your class has `&mut self` methods and you call them from multiple threads, you must handle synchronization yourself. The simplest approach: use `&self` for all methods and handle mutability internally with atomics, `Mutex`, or other synchronization primitives. See [Thread safety](#thread-safety) for more.
+**`&mut self` methods are blocked by default.** Two threads calling `&mut self` on the same instance is undefined behavior. BoltFFI prevents this at compile time:
+
+```rust
+#[export]
+impl Counter {
+    pub fn increment(&mut self) {  // Compile error
+        self.value += 1;
+    }
+}
+```
+
+```
+error: BoltFFI: `&mut self` methods are not thread-safe in FFI contexts
+
+Two threads calling `&mut self` on the same instance = undefined behavior.
+
+Options:
+1. Use `&self` with interior mutability (Mutex, RefCell, etc.) [recommended]
+2. Add #[export(single_threaded)] ONLY if you enforce thread safety in the target
+   language and want to avoid synchronization overhead you don't need
+```
+
+The recommended approach: use `&self` for all methods and handle mutability with `Mutex`, `RwLock`, or atomics. This is thread-safe by default and works everywhere.
+
+```rust
+use std::sync::Mutex;
+
+pub struct Counter {
+    value: Mutex<i32>,
+}
+
+#[export]
+impl Counter {
+    pub fn new() -> Self {
+        Counter { value: Mutex::new(0) }
+    }
+    
+    pub fn increment(&self) {  // &self, not &mut self
+        *self.value.lock().unwrap() += 1;
+    }
+    
+    pub fn get(&self) -> i32 {
+        *self.value.lock().unwrap()
+    }
+}
+```
+
+If you control thread access from the target language and want to avoid synchronization overhead, see [Single-threaded mode](#single-threaded-mode).
 
 ### Static methods
 
@@ -539,11 +595,11 @@ impl MyClass {
 
 BoltFFI requires exported classes to be `Send + Sync` by default. This is a compile-time check. If your struct isn't thread-safe, compilation fails.
 
-If your struct contains types that aren't thread-safe (like `RefCell`, `Rc`, or raw mutable state), you have two options:
+If your struct contains types that aren't thread-safe (like `RefCell`, `Rc`, or raw pointers), you have two options:
 
-1. Make it thread-safe using `Mutex`, `RwLock`, atomics, or other synchronization primitives.
+1. Make it thread-safe using `Mutex`, `RwLock`, `Arc`, or other synchronization primitives.
 
-2. Opt out with `#[boltffi::export(thread_unsafe)]`. This disables the check, but you're responsible for ensuring the class is only used from a single thread.
+2. Add `#[export(single_threaded)]`. This disables the `Send + Sync` check, but you're responsible for ensuring the class is only used from a single thread.
 
 <CodeComparison
   title=""
@@ -603,24 +659,63 @@ await Promise.all(
 )`}
 />
 
-### Opting out
+## Single-threaded mode
 
-If you guarantee single-threaded access, you can disable the thread safety check:
+By default, BoltFFI enforces two safety rules:
+
+1. Classes must be `Send + Sync`
+2. Methods cannot take `&mut self`
+
+Both rules exist because the target language can call your methods from any thread. Without synchronization, concurrent `&mut self` calls cause undefined behavior.
+
+But synchronization has a cost. If you control thread access in the target language - for example, you only use the object from the main thread, or you wrap it in your own synchronization - you're paying for locks you don't need.
+
+`#[export(single_threaded)]` disables both checks:
 
 ```rust
-pub struct NotThreadSafe {
-    data: RefCell<Vec<String>>,
+pub struct FastCounter {
+    value: i32,
 }
 
-#[boltffi::export(thread_unsafe)]
-impl NotThreadSafe {
-    // ...
+#[export(single_threaded)]
+impl FastCounter {
+    pub fn new() -> Self {
+        FastCounter { value: 0 }
+    }
+    
+    pub fn increment(&mut self) {
+        self.value += 1;
+    }
+    
+    pub fn get(&self) -> i32 {
+        self.value
+    }
 }
 ```
 
-This compiles, but calling methods from multiple threads is undefined behavior.
+This compiles. No `Mutex`, no atomic operations, no overhead. But you're making a promise: you will not call methods on this object from multiple threads simultaneously. Breaking that promise is undefined behavior.
 
-The key insight: `&self` methods don't lock at the FFI boundary. The Rust code runs concurrently. You're responsible for making the Rust implementation thread-safe.
+### When to use single_threaded
+
+Use `single_threaded` when:
+
+- The object is only accessed from the main thread (UI components, view models)
+- You wrap the object in your own synchronization in the target language
+- You're building a single-threaded application (WASM, embedded)
+- Profiling shows synchronization is a bottleneck and you can guarantee single-threaded access
+
+Don't use it just to avoid writing thread-safe code. The default (`&self` + `Mutex`) is safer and the overhead is often negligible.
+
+### Performance comparison
+
+In benchmarks, `single_threaded` mode is roughly 4x faster for method calls that would otherwise need mutex locks:
+
+| Mode | Time per 1000 increments |
+|------|--------------------------|
+| `&self` + `Mutex` | ~5 μs |
+| `&mut self` + `single_threaded` | ~1 μs |
+
+The difference matters in tight loops. For most applications, 5 microseconds per thousand calls is not a bottleneck.
 
 ## Memory management
 
