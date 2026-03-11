@@ -445,7 +445,7 @@ fn generate_async_export(
         Ok(params) => params,
         Err(error) => return error.to_compile_error().into(),
     };
-    let return_abi = ReturnAbi::from_output(fn_output, &custom_types);
+    let return_abi = ReturnAbi::from_output(fn_output, custom_types);
 
     let ffi_return_type = return_abi.async_ffi_return_type();
     let rust_return_type = return_abi.async_rust_return_type();

@@ -232,9 +232,11 @@ fn classify_struct(item_struct: &ItemStruct) -> DataTypeCategory {
         Fields::Unnamed(unnamed) => unnamed.unnamed.len(),
         Fields::Unit => 0,
     };
-    let classify_fields = (field_primitives.len() == total_fields)
-        .then_some(field_primitives)
-        .unwrap_or_default();
+    let classify_fields = if field_primitives.len() == total_fields {
+        field_primitives
+    } else {
+        Vec::new()
+    };
 
     match classification::classify_struct(struct_has_repr_c, &classify_fields) {
         PassableCategory::Blittable => DataTypeCategory::Blittable,
@@ -380,10 +382,11 @@ fn module_path_for_rs_file(src_root: &Path, file_path: &Path) -> syn::Result<Vec
         return Ok(module_path);
     }
 
-    if let Some(stem) = file_name.strip_suffix(".rs") {
-        if stem != "lib" && stem != "main" {
-            module_path.push(stem.to_string());
-        }
+    if let Some(stem) = file_name.strip_suffix(".rs")
+        && stem != "lib"
+        && stem != "main"
+    {
+        module_path.push(stem.to_string());
     }
 
     Ok(module_path)
