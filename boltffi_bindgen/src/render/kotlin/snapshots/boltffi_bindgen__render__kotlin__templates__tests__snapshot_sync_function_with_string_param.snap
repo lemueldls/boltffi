@@ -2,6 +2,7 @@
 source: boltffi_bindgen/src/render/kotlin/templates.rs
 expression: template.render().unwrap()
 ---
+
 fun greet(name: String): String {
     val nameWire = WireWriterPool.acquire(BoltFFIWire.sizeString(name))
     try {

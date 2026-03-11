@@ -1,0 +1,25 @@
+---
+source: boltffi_bindgen/src/render/typescript/templates.rs
+assertion_line: 761
+expression: template.render().unwrap()
+---
+/**
+ * Byte-sized enum
+ */
+export enum ByteState {
+  None = 0,
+  Some = 255,
+}
+
+const ByteStateCodec: WireCodec<ByteState> = {
+  size: (_v) => 1,
+  encode: (writer, v) => { writer.writeU8(v); },
+  decode: (reader) => {
+    const value = reader.readU8();
+    switch (value) {
+      case 0: return ByteState.None;
+      case 255: return ByteState.Some;
+      default: throw new Error(`Unknown ByteState discriminant: ${value}`);
+    }
+  },
+};

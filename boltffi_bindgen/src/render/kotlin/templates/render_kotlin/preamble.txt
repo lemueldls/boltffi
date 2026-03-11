@@ -32,6 +32,44 @@ value class {{ custom.class_name }}(val value: {{ custom.repr_kotlin_type }}) {
         }
     }
 }
+{%- else %}
+{% match custom.native_type %}
+{% when Some with (native_type) %}
+
+object {{ custom.class_name }} {
+    internal fun decode(reader: WireReader): {{ native_type }} {
+        return {% match custom.native_decode_expr %}{% when Some with (native_decode_expr) %}{{ native_decode_expr }}{% when None %}{{ custom.repr_decode_expr }}{% endmatch %}
+    }
+}
+
+internal fun {{ native_type }}.wireEncodedSize(): Int = run {
+    val repr = {% match custom.native_encode_expr %}{% when Some with (native_encode_expr) %}{{ native_encode_expr }}{% when None %}this{% endmatch %}
+    {{ custom.repr_size_expr }}
+}
+
+internal fun {{ native_type }}.wireEncodeTo(wire: WireWriter) {
+    val repr = {% match custom.native_encode_expr %}{% when Some with (native_encode_expr) %}{{ native_encode_expr }}{% when None %}this{% endmatch %}
+    {{ custom.repr_encode_expr }}
+}
+
+{% when None %}
+
+object {{ custom.class_name }} {
+    internal fun decode(reader: WireReader): {{ custom.repr_kotlin_type }} {
+        return {{ custom.repr_decode_expr }}
+    }
+}
+
+internal fun {{ custom.repr_kotlin_type }}.wireEncodedSize(): Int = run {
+    val repr = this
+    {{ custom.repr_size_expr }}
+}
+
+internal fun {{ custom.repr_kotlin_type }}.wireEncodeTo(wire: WireWriter) {
+    val repr = this
+    {{ custom.repr_encode_expr }}
+}
+{% endmatch %}
 {%- endif %}
 {%- endfor %}
 

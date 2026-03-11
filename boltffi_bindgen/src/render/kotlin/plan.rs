@@ -33,10 +33,13 @@ pub enum KotlinApiStyle {
 #[derive(Clone)]
 pub struct KotlinCustomType {
     pub class_name: String,
+    pub native_type: Option<String>,
     pub repr_kotlin_type: String,
     pub repr_size_expr: String,
     pub repr_encode_expr: String,
     pub repr_decode_expr: String,
+    pub native_decode_expr: Option<String>,
+    pub native_encode_expr: Option<String>,
     pub has_native_mapping: bool,
 }
 
@@ -45,6 +48,7 @@ pub struct KotlinEnum {
     pub class_name: String,
     pub variants: Vec<KotlinEnumVariant>,
     pub kind: KotlinEnumKind,
+    pub c_style_value_type: Option<String>,
     pub doc: Option<String>,
 }
 
@@ -68,7 +72,7 @@ impl KotlinEnum {
 #[derive(Clone)]
 pub struct KotlinEnumVariant {
     pub name: String,
-    pub tag: i64,
+    pub tag: i128,
     pub fields: Vec<KotlinEnumField>,
     pub doc: Option<String>,
 }
@@ -95,7 +99,7 @@ pub struct KotlinDataEnumCodec {
 pub struct KotlinDataEnumVariant {
     pub name: String,
     pub const_name: String,
-    pub tag_value: i64,
+    pub tag_value: i128,
     pub fields: Vec<KotlinDataEnumField>,
 }
 

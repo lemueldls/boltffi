@@ -1,3 +1,5 @@
+use boltffi_ffi_rules::classification::{self, FieldPrimitive, PassableCategory};
+
 use crate::ir::ids::{
     CallbackId, ClassId, ConverterPath, CustomTypeId, EnumId, FieldName, FunctionId, MethodId,
     ParamName, QualifiedName, RecordId, StreamId, VariantName,
@@ -13,6 +15,7 @@ pub struct DeprecationInfo {
 #[derive(Debug, Clone)]
 pub struct RecordDef {
     pub id: RecordId,
+    pub is_repr_c: bool,
     pub fields: Vec<FieldDef>,
     pub doc: Option<String>,
     pub deprecated: Option<DeprecationInfo>,
@@ -20,9 +23,24 @@ pub struct RecordDef {
 
 impl RecordDef {
     pub fn is_blittable(&self) -> bool {
-        self.fields
+        let field_primitives: Vec<FieldPrimitive> = self
+            .fields
             .iter()
-            .all(|f| matches!(f.type_expr, TypeExpr::Primitive(_)))
+            .filter_map(|f| match &f.type_expr {
+                TypeExpr::Primitive(p) => Some(p.to_field_primitive()),
+                _ => None,
+            })
+            .collect();
+        let all_primitive = field_primitives.len() == self.fields.len();
+        let classify_fields = if all_primitive {
+            &field_primitives[..]
+        } else {
+            &[]
+        };
+        matches!(
+            classification::classify_struct(self.is_repr_c, classify_fields),
+            PassableCategory::Blittable,
+        )
     }
 }
 
@@ -80,14 +98,14 @@ pub enum EnumRepr {
 #[derive(Debug, Clone)]
 pub struct CStyleVariant {
     pub name: VariantName,
-    pub discriminant: i64,
+    pub discriminant: i128,
     pub doc: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct DataVariant {
     pub name: VariantName,
-    pub discriminant: i64,
+    pub discriminant: i128,
     pub payload: VariantPayload,
     pub doc: Option<String>,
 }

@@ -1,0 +1,13 @@
+---
+source: boltffi_bindgen/src/render/kotlin/templates.rs
+assertion_line: 634
+expression: template.render().unwrap()
+---
+enum class PacketKind(val value: Byte) {
+    Ping((0L).toByte()),
+    Pong((255L).toByte());
+
+    companion object {
+        fun fromValue(value: Byte): PacketKind = entries.first { it.value == value }
+    }
+}

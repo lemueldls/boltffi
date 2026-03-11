@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::record::RecordField;
-use super::types::Deprecation;
+use super::types::{Deprecation, Primitive};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Enumeration {
@@ -10,6 +10,7 @@ pub struct Enumeration {
     pub doc: Option<String>,
     pub deprecated: Option<Deprecation>,
     pub is_error: bool,
+    pub repr_type: Option<Primitive>,
 }
 
 impl Enumeration {
@@ -20,6 +21,7 @@ impl Enumeration {
             doc: None,
             deprecated: None,
             is_error: false,
+            repr_type: None,
         }
     }
 
@@ -70,7 +72,7 @@ impl Enumeration {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Variant {
     pub name: String,
-    pub discriminant: Option<i64>,
+    pub discriminant: Option<i128>,
     pub fields: Vec<RecordField>,
     pub doc: Option<String>,
 }
@@ -85,7 +87,7 @@ impl Variant {
         }
     }
 
-    pub fn with_discriminant(mut self, value: i64) -> Self {
+    pub fn with_discriminant(mut self, value: i128) -> Self {
         self.discriminant = Some(value);
         self
     }

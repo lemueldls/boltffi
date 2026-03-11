@@ -1,6 +1,7 @@
 use askama::Template;
 
 use super::plan::*;
+use crate::ir::types::PrimitiveType;
 
 pub fn ts_doc_block(doc: &Option<String>, indent: &str) -> String {
     match doc {
@@ -17,6 +18,42 @@ pub fn ts_doc_block(doc: &Option<String>, indent: &str) -> String {
             result
         }
         None => String::new(),
+    }
+}
+
+pub fn ts_c_style_enum_size_bytes(tag_type: &PrimitiveType) -> usize {
+    tag_type.wire_size_bytes()
+}
+
+pub fn ts_c_style_enum_write_expr(tag_type: &PrimitiveType) -> String {
+    match tag_type {
+        PrimitiveType::I8 => "writer.writeI8(v)".to_string(),
+        PrimitiveType::U8 => "writer.writeU8(v)".to_string(),
+        PrimitiveType::I16 => "writer.writeI16(v)".to_string(),
+        PrimitiveType::U16 => "writer.writeU16(v)".to_string(),
+        PrimitiveType::I32 => "writer.writeI32(v)".to_string(),
+        PrimitiveType::U32 => "writer.writeU32(v)".to_string(),
+        PrimitiveType::I64 | PrimitiveType::ISize => "writer.writeI64(BigInt(v))".to_string(),
+        PrimitiveType::U64 | PrimitiveType::USize => "writer.writeU64(BigInt(v))".to_string(),
+        PrimitiveType::Bool => "writer.writeBool(v !== 0)".to_string(),
+        PrimitiveType::F32 => "writer.writeF32(v)".to_string(),
+        PrimitiveType::F64 => "writer.writeF64(v)".to_string(),
+    }
+}
+
+pub fn ts_c_style_enum_read_expr(tag_type: &PrimitiveType) -> String {
+    match tag_type {
+        PrimitiveType::I8 => "reader.readI8()".to_string(),
+        PrimitiveType::U8 => "reader.readU8()".to_string(),
+        PrimitiveType::I16 => "reader.readI16()".to_string(),
+        PrimitiveType::U16 => "reader.readU16()".to_string(),
+        PrimitiveType::I32 => "reader.readI32()".to_string(),
+        PrimitiveType::U32 => "reader.readU32()".to_string(),
+        PrimitiveType::I64 | PrimitiveType::ISize => "Number(reader.readI64())".to_string(),
+        PrimitiveType::U64 | PrimitiveType::USize => "Number(reader.readU64())".to_string(),
+        PrimitiveType::Bool => "(reader.readBool() ? 1 : 0)".to_string(),
+        PrimitiveType::F32 => "reader.readF32()".to_string(),
+        PrimitiveType::F64 => "reader.readF64()".to_string(),
     }
 }
 
@@ -78,6 +115,7 @@ impl<'a> RecordTemplate<'a> {
 pub struct EnumCStyleTemplate<'a> {
     pub name: &'a str,
     pub variants: &'a [TsVariant],
+    pub tag_type: PrimitiveType,
     pub doc: &'a Option<String>,
 }
 
@@ -180,6 +218,7 @@ impl TypeScriptEmitter {
                     &EnumCStyleTemplate {
                         name: &enumeration.name,
                         variants: &enumeration.variants,
+                        tag_type: enumeration.c_style_tag_type.unwrap_or(PrimitiveType::I32),
                         doc: &enumeration.doc,
                     }
                     .render()
@@ -362,6 +401,7 @@ impl TypeScriptEmitter {
                     &EnumCStyleTemplate {
                         name: &enumeration.name,
                         variants: &enumeration.variants,
+                        tag_type: enumeration.c_style_tag_type.unwrap_or(PrimitiveType::I32),
                         doc: &enumeration.doc,
                     }
                     .render()
@@ -689,6 +729,33 @@ mod tests {
         let template = EnumCStyleTemplate {
             name: "Color",
             variants: &variants,
+            tag_type: PrimitiveType::I32,
+            doc: &doc,
+        };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    #[test]
+    fn snapshot_enum_c_style_u8_tag() {
+        let doc = Some("Byte-sized enum".to_string());
+        let variants = vec![
+            TsVariant {
+                name: "None".to_string(),
+                discriminant: 0,
+                fields: vec![],
+                doc: None,
+            },
+            TsVariant {
+                name: "Some".to_string(),
+                discriminant: 255,
+                fields: vec![],
+                doc: None,
+            },
+        ];
+        let template = EnumCStyleTemplate {
+            name: "ByteState",
+            variants: &variants,
+            tag_type: PrimitiveType::U8,
             doc: &doc,
         };
         insta::assert_snapshot!(template.render().unwrap());

@@ -199,11 +199,13 @@ pub fn emit_reader_read(seq: &ReadSeq) -> String {
         }
         ReadOp::Enum { id, layout, .. } => match layout {
             EnumLayout::CStyle {
-                is_error: false, ..
+                tag_type,
+                is_error: false,
             } => {
                 format!(
-                    "{}.fromValue(reader.readI32())",
-                    render_type_name(id.as_str())
+                    "{}.fromValue(reader.{}())",
+                    render_type_name(id.as_str()),
+                    enum_tag_read_method(*tag_type),
                 )
             }
             EnumLayout::CStyle { is_error: true, .. }
@@ -270,6 +272,34 @@ fn emit_reader_vec(element_type: &TypeExpr, element: &ReadSeq, layout: &VecLayou
     }
 }
 
+fn enum_tag_read_method(tag_type: PrimitiveType) -> &'static str {
+    match tag_type {
+        PrimitiveType::I8 | PrimitiveType::U8 => "readI8",
+        PrimitiveType::I16 | PrimitiveType::U16 => "readI16",
+        PrimitiveType::I32 | PrimitiveType::U32 => "readI32",
+        PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::ISize | PrimitiveType::USize => {
+            "readI64"
+        }
+        PrimitiveType::Bool => "readBool",
+        PrimitiveType::F32 => "readF32",
+        PrimitiveType::F64 => "readF64",
+    }
+}
+
+fn enum_tag_write_expr(tag_type: PrimitiveType, value_expr: &str) -> String {
+    match tag_type {
+        PrimitiveType::I8 | PrimitiveType::U8 => format!("wire.writeI8({value_expr})"),
+        PrimitiveType::I16 | PrimitiveType::U16 => format!("wire.writeI16({value_expr})"),
+        PrimitiveType::I32 | PrimitiveType::U32 => format!("wire.writeI32({value_expr})"),
+        PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::ISize | PrimitiveType::USize => {
+            format!("wire.writeI64({value_expr})")
+        }
+        PrimitiveType::Bool => format!("wire.writeBool({value_expr})"),
+        PrimitiveType::F32 => format!("wire.writeF32({value_expr})"),
+        PrimitiveType::F64 => format!("wire.writeF64({value_expr})"),
+    }
+}
+
 pub fn emit_write_expr(seq: &WriteSeq) -> String {
     let op = seq.ops.first().expect("write ops");
     match op {
@@ -297,8 +327,9 @@ pub fn emit_write_expr(seq: &WriteSeq) -> String {
         }
         WriteOp::Enum { value, layout, .. } => match layout {
             EnumLayout::CStyle {
-                is_error: false, ..
-            } => format!("wire.writeI32({}.value)", render_value(value)),
+                tag_type,
+                is_error: false,
+            } => enum_tag_write_expr(*tag_type, &format!("{}.value", render_value(value))),
             EnumLayout::CStyle { is_error: true, .. }
             | EnumLayout::Data { .. }
             | EnumLayout::Recursive => {

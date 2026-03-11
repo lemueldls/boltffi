@@ -263,7 +263,12 @@ final class FfiFutureState<T>: @unchecked Sendable {
 
     @inlinable mutating func writeBlittable<T>(_ value: T) {
         var copy = value
+        let size = MemoryLayout<T>.size
+        let stride = MemoryLayout<T>.stride
         Swift.withUnsafeBytes(of: &copy) { bytes.append(contentsOf: $0) }
+        if stride > size {
+            bytes.append(contentsOf: repeatElement(UInt8(0), count: stride - size))
+        }
     }
 
     @inlinable mutating func writeBlittableArray<T>(_ v: [T]) {
@@ -379,7 +384,7 @@ func boltffiAsyncCall<T>(
                             continuation.resume(throwing: error)
                         }
                     case .finishWithoutContinuation:
-                        {{ prefix }}_free_buf_u8(buf)
+                        {{ prefix }}_free_buf(buf)
                     case .alreadyFinished:
                         break
                     }

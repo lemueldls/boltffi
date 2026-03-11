@@ -21,6 +21,28 @@ pub fn kdoc_block(doc: &Option<String>, indent: &str) -> String {
     }
 }
 
+pub fn kotlin_integer_literal(value: &i128, kotlin_type: &str) -> String {
+    match kotlin_type {
+        "Byte" => format!("({value}L).toByte()"),
+        "Short" => format!("({value}L).toShort()"),
+        "Int" => {
+            if i32::try_from(*value).is_ok() {
+                value.to_string()
+            } else {
+                format!("({value}L).toInt()")
+            }
+        }
+        "Long" => {
+            if i64::try_from(*value).is_ok() {
+                format!("{value}L")
+            } else {
+                format!("({value}uL).toLong()")
+            }
+        }
+        _ => value.to_string(),
+    }
+}
+
 #[derive(Template)]
 #[template(path = "render_kotlin/preamble.txt", escape = "none")]
 pub struct PreambleTemplate<'a> {
@@ -75,6 +97,7 @@ pub struct RecordWriterTemplate<'a> {
 pub struct CStyleEnumTemplate<'a> {
     pub class_name: &'a str,
     pub variants: &'a [super::plan::KotlinEnumVariant],
+    pub value_type: &'a str,
     pub doc: &'a Option<String>,
 }
 
@@ -246,6 +269,7 @@ impl KotlinEmitter {
                 CStyleEnumTemplate {
                     class_name: &enumeration.class_name,
                     variants: &enumeration.variants,
+                    value_type: enumeration.c_style_value_type.as_deref().unwrap_or("Int"),
                     doc: &enumeration.doc,
                 }
                 .render()
@@ -586,7 +610,32 @@ mod tests {
                     doc: None,
                 },
             ],
+            value_type: "Int",
             doc: &Some("A cardinal compass direction.".to_string()),
+        };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    #[test]
+    fn snapshot_enum_with_byte_tag_type() {
+        let template = CStyleEnumTemplate {
+            class_name: "PacketKind",
+            variants: &[
+                KotlinEnumVariant {
+                    name: "Ping".to_string(),
+                    tag: 0,
+                    fields: vec![],
+                    doc: None,
+                },
+                KotlinEnumVariant {
+                    name: "Pong".to_string(),
+                    tag: 255,
+                    fields: vec![],
+                    doc: None,
+                },
+            ],
+            value_type: "Byte",
+            doc: &None,
         };
         insta::assert_snapshot!(template.render().unwrap());
     }

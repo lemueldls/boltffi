@@ -88,6 +88,7 @@ impl<'m> ContractBuilder<'m> {
     fn convert_record(&self, record: &model::Record) -> RecordDef {
         RecordDef {
             id: RecordId::new(&record.name),
+            is_repr_c: record.is_repr_c,
             fields: record
                 .fields
                 .iter()
@@ -115,30 +116,31 @@ impl<'m> ContractBuilder<'m> {
     }
 
     fn convert_enum(&self, enumeration: &model::Enumeration) -> EnumDef {
+        let tag_type = enumeration.repr_type.unwrap_or(PrimitiveType::I32);
         let repr = if enumeration.is_c_style() {
             EnumRepr::CStyle {
-                tag_type: PrimitiveType::I32,
+                tag_type,
                 variants: enumeration
                     .variants
                     .iter()
                     .enumerate()
                     .map(|(idx, v)| CStyleVariant {
                         name: VariantName::new(&v.name),
-                        discriminant: v.discriminant.unwrap_or(idx as i64),
+                        discriminant: v.discriminant.unwrap_or(idx as i128),
                         doc: v.doc.clone(),
                     })
                     .collect(),
             }
         } else {
             EnumRepr::Data {
-                tag_type: PrimitiveType::I32,
+                tag_type,
                 variants: enumeration
                     .variants
                     .iter()
                     .enumerate()
                     .map(|(idx, v)| DataVariant {
                         name: VariantName::new(&v.name),
-                        discriminant: v.discriminant.unwrap_or(idx as i64),
+                        discriminant: v.discriminant.unwrap_or(idx as i128),
                         payload: self.convert_variant_payload(&v.fields),
                         doc: v.doc.clone(),
                     })
@@ -419,7 +421,7 @@ impl<'m> ContractBuilder<'m> {
 
     fn convert_type(&self, ty: &model::Type) -> TypeExpr {
         match ty {
-            model::Type::Primitive(p) => TypeExpr::Primitive(convert_primitive(*p)),
+            model::Type::Primitive(p) => TypeExpr::Primitive(*p),
             model::Type::String => TypeExpr::String,
             model::Type::Bytes => TypeExpr::Bytes,
             model::Type::Builtin(id) => TypeExpr::Builtin(BuiltinId::new(id.type_id())),
@@ -480,24 +482,6 @@ fn parse_default_value(raw: &str) -> DefaultValue {
         }
         s if s.contains('.') => DefaultValue::Float(s.parse().unwrap_or(0.0)),
         s => DefaultValue::Integer(s.parse().unwrap_or(0)),
-    }
-}
-
-fn convert_primitive(p: model::Primitive) -> PrimitiveType {
-    match p {
-        model::Primitive::Bool => PrimitiveType::Bool,
-        model::Primitive::I8 => PrimitiveType::I8,
-        model::Primitive::U8 => PrimitiveType::U8,
-        model::Primitive::I16 => PrimitiveType::I16,
-        model::Primitive::U16 => PrimitiveType::U16,
-        model::Primitive::I32 => PrimitiveType::I32,
-        model::Primitive::U32 => PrimitiveType::U32,
-        model::Primitive::I64 => PrimitiveType::I64,
-        model::Primitive::U64 => PrimitiveType::U64,
-        model::Primitive::F32 => PrimitiveType::F32,
-        model::Primitive::F64 => PrimitiveType::F64,
-        model::Primitive::Isize => PrimitiveType::ISize,
-        model::Primitive::Usize => PrimitiveType::USize,
     }
 }
 

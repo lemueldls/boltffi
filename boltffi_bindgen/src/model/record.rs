@@ -6,19 +6,31 @@ use super::types::{Deprecation, Type};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Record {
     pub name: String,
+    #[serde(default = "default_true")]
+    pub is_repr_c: bool,
     pub fields: Vec<RecordField>,
     pub doc: Option<String>,
     pub deprecated: Option<Deprecation>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Record {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            is_repr_c: true,
             fields: Vec::new(),
             doc: None,
             deprecated: None,
         }
+    }
+
+    pub fn with_repr_c(mut self, is_repr_c: bool) -> Self {
+        self.is_repr_c = is_repr_c;
+        self
     }
 
     pub fn with_field(mut self, field: RecordField) -> Self {

@@ -4,6 +4,8 @@ use super::plan::{
     SwiftCallMode, SwiftCallback, SwiftClass, SwiftEnum, SwiftField, SwiftFunction, SwiftRecord,
     SwiftStreamMode, SwiftVariant,
 };
+use crate::ir::types::PrimitiveType;
+use crate::render::swift::emit;
 
 pub fn swift_doc_block(doc: &Option<String>, indent: &str) -> String {
     match doc {
@@ -21,6 +23,46 @@ pub fn swift_doc_block(doc: &Option<String>, indent: &str) -> String {
             lines
         }
         None => String::new(),
+    }
+}
+
+pub fn swift_c_style_enum_raw_type(tag_type: &PrimitiveType) -> String {
+    emit::swift_primitive(*tag_type)
+}
+
+pub fn swift_c_style_enum_decode_expr(tag_type: &PrimitiveType) -> String {
+    match tag_type {
+        PrimitiveType::Bool => "reader.readBool() ? 1 : 0".to_string(),
+        PrimitiveType::I8 => "reader.readI8()".to_string(),
+        PrimitiveType::U8 => "reader.readU8()".to_string(),
+        PrimitiveType::I16 => "reader.readI16()".to_string(),
+        PrimitiveType::U16 => "reader.readU16()".to_string(),
+        PrimitiveType::I32 => "reader.readI32()".to_string(),
+        PrimitiveType::U32 => "reader.readU32()".to_string(),
+        PrimitiveType::I64 => "reader.readI64()".to_string(),
+        PrimitiveType::U64 => "reader.readU64()".to_string(),
+        PrimitiveType::ISize => "Int(reader.readI64())".to_string(),
+        PrimitiveType::USize => "UInt(reader.readU64())".to_string(),
+        PrimitiveType::F32 => "reader.readF32()".to_string(),
+        PrimitiveType::F64 => "reader.readF64()".to_string(),
+    }
+}
+
+pub fn swift_c_style_enum_encode_stmt(tag_type: &PrimitiveType) -> String {
+    match tag_type {
+        PrimitiveType::Bool => "writer.writeBool(rawValue != 0)".to_string(),
+        PrimitiveType::I8 => "writer.writeI8(rawValue)".to_string(),
+        PrimitiveType::U8 => "writer.writeU8(rawValue)".to_string(),
+        PrimitiveType::I16 => "writer.writeI16(rawValue)".to_string(),
+        PrimitiveType::U16 => "writer.writeU16(rawValue)".to_string(),
+        PrimitiveType::I32 => "writer.writeI32(rawValue)".to_string(),
+        PrimitiveType::U32 => "writer.writeU32(rawValue)".to_string(),
+        PrimitiveType::I64 => "writer.writeI64(rawValue)".to_string(),
+        PrimitiveType::U64 => "writer.writeU64(rawValue)".to_string(),
+        PrimitiveType::ISize => "writer.writeI64(Int64(rawValue))".to_string(),
+        PrimitiveType::USize => "writer.writeU64(UInt64(rawValue))".to_string(),
+        PrimitiveType::F32 => "writer.writeF32(rawValue)".to_string(),
+        PrimitiveType::F64 => "writer.writeF64(rawValue)".to_string(),
     }
 }
 
@@ -79,6 +121,7 @@ impl<'a> RecordTemplate<'a> {
 pub struct EnumCStyleTemplate<'a> {
     pub class_name: &'a str,
     pub variants: &'a [SwiftVariant],
+    pub tag_type: PrimitiveType,
     pub is_error: bool,
     pub doc: &'a Option<String>,
 }
@@ -88,6 +131,7 @@ impl<'a> EnumCStyleTemplate<'a> {
         Self {
             class_name: &e.name,
             variants: &e.variants,
+            tag_type: e.c_style_tag_type.unwrap_or(PrimitiveType::I32),
             is_error: e.is_error,
             doc: &e.doc,
         }
@@ -644,6 +688,7 @@ mod tests {
         let e = SwiftEnum {
             name: "Direction".to_string(),
             style: SwiftEnumStyle::CStyle,
+            c_style_tag_type: Some(PrimitiveType::I32),
             is_error: false,
             variants: vec![
                 SwiftVariant {
@@ -669,6 +714,7 @@ mod tests {
         let e = SwiftEnum {
             name: "Status".to_string(),
             style: SwiftEnumStyle::CStyle,
+            c_style_tag_type: Some(PrimitiveType::I32),
             is_error: false,
             variants: vec![
                 SwiftVariant {
@@ -696,10 +742,37 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_c_style_enum_u8_tag() {
+        let e = SwiftEnum {
+            name: "ByteStatus".to_string(),
+            style: SwiftEnumStyle::CStyle,
+            c_style_tag_type: Some(PrimitiveType::U8),
+            is_error: false,
+            variants: vec![
+                SwiftVariant {
+                    swift_name: "idle".to_string(),
+                    discriminant: 0,
+                    payload: SwiftVariantPayload::Unit,
+                    doc: None,
+                },
+                SwiftVariant {
+                    swift_name: "running".to_string(),
+                    discriminant: 255,
+                    payload: SwiftVariantPayload::Unit,
+                    doc: None,
+                },
+            ],
+            doc: None,
+        };
+        insta::assert_snapshot!(render_enum(&e));
+    }
+
+    #[test]
     fn snapshot_c_style_error_enum() {
         let e = SwiftEnum {
             name: "ApiError".to_string(),
             style: SwiftEnumStyle::CStyle,
+            c_style_tag_type: Some(PrimitiveType::I32),
             is_error: true,
             variants: vec![
                 SwiftVariant {
@@ -731,6 +804,7 @@ mod tests {
         let e = SwiftEnum {
             name: "Message".to_string(),
             style: SwiftEnumStyle::Data,
+            c_style_tag_type: None,
             is_error: false,
             variants: vec![
                 SwiftVariant {
@@ -776,6 +850,7 @@ mod tests {
         let e = SwiftEnum {
             name: "Event".to_string(),
             style: SwiftEnumStyle::Data,
+            c_style_tag_type: None,
             is_error: false,
             variants: vec![
                 SwiftVariant {
@@ -1098,7 +1173,7 @@ mod tests {
                 wait: "boltffi_event_source_events_wait".to_string(),
                 unsubscribe: "boltffi_event_source_events_unsubscribe".to_string(),
                 free: "boltffi_event_source_events_free".to_string(),
-                free_buf: "boltffi_free_buf_u8".to_string(),
+                free_buf: "boltffi_free_buf".to_string(),
                 atomic_cas: "boltffi_atomic_u8_cas".to_string(),
             }],
             doc: None,
@@ -1403,6 +1478,7 @@ mod tests {
                 },
             ],
             style: SwiftEnumStyle::Data,
+            c_style_tag_type: None,
             is_error: false,
             doc: None,
         };

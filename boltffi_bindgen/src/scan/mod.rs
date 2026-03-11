@@ -2,7 +2,7 @@ use indexmap::IndexMap;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use syn::{
     Attribute, Fields, FnArg, ImplItem, Item, ItemEnum, ItemImpl, ItemStruct, ItemTrait, Type,
 };
@@ -28,10 +28,12 @@ pub enum TypeShape {
     Pending(PendingKind),
     Record {
         fields: Vec<RecordField>,
+        is_repr_c: bool,
     },
     Enum {
         variants: Vec<Variant>,
         is_error: bool,
+        repr_type: Option<Primitive>,
     },
     Class {
         constructors: Vec<Constructor>,
@@ -266,10 +268,20 @@ pub struct SourceScanner {
     alias_resolver: AliasResolver,
     global_aliases: HashMap<String, Vec<String>>,
     compiler_canonical_types: HashMap<String, String>,
+    integer_constants: HashMap<String, i128>,
+    source_root: Option<PathBuf>,
+    target_pointer_width_bits: Option<u8>,
 }
 
 impl SourceScanner {
     pub fn new(module_name: impl Into<String>) -> Self {
+        Self::new_with_pointer_width(module_name, parse_target_pointer_width())
+    }
+
+    pub fn new_with_pointer_width(
+        module_name: impl Into<String>,
+        target_pointer_width_bits: Option<u8>,
+    ) -> Self {
         Self {
             module_name: module_name.into(),
             type_registry: TypeRegistry::default(),
@@ -278,6 +290,9 @@ impl SourceScanner {
             alias_resolver: AliasResolver::default(),
             global_aliases: HashMap::new(),
             compiler_canonical_types: HashMap::new(),
+            integer_constants: HashMap::new(),
+            source_root: None,
+            target_pointer_width_bits,
         }
     }
 
@@ -290,7 +305,10 @@ impl SourceScanner {
             .collect();
         files.sort();
 
+        self.source_root = Some(dir.to_path_buf());
         self.global_aliases = Self::collect_global_aliases(&files)?;
+        self.integer_constants =
+            collect_integer_constants_from_files(dir, &files, self.target_pointer_width_bits)?;
         let compiler_targets = Self::collect_compiler_type_targets(&files, &self.global_aliases)?;
         self.compiler_canonical_types =
             compiler_type_resolution::resolve(crate_path, &self.module_name, compiler_targets)?;
@@ -822,12 +840,21 @@ impl SourceScanner {
 
         self.alias_resolver =
             AliasResolver::from_items(&syntax.items).with_global(&self.global_aliases);
-        syntax.items.iter().for_each(|item| self.process_item(item));
+        let file_module_path = self
+            .source_root
+            .as_ref()
+            .map(|source_root| module_path_for_source_file(source_root, path))
+            .transpose()?
+            .unwrap_or_default();
+        syntax
+            .items
+            .iter()
+            .try_for_each(|item| self.process_item(item, &file_module_path))?;
 
         Ok(())
     }
 
-    fn process_item(&mut self, item: &Item) {
+    fn process_item(&mut self, item: &Item, file_module_path: &[String]) -> Result<(), String> {
         match item {
             Item::Struct(item_struct) => {
                 if let Some(doc) = extract_doc_string(&item_struct.attrs) {
@@ -870,11 +897,12 @@ impl SourceScanner {
                     || has_attribute(&item_enum.attrs, "data")
                     || is_error
                 {
-                    self.process_enum(item_enum, is_error);
+                    self.process_enum(item_enum, is_error, file_module_path)?;
                 }
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn resolve_typed_params(
@@ -966,24 +994,53 @@ impl SourceScanner {
             _ => Vec::new(),
         };
 
-        self.type_registry.fill(&name, TypeShape::Record { fields });
+        let has_data = has_attribute(&item_struct.attrs, "data");
+        let has_any_repr = item_struct.attrs.iter().any(|a| a.path().is_ident("repr"));
+        let is_repr_c = if has_data && !has_any_repr {
+            true
+        } else {
+            has_repr_c(&item_struct.attrs)
+        };
+        self.type_registry
+            .fill(&name, TypeShape::Record { fields, is_repr_c });
     }
 
-    fn process_enum(&mut self, item_enum: &ItemEnum, is_error: bool) {
+    fn process_enum(
+        &mut self,
+        item_enum: &ItemEnum,
+        is_error: bool,
+        file_module_path: &[String],
+    ) -> Result<(), String> {
         let name = item_enum.ident.to_string();
-        let mut next_discriminant: i64 = 0;
+        let repr_type = extract_repr_int(&item_enum.attrs);
+        let mut next_discriminant: i128 = 0;
 
         let variants = item_enum
             .variants
             .iter()
-            .map(|v| {
+            .map(|v| -> Result<Variant, String> {
                 let variant_name = v.ident.to_string();
-                let discriminant = v
-                    .discriminant
-                    .as_ref()
-                    .and_then(|(_, expr)| parse_discriminant_expr(expr))
-                    .unwrap_or(next_discriminant);
-                next_discriminant = discriminant + 1;
+                let discriminant = match v.discriminant.as_ref() {
+                    Some((_, expr)) => parse_discriminant_expr(
+                        expr,
+                        &self.integer_constants,
+                        file_module_path,
+                        self.target_pointer_width_bits,
+                    )
+                    .ok_or_else(|| {
+                        format!(
+                            "failed to evaluate discriminant for enum `{}` variant `{}`",
+                            name, variant_name
+                        )
+                    })?,
+                    None => next_discriminant,
+                };
+                next_discriminant = discriminant.checked_add(1).ok_or_else(|| {
+                    format!(
+                        "discriminant overflow for enum `{}` variant `{}`",
+                        name, variant_name
+                    )
+                })?;
 
                 let fields: Vec<RecordField> = match &v.fields {
                     Fields::Named(named) => named
@@ -1026,14 +1083,21 @@ impl SourceScanner {
                 let variant = Variant::new(&variant_name)
                     .with_discriminant(discriminant)
                     .maybe_doc(extract_doc_string(&v.attrs));
-                fields
+                Ok(fields
                     .into_iter()
-                    .fold(variant, |v, field| v.with_field(field))
+                    .fold(variant, |v, field| v.with_field(field)))
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
-        self.type_registry
-            .fill(&name, TypeShape::Enum { variants, is_error });
+        self.type_registry.fill(
+            &name,
+            TypeShape::Enum {
+                variants,
+                is_error,
+                repr_type,
+            },
+        );
+        Ok(())
     }
 
     fn process_function(&mut self, item_fn: &syn::ItemFn) {
@@ -1225,14 +1289,19 @@ impl SourceScanner {
 
         for (name, entry) in self.type_registry.drain() {
             match entry.shape {
-                TypeShape::Record { fields } => {
+                TypeShape::Record { fields, is_repr_c } => {
                     let record = fields
                         .into_iter()
                         .fold(Record::new(&name), |r, f| r.with_field(f))
+                        .with_repr_c(is_repr_c)
                         .maybe_doc(entry.doc);
                     module = module.with_record(record);
                 }
-                TypeShape::Enum { variants, is_error } => {
+                TypeShape::Enum {
+                    variants,
+                    is_error,
+                    repr_type,
+                } => {
                     let mut enumeration = variants
                         .into_iter()
                         .fold(Enumeration::new(&name), |e, v| e.with_variant(v))
@@ -1240,6 +1309,7 @@ impl SourceScanner {
                     if is_error {
                         enumeration = enumeration.as_error();
                     }
+                    enumeration.repr_type = repr_type;
                     module = module.with_enum(enumeration);
                 }
                 TypeShape::Class {
@@ -1454,38 +1524,387 @@ fn has_repr_c(attrs: &[Attribute]) -> bool {
 }
 
 fn has_repr_int(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
+    extract_repr_int(attrs).is_some()
+}
+
+fn extract_repr_int(attrs: &[Attribute]) -> Option<Primitive> {
+    attrs.iter().find_map(|attr| {
         if !attr.path().is_ident("repr") {
-            return false;
+            return None;
         }
-        let Ok(meta) = attr.meta.require_list() else {
-            return false;
-        };
-        let tokens = meta.tokens.to_string();
-        ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"]
+        let idents = attr
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated,
+            )
+            .ok()?;
+        idents
             .iter()
-            .any(|ty| tokens.contains(ty))
+            .find_map(|ident| ident.to_string().parse().ok())
     })
 }
 
-fn parse_discriminant_expr(expr: &syn::Expr) -> Option<i64> {
+fn module_path_for_source_file(
+    source_root: &Path,
+    file_path: &Path,
+) -> Result<Vec<String>, String> {
+    let relative_path = file_path.strip_prefix(source_root).map_err(|error| {
+        format!(
+            "Failed to resolve module path for {}: {}",
+            file_path.display(),
+            error
+        )
+    })?;
+    let relative_components = relative_path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    let (file_name, directory_components) = relative_components
+        .split_last()
+        .ok_or_else(|| format!("Failed to resolve module path for {}", file_path.display()))?;
+    let mut module_path = directory_components.to_vec();
+    let file_stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| format!("Failed to resolve module path for {}", file_path.display()))?;
+    if !matches!(file_stem, "lib" | "main" | "mod") {
+        module_path.push(file_stem.to_string());
+    }
+    Ok(module_path)
+}
+
+fn collect_integer_constant_candidates(
+    items: &[Item],
+    module_path: &[String],
+    out: &mut Vec<(String, syn::Expr)>,
+) {
+    items.iter().for_each(|item| match item {
+        Item::Const(item_const) => {
+            let key = module_path
+                .iter()
+                .cloned()
+                .chain(std::iter::once(item_const.ident.to_string()))
+                .collect::<Vec<_>>()
+                .join("::");
+            out.push((key, (*item_const.expr).clone()));
+        }
+        Item::Mod(item_mod) => {
+            if let Some((_, inner_items)) = &item_mod.content {
+                let mut nested_path = module_path.to_vec();
+                nested_path.push(item_mod.ident.to_string());
+                collect_integer_constant_candidates(inner_items, &nested_path, out);
+            }
+        }
+        _ => {}
+    });
+}
+
+fn constant_parent_module_path(constant_key: &str) -> Vec<String> {
+    let mut segments = constant_key
+        .split("::")
+        .map(|segment| segment.to_string())
+        .collect::<Vec<_>>();
+    segments.pop();
+    segments
+}
+
+fn resolve_integer_constants(
+    mut candidates: Vec<(String, syn::Expr)>,
+    target_pointer_width_bits: Option<u8>,
+) -> HashMap<String, i128> {
+    let mut resolved = HashMap::<String, i128>::new();
+    loop {
+        let unresolved_before = candidates.len();
+        candidates = candidates
+            .into_iter()
+            .filter_map(|(key, expr)| {
+                if resolved.contains_key(&key) {
+                    return None;
+                }
+                let current_module_path = constant_parent_module_path(&key);
+                if let Some(value) = parse_discriminant_expr(
+                    &expr,
+                    &resolved,
+                    current_module_path.as_slice(),
+                    target_pointer_width_bits,
+                ) {
+                    resolved.insert(key, value);
+                    None
+                } else {
+                    Some((key, expr))
+                }
+            })
+            .collect();
+        if candidates.is_empty() || candidates.len() == unresolved_before {
+            break;
+        }
+    }
+    resolved
+}
+
+fn collect_integer_constants(
+    items: &[Item],
+    module_path: &[String],
+    target_pointer_width_bits: Option<u8>,
+) -> HashMap<String, i128> {
+    let mut candidates = Vec::<(String, syn::Expr)>::new();
+    collect_integer_constant_candidates(items, module_path, &mut candidates);
+    resolve_integer_constants(candidates, target_pointer_width_bits)
+}
+
+fn collect_integer_constants_from_files(
+    source_root: &Path,
+    files: &[PathBuf],
+    target_pointer_width_bits: Option<u8>,
+) -> Result<HashMap<String, i128>, String> {
+    let mut candidates = Vec::<(String, syn::Expr)>::new();
+    files.iter().try_for_each(|file_path| {
+        let module_path = module_path_for_source_file(source_root, file_path)?;
+        let content = fs::read_to_string(file_path)
+            .map_err(|error| format!("Failed to read {}: {}", file_path.display(), error))?;
+        let syntax = syn::parse_file(&content)
+            .map_err(|error| format!("Failed to parse {}: {}", file_path.display(), error))?;
+        collect_integer_constant_candidates(&syntax.items, module_path.as_slice(), &mut candidates);
+        Ok::<(), String>(())
+    })?;
+    Ok(resolve_integer_constants(
+        candidates,
+        target_pointer_width_bits,
+    ))
+}
+
+fn parse_discriminant_expr(
+    expr: &syn::Expr,
+    constants: &HashMap<String, i128>,
+    current_module_path: &[String],
+    target_pointer_width_bits: Option<u8>,
+) -> Option<i128> {
+    fn parse_integer_literal(literal: &syn::LitInt) -> Option<i128> {
+        if let Ok(value) = literal.base10_parse::<i128>() {
+            return Some(value);
+        }
+        literal
+            .base10_parse::<u128>()
+            .ok()
+            .filter(|value| *value <= u64::MAX as u128)
+            .map(|value| value as i128)
+    }
+
+    fn parse_negated_integer_literal(literal: &syn::LitInt) -> Option<i128> {
+        let unsigned = literal.base10_parse::<u128>().ok()?;
+        if unsigned == (i64::MAX as u128) + 1 {
+            return Some(i64::MIN as i128);
+        }
+        i128::try_from(unsigned).ok()?.checked_neg()
+    }
+
+    fn cast_target_name(cast_type: &syn::Type) -> Option<String> {
+        match cast_type {
+            syn::Type::Path(type_path) if type_path.qself.is_none() => type_path
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string()),
+            syn::Type::Group(group) => cast_target_name(group.elem.as_ref()),
+            syn::Type::Paren(paren) => cast_target_name(paren.elem.as_ref()),
+            _ => None,
+        }
+    }
+
+    fn apply_integer_cast(
+        value: i128,
+        cast_type: &syn::Type,
+        target_pointer_width_bits: Option<u8>,
+    ) -> Option<i128> {
+        match cast_target_name(cast_type)?.as_str() {
+            "i8" => Some((value as i8) as i128),
+            "u8" => Some((value as u8) as i128),
+            "i16" => Some((value as i16) as i128),
+            "u16" => Some((value as u16) as i128),
+            "i32" => Some((value as i32) as i128),
+            "u32" => Some((value as u32) as i128),
+            "i64" => Some((value as i64) as i128),
+            "u64" => Some((value as u64) as i128),
+            "isize" => match target_pointer_width_bits {
+                Some(32) => Some((value as i32) as i128),
+                Some(64) => Some((value as i64) as i128),
+                _ => None,
+            },
+            "usize" => match target_pointer_width_bits {
+                Some(32) => Some((value as u32) as i128),
+                Some(64) => Some((value as u64) as i128),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn path_key(path: &[String]) -> Option<String> {
+        (!path.is_empty()).then(|| path.join("::"))
+    }
+
+    fn path_segments(path: &syn::Path) -> Vec<String> {
+        path.segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>()
+    }
+
+    fn const_lookup_keys(path: &syn::Path, current_module_path: &[String]) -> Vec<String> {
+        let segments = path_segments(path);
+        if segments.is_empty() {
+            return Vec::new();
+        }
+        if path.leading_colon.is_some() {
+            return path_key(segments.as_slice()).into_iter().collect();
+        }
+
+        match segments.first().map(String::as_str) {
+            Some("crate") => {
+                let absolute_path = segments.into_iter().skip(1).collect::<Vec<_>>();
+                path_key(absolute_path.as_slice()).into_iter().collect()
+            }
+            Some("self") => {
+                let resolved_path = current_module_path
+                    .iter()
+                    .cloned()
+                    .chain(segments.into_iter().skip(1))
+                    .collect::<Vec<_>>();
+                path_key(resolved_path.as_slice()).into_iter().collect()
+            }
+            Some("super") => {
+                let super_depth = segments
+                    .iter()
+                    .take_while(|segment| segment.as_str() == "super")
+                    .count();
+                if super_depth > current_module_path.len() {
+                    return Vec::new();
+                }
+                let mut resolved_path = current_module_path
+                    .iter()
+                    .take(current_module_path.len() - super_depth)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                resolved_path.extend(segments.iter().skip(super_depth).cloned());
+                let mut lookup_keys = path_key(resolved_path.as_slice())
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let fallback_path = segments.into_iter().skip(super_depth).collect::<Vec<_>>();
+                if let Some(fallback_key) = path_key(fallback_path.as_slice())
+                    && lookup_keys.first() != Some(&fallback_key)
+                {
+                    lookup_keys.push(fallback_key);
+                }
+                lookup_keys
+            }
+            _ => {
+                let relative_path = current_module_path
+                    .iter()
+                    .cloned()
+                    .chain(segments.iter().cloned())
+                    .collect::<Vec<_>>();
+                let mut lookup_keys = path_key(relative_path.as_slice())
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                if let Some(absolute_key) = path_key(segments.as_slice())
+                    && lookup_keys.first() != Some(&absolute_key)
+                {
+                    lookup_keys.push(absolute_key);
+                }
+                lookup_keys
+            }
+        }
+    }
+
     match expr {
         syn::Expr::Lit(lit) => {
             if let syn::Lit::Int(int_lit) = &lit.lit {
-                int_lit.base10_parse().ok()
+                parse_integer_literal(int_lit)
             } else {
                 None
             }
         }
         syn::Expr::Unary(unary) => {
-            if matches!(unary.op, syn::UnOp::Neg(_)) {
-                parse_discriminant_expr(&unary.expr).map(|v| -v)
-            } else {
-                None
+            if matches!(unary.op, syn::UnOp::Neg(_))
+                && let syn::Expr::Lit(lit) = unary.expr.as_ref()
+                && let syn::Lit::Int(int_lit) = &lit.lit
+            {
+                return parse_negated_integer_literal(int_lit);
+            }
+            parse_discriminant_expr(
+                &unary.expr,
+                constants,
+                current_module_path,
+                target_pointer_width_bits,
+            )
+            .and_then(|value| match unary.op {
+                syn::UnOp::Neg(_) => value.checked_neg(),
+                syn::UnOp::Not(_) => Some(!value),
+                _ => None,
+            })
+        }
+        syn::Expr::Binary(binary) => {
+            let left = parse_discriminant_expr(
+                &binary.left,
+                constants,
+                current_module_path,
+                target_pointer_width_bits,
+            )?;
+            let right = parse_discriminant_expr(
+                &binary.right,
+                constants,
+                current_module_path,
+                target_pointer_width_bits,
+            )?;
+            match binary.op {
+                syn::BinOp::Add(_) => left.checked_add(right),
+                syn::BinOp::Sub(_) => left.checked_sub(right),
+                syn::BinOp::Mul(_) => left.checked_mul(right),
+                syn::BinOp::Div(_) => (right != 0).then(|| left / right),
+                syn::BinOp::Rem(_) => (right != 0).then(|| left % right),
+                syn::BinOp::BitXor(_) => Some(left ^ right),
+                syn::BinOp::BitAnd(_) => Some(left & right),
+                syn::BinOp::BitOr(_) => Some(left | right),
+                syn::BinOp::Shl(_) => u32::try_from(right)
+                    .ok()
+                    .and_then(|shift| left.checked_shl(shift)),
+                syn::BinOp::Shr(_) => u32::try_from(right)
+                    .ok()
+                    .and_then(|shift| left.checked_shr(shift)),
+                _ => None,
             }
         }
+        syn::Expr::Paren(paren) => parse_discriminant_expr(
+            &paren.expr,
+            constants,
+            current_module_path,
+            target_pointer_width_bits,
+        ),
+        syn::Expr::Group(group) => parse_discriminant_expr(
+            &group.expr,
+            constants,
+            current_module_path,
+            target_pointer_width_bits,
+        ),
+        syn::Expr::Path(path) => const_lookup_keys(&path.path, current_module_path)
+            .into_iter()
+            .find_map(|key| constants.get(&key).copied()),
+        syn::Expr::Cast(cast) => parse_discriminant_expr(
+            &cast.expr,
+            constants,
+            current_module_path,
+            target_pointer_width_bits,
+        )
+        .and_then(|value| apply_integer_cast(value, cast.ty.as_ref(), target_pointer_width_bits)),
         _ => None,
     }
+}
+
+fn parse_target_pointer_width() -> Option<u8> {
+    std::env::var("BOLTFFI_TARGET_POINTER_WIDTH")
+        .ok()
+        .or_else(|| std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH").ok())
+        .and_then(|value| value.parse::<u8>().ok())
+        .filter(|width| matches!(width, 32 | 64))
 }
 
 fn has_ffi_type_derive(attrs: &[Attribute]) -> bool {
@@ -1809,8 +2228,8 @@ fn string_to_ffi_type(
         "f32" => Some(MType::Primitive(Primitive::F32)),
         "f64" => Some(MType::Primitive(Primitive::F64)),
         "bool" => Some(MType::Primitive(Primitive::Bool)),
-        "usize" => Some(MType::Primitive(Primitive::Usize)),
-        "isize" => Some(MType::Primitive(Primitive::Isize)),
+        "usize" => Some(MType::Primitive(Primitive::USize)),
+        "isize" => Some(MType::Primitive(Primitive::ISize)),
         "String" | "str" | "std::string::String" | "alloc::string::String" => Some(MType::String),
         s if s.starts_with("Vec<") => {
             let inner = &s[4..s.len() - 1];
@@ -1875,8 +2294,19 @@ fn string_to_ffi_type(
 }
 
 pub fn scan_crate(crate_path: &Path, module_name: &str) -> Result<Module, String> {
+    scan_crate_with_pointer_width(crate_path, module_name, None)
+}
+
+pub fn scan_crate_with_pointer_width(
+    crate_path: &Path,
+    module_name: &str,
+    target_pointer_width_bits: Option<u8>,
+) -> Result<Module, String> {
     let src_path = crate_path.join("src");
-    let mut scanner = SourceScanner::new(module_name);
+    let mut scanner = SourceScanner::new_with_pointer_width(
+        module_name,
+        target_pointer_width_bits.or_else(parse_target_pointer_width),
+    );
     scanner.scan_directory(crate_path, &src_path)?;
     Ok(scanner.into_module())
 }
@@ -2072,6 +2502,7 @@ mod tests {
             "Point",
             TypeShape::Record {
                 fields: vec![RecordField::new("x", MType::Primitive(Primitive::F64))],
+                is_repr_c: true,
             },
         );
 
@@ -2081,7 +2512,7 @@ mod tests {
         ));
         assert!(matches!(
             reg.types.get("Point").unwrap().shape,
-            TypeShape::Record { ref fields } if fields.len() == 1
+            TypeShape::Record { ref fields, .. } if fields.len() == 1
         ));
     }
 
@@ -2094,6 +2525,7 @@ mod tests {
             TypeShape::Enum {
                 variants: vec![],
                 is_error: false,
+                repr_type: None,
             },
         );
 
@@ -2166,5 +2598,206 @@ mod tests {
             Some("Error code describing the failure.".to_string())
         );
         assert_eq!(extract_doc_string(&fields[1].attrs), None);
+    }
+
+    #[test]
+    fn parse_discriminant_expr_handles_const_refs_and_bit_ops() {
+        let source: syn::File = syn::parse_quote! {
+            const FLAG: i64 = 1 << 4;
+            const MASK: i64 = FLAG | 0b11;
+        };
+        let constants = collect_integer_constants(&source.items, &[], None);
+        let expr: syn::Expr = syn::parse_quote!(MASK + 1);
+
+        assert_eq!(
+            parse_discriminant_expr(&expr, &constants, &[], None),
+            Some(20)
+        );
+    }
+
+    #[test]
+    fn discriminant_progression_tracks_explicit_expr_values() {
+        let source: syn::File = syn::parse_quote! {
+            const START: i64 = 10;
+            enum Mode {
+                A = START,
+                B,
+                C = 1 << 3,
+                D,
+            }
+        };
+        let constants = collect_integer_constants(&source.items, &[], None);
+        let item_enum = match &source.items[1] {
+            Item::Enum(item_enum) => item_enum,
+            _ => panic!("expected enum"),
+        };
+
+        let discriminants = item_enum
+            .variants
+            .iter()
+            .scan(0_i128, |next_discriminant, variant| {
+                let value = match variant.discriminant.as_ref() {
+                    Some((_, expr)) => parse_discriminant_expr(expr, &constants, &[], None),
+                    None => Some(*next_discriminant),
+                }?;
+                *next_discriminant = value + 1;
+                Some(value)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(discriminants, vec![10, 11, 8, 9]);
+    }
+
+    #[test]
+    fn collect_integer_constants_resolves_forward_references() {
+        let source: syn::File = syn::parse_quote! {
+            const A: i64 = B;
+            const B: i64 = 3;
+        };
+        let constants = collect_integer_constants(&source.items, &[], None);
+
+        assert_eq!(constants.get("A").copied(), Some(3));
+        assert_eq!(constants.get("B").copied(), Some(3));
+    }
+
+    #[test]
+    fn parse_discriminant_expr_prefers_full_qualified_const_path() {
+        let constants = HashMap::from([
+            ("BAR".to_string(), 1_i128),
+            ("foo::BAR".to_string(), 9_i128),
+        ]);
+
+        let qualified: syn::Expr = syn::parse_quote!(foo::BAR);
+        let unqualified: syn::Expr = syn::parse_quote!(BAR);
+        let crate_qualified: syn::Expr = syn::parse_quote!(crate::foo::BAR);
+
+        assert_eq!(
+            parse_discriminant_expr(&qualified, &constants, &[], None),
+            Some(9)
+        );
+        assert_eq!(
+            parse_discriminant_expr(&unqualified, &constants, &[], None),
+            Some(1)
+        );
+        assert_eq!(
+            parse_discriminant_expr(&crate_qualified, &constants, &[], None),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn parse_discriminant_expr_resolves_super_path_from_current_module() {
+        let constants = HashMap::from([
+            ("foo::FLAG".to_string(), 9_i128),
+            ("foo::bar::FLAG".to_string(), 1_i128),
+        ]);
+        let expression: syn::Expr = syn::parse_quote!(super::FLAG);
+        let current_module_path = vec!["foo".to_string(), "bar".to_string()];
+
+        assert_eq!(
+            parse_discriminant_expr(
+                &expression,
+                &constants,
+                current_module_path.as_slice(),
+                None
+            ),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn parse_discriminant_expr_applies_integer_cast_semantics() {
+        let expression: syn::Expr = syn::parse_quote!((-1i16 as u8));
+
+        assert_eq!(
+            parse_discriminant_expr(&expression, &HashMap::new(), &[], None),
+            Some(255)
+        );
+    }
+
+    #[test]
+    fn parse_discriminant_expr_accepts_u64_max_literal() {
+        let expression: syn::Expr = syn::parse_quote!(18446744073709551615);
+
+        assert_eq!(
+            parse_discriminant_expr(&expression, &HashMap::new(), &[], None),
+            Some(u64::MAX as i128)
+        );
+    }
+
+    #[test]
+    fn parse_discriminant_expr_accepts_i64_min_literal_form() {
+        let expression: syn::Expr = syn::parse_quote!(-9223372036854775808);
+
+        assert_eq!(
+            parse_discriminant_expr(&expression, &HashMap::new(), &[], None),
+            Some(i64::MIN as i128)
+        );
+    }
+
+    #[test]
+    fn parse_discriminant_expr_truncates_i64_cast() {
+        let expression: syn::Expr = syn::parse_quote!(18446744073709551615 as i64);
+
+        assert_eq!(
+            parse_discriminant_expr(&expression, &HashMap::new(), &[], None),
+            Some(-1)
+        );
+    }
+
+    #[test]
+    fn parse_discriminant_expr_requires_pointer_width_for_usize_casts() {
+        let expression: syn::Expr = syn::parse_quote!(7 as usize);
+
+        assert_eq!(
+            parse_discriminant_expr(&expression, &HashMap::new(), &[], None),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_discriminant_expr_applies_target_pointer_width_to_usize_casts() {
+        let expression: syn::Expr = syn::parse_quote!(4294967297 as usize);
+
+        assert_eq!(
+            parse_discriminant_expr(&expression, &HashMap::new(), &[], Some(32)),
+            Some(1)
+        );
+        assert_eq!(
+            parse_discriminant_expr(&expression, &HashMap::new(), &[], Some(64)),
+            Some(4294967297)
+        );
+    }
+
+    #[test]
+    fn collect_integer_constants_from_files_collects_module_scoped_constants() {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temp_root = std::env::temp_dir().join(format!(
+            "boltffi_scan_constants_{}_{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let source_root = temp_root.join("src");
+
+        fs::create_dir_all(&source_root).expect("create source root");
+        fs::write(source_root.join("lib.rs"), "pub mod constants;").expect("write lib.rs");
+        fs::write(source_root.join("constants.rs"), "pub const TAG: i64 = 7;")
+            .expect("write constants.rs");
+
+        let files = vec![source_root.join("lib.rs"), source_root.join("constants.rs")];
+        let constants = collect_integer_constants_from_files(&source_root, files.as_slice(), None)
+            .expect("collect constants");
+        let expression: syn::Expr = syn::parse_quote!(crate::constants::TAG);
+
+        assert_eq!(constants.get("constants::TAG").copied(), Some(7));
+        assert_eq!(
+            parse_discriminant_expr(&expression, &constants, &[], None),
+            Some(7)
+        );
+
+        fs::remove_dir_all(temp_root).expect("cleanup temp root");
     }
 }

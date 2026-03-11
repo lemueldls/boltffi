@@ -2,6 +2,7 @@
 source: boltffi_bindgen/src/render/kotlin/templates.rs
 expression: template.render().unwrap()
 ---
+
 data class Config(
     val timeout: Int = 30,
     val retries: Int = 3

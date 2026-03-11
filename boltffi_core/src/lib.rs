@@ -9,6 +9,7 @@ pub mod async_callback;
 pub mod callback;
 pub mod custom_ffi;
 pub mod handle;
+pub mod passable;
 pub mod pending;
 pub mod ringbuffer;
 pub mod rustfuture;
@@ -34,6 +35,7 @@ pub use callback::WasmCallbackOwner;
 pub use callback::{CallbackForeignType, CallbackHandle, FromCallbackHandle};
 pub use custom_ffi::CustomFfiConvertible;
 pub use handle::HandleBox;
+pub use passable::{Passable, Seal, VecTransport, WirePassable};
 pub use pending::{CancellationToken, PendingHandle};
 pub use ringbuffer::SpscRingBuffer;
 pub use rustfuture::{
@@ -47,7 +49,8 @@ pub use subscription::{
     EventSubscription, StreamContinuationCallback, StreamPollResult, StreamProducer,
     SubscriptionHandle, WaitResult,
 };
-pub use types::{FfiBuf, FfiError, FfiOption, FfiSlice, FfiString};
+
+pub use types::{FfiBuf, FfiError, FfiOption, FfiSlice, FfiSpan, FfiString};
 pub use wasm::WASM_ABI_VERSION;
 #[cfg(target_arch = "wasm32")]
 pub use wasm::WasmCallbackOutBuf;

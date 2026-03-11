@@ -212,6 +212,9 @@ pub enum JniParamKind {
         release_mode: JniArrayReleaseMode,
     },
     Buffer,
+    Composite {
+        c_type: String,
+    },
     Closure,
 }
 
@@ -302,6 +305,17 @@ impl JniParam {
 
     pub fn is_closure(&self) -> bool {
         matches!(self.kind, JniParamKind::Closure)
+    }
+
+    pub fn is_composite(&self) -> bool {
+        matches!(self.kind, JniParamKind::Composite { .. })
+    }
+
+    pub fn composite_c_type(&self) -> &str {
+        match &self.kind {
+            JniParamKind::Composite { c_type } => c_type,
+            _ => "",
+        }
     }
 
     pub fn array_c_type(&self) -> &str {
@@ -715,7 +729,9 @@ pub enum JniReturnKind {
         len_fn: String,
         copy_fn: String,
     },
-    CStyleEnum,
+    CStyleEnum {
+        jni_type: String,
+    },
     DataEnum {
         enum_name: String,
         struct_size: usize,
@@ -738,7 +754,7 @@ impl JniReturnKind {
     }
 
     pub fn is_c_style_enum(&self) -> bool {
-        matches!(self, Self::CStyleEnum)
+        matches!(self, Self::CStyleEnum { .. })
     }
 
     pub fn is_data_enum(&self) -> bool {
@@ -810,6 +826,7 @@ pub struct JniWireFunction {
     pub params: Vec<JniParam>,
     pub return_is_unit: bool,
     pub return_is_direct: bool,
+    pub return_composite_c_type: Option<String>,
     pub jni_return_type: String,
     pub jni_c_return_type: String,
     pub jni_result_cast: String,
@@ -823,6 +840,7 @@ pub struct JniWireMethod {
     pub params: Vec<JniParam>,
     pub return_is_unit: bool,
     pub return_is_direct: bool,
+    pub return_composite_c_type: Option<String>,
     pub jni_return_type: String,
     pub jni_c_return_type: String,
     pub jni_result_cast: String,

@@ -1,14 +1,14 @@
-{{ self::swift_doc_block(doc, "") }}public enum {{ class_name }}: Int32, Hashable, Sendable, CaseIterable{% if is_error %}, Error{% endif %} {
+{{ self::swift_doc_block(doc, "") }}public enum {{ class_name }}: {{ self::swift_c_style_enum_raw_type(tag_type) }}, Hashable, Sendable, CaseIterable{% if is_error %}, Error{% endif %} {
 {%- for variant in variants %}
 {{ self::swift_doc_block(variant.doc, "    ") }}    case {{ variant.swift_name }} = {{ variant.discriminant }}
 {%- endfor %}
 
-    @usableFromInline init(fromC c: Int32) { self = {{ class_name }}(rawValue: c)! }
-    @usableFromInline var cValue: Int32 { rawValue }
+    @usableFromInline init(fromC c: {{ self::swift_c_style_enum_raw_type(tag_type) }}) { self = {{ class_name }}(rawValue: c)! }
+    @usableFromInline var cValue: {{ self::swift_c_style_enum_raw_type(tag_type) }} { rawValue }
 
 }
 
 extension {{ class_name }}: WireCodable {
-    @inlinable static func decode(from reader: inout WireReader) -> {{ class_name }} { {{ class_name }}(rawValue: reader.readI32())! }
-    @inlinable func encode(to writer: inout WireWriter) { writer.writeI32(rawValue) }
+    @inlinable static func decode(from reader: inout WireReader) -> {{ class_name }} { {{ class_name }}(rawValue: {{ self::swift_c_style_enum_decode_expr(tag_type) }})! }
+    @inlinable func encode(to writer: inout WireWriter) { {{ self::swift_c_style_enum_encode_stmt(tag_type) }} }
 }

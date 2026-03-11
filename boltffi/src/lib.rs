@@ -14,9 +14,9 @@ pub mod __private {
         rust_future_poll_sync, set_request_waker, take_request_result, write_return_slot,
     };
     pub use boltffi_core::{
-        CallbackForeignType, CallbackHandle, EventSubscription, FfiBuf, FfiStatus,
-        FromCallbackHandle, RustFutureContinuationCallback, RustFutureHandle,
-        StreamContinuationCallback, StreamPollResult, SubscriptionHandle, WaitResult, rustfuture,
-        set_last_error, wire,
+        CallbackForeignType, CallbackHandle, EventSubscription, FfiBuf, FfiSpan, FfiStatus,
+        FromCallbackHandle, Passable, RustFutureContinuationCallback, RustFutureHandle, Seal,
+        StreamContinuationCallback, StreamPollResult, SubscriptionHandle, VecTransport, WaitResult,
+        WirePassable, rustfuture, set_last_error, wire,
     };
 }

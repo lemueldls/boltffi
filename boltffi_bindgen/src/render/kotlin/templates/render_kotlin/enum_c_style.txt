@@ -1,9 +1,9 @@
-{{ self::kdoc_block(doc, "") }}enum class {{ class_name }}(val value: Int) {
+{{ self::kdoc_block(doc, "") }}enum class {{ class_name }}(val value: {{ value_type }}) {
 {%- for variant in variants %}
-{{ self::kdoc_block(variant.doc, "    ") }}    {{ variant.name }}({{ variant.tag }}){% if !loop.last %},{% else %};{% endif %}
+{{ self::kdoc_block(variant.doc, "    ") }}    {{ variant.name }}({{ self::kotlin_integer_literal(variant.tag, value_type) }}){% if !loop.last %},{% else %};{% endif %}
 {%- endfor %}
 
     companion object {
-        fun fromValue(value: Int): {{ class_name }} = entries.first { it.value == value }
+        fun fromValue(value: {{ value_type }}): {{ class_name }} = entries.first { it.value == value }
     }
 }

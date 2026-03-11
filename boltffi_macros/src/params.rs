@@ -11,6 +11,32 @@ use crate::util::{
     ParamTransform, WireEncodedParam, WireEncodedParamKind, classify_param_transform,
     foreign_trait_path, is_primitive_vec_inner, len_ident, ptr_ident,
 };
+
+fn lower_passable_param_transform(
+    acc: &mut ParamLoweringState,
+    name: &syn::Ident,
+    ty: &syn::Type,
+    mode: ParamExecutionMode,
+) {
+    acc.ffi_params
+        .push(quote! { #name: <#ty as ::boltffi::__private::Passable>::In });
+
+    let conversion = quote! {
+        let #name: #ty = unsafe { <#ty as ::boltffi::__private::Passable>::unpack(#name) };
+    };
+
+    match mode {
+        ParamExecutionMode::Sync => {
+            acc.setup.push(conversion);
+        }
+        ParamExecutionMode::Async => {
+            acc.setup.push(conversion);
+            acc.move_vars.push(name.clone());
+        }
+    }
+
+    acc.call_args.push(quote! { #name });
+}
 use boltffi_ffi_rules::callback as cb_naming;
 
 fn generate_wasm_closure_codegen(
@@ -167,13 +193,13 @@ fn generate_wasm_closure_codegen(
             let #name = {
                 #[allow(improper_ctypes)]
                 unsafe extern "C" {
-                    fn #call_import_ident(handle: u32, out: *mut ::boltffi::__private::FfiBuf<u8> #extern_params_tokens);
+                    fn #call_import_ident(handle: u32, out: *mut ::boltffi::__private::FfiBuf #extern_params_tokens);
                     fn #free_import_ident(handle: u32);
                 }
                 let #owner_name = ::boltffi::__private::WasmCallbackOwner::new(#name, #free_import_ident);
                 move |#closure_params_tokens| -> #return_ty {
                     #(#wire_vars)*
-                    let mut __out_buf = ::boltffi::__private::FfiBuf::<u8>::empty();
+                    let mut __out_buf = ::boltffi::__private::FfiBuf::empty();
                     unsafe { #call_import_ident(#owner_name.handle(), &mut __out_buf #(, #call_args)*) };
                     let __result_bytes = unsafe {
                         ::core::slice::from_raw_parts(__out_buf.as_ptr(), __out_buf.len())
@@ -289,9 +315,9 @@ fn utf8_string_expression(
 
 fn wire_empty_value_expression(kind: WireEncodedParamKind) -> proc_macro2::TokenStream {
     match kind {
+        WireEncodedParamKind::Record => quote! { unreachable!() },
         WireEncodedParamKind::Vec => quote! { Vec::new() },
         WireEncodedParamKind::Option => quote! { None },
-        WireEncodedParamKind::Record => quote! {},
     }
 }
 
@@ -302,6 +328,7 @@ fn wire_decode_conversion(
     len_name: &syn::Ident,
     custom_types: &CustomTypeRegistry,
     requires_unsafe: bool,
+    on_wire_record_error: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let rust_type = &wire_param.rust_type;
     let bytes_expr = wire_bytes_expression(ptr_name, len_name, requires_unsafe);
@@ -311,63 +338,23 @@ fn wire_decode_conversion(
         let wire_value_ident = syn::Ident::new("__boltffi_wire_value", name.span());
         let from_wire = from_wire_expr_owned(rust_type, custom_types, &wire_value_ident);
 
-        return match wire_param.kind {
-            WireEncodedParamKind::Vec | WireEncodedParamKind::Option => {
-                let empty_value = wire_empty_value_expression(wire_param.kind);
-                quote! {
-                    let #name: #rust_type = if #ptr_name.is_null() || #len_name == 0 {
-                        #empty_value
-                    } else {
-                        let __bytes = #bytes_expr;
-                        match ::boltffi::__private::wire::decode::<#wire_ty>(__bytes) {
-                            Ok(#wire_value_ident) => { #from_wire },
-                            Err(error) => {
-                                ::boltffi::__private::set_last_error(format!(
-                                    "{}: wire decode failed: {} (buf_len={})",
-                                    stringify!(#name),
-                                    error,
-                                    #len_name
-                                ));
-                                #empty_value
-                            }
-                        }
-                    };
-                }
-            }
-            WireEncodedParamKind::Record => quote! {
+        if matches!(wire_param.kind, WireEncodedParamKind::Record) {
+            return quote! {
                 let #name: #rust_type = {
-                    assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                    let __bytes = #bytes_expr;
-                    let #wire_value_ident: #wire_ty = ::boltffi::__private::wire::decode(__bytes)
-                        .unwrap_or_else(|error| {
-                            ::boltffi::__private::set_last_error(format!(
-                                "{}: wire decode failed: {} (buf_len={})",
-                                stringify!(#name),
-                                error,
-                                #len_name
-                            ));
-                            panic!(
-                                "{}: wire decode failed: {} (buf_len={})",
-                                stringify!(#name),
-                                error,
-                                #len_name
-                            )
-                        });
-                    #from_wire
-                };
-            },
-        };
-    }
-
-    match wire_param.kind {
-        WireEncodedParamKind::Vec | WireEncodedParamKind::Option => {
-            let empty_value = wire_empty_value_expression(wire_param.kind);
-            quote! {
-                let #name: #rust_type = if #ptr_name.is_null() || #len_name == 0 {
-                    #empty_value
-                } else {
-                    let __bytes = #bytes_expr;
-                    match ::boltffi::__private::wire::decode::<#rust_type>(__bytes) {
+                    if #ptr_name.is_null() && #len_name > 0 {
+                        ::boltffi::__private::set_last_error(format!(
+                            "{}: null pointer with non-zero length (buf_len={})",
+                            stringify!(#name),
+                            #len_name
+                        ));
+                        return #on_wire_record_error;
+                    }
+                    let __bytes: &[u8] = if #len_name == 0 {
+                        &[]
+                    } else {
+                        #bytes_expr
+                    };
+                    let #wire_value_ident: #wire_ty = match ::boltffi::__private::wire::decode(__bytes) {
                         Ok(value) => value,
                         Err(error) => {
                             ::boltffi::__private::set_last_error(format!(
@@ -376,32 +363,87 @@ fn wire_decode_conversion(
                                 error,
                                 #len_name
                             ));
-                            #empty_value
+                            return #on_wire_record_error;
                         }
-                    }
+                    };
+                    #from_wire
                 };
-            }
+            };
         }
-        WireEncodedParamKind::Record => quote! {
-            let #name: #rust_type = {
-                assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
+
+        let empty_value = wire_empty_value_expression(wire_param.kind);
+        return quote! {
+            let #name: #rust_type = if #ptr_name.is_null() || #len_name == 0 {
+                #empty_value
+            } else {
                 let __bytes = #bytes_expr;
-                ::boltffi::__private::wire::decode(__bytes).unwrap_or_else(|error| {
+                match ::boltffi::__private::wire::decode::<#wire_ty>(__bytes) {
+                    Ok(#wire_value_ident) => { #from_wire },
+                    Err(error) => {
+                        ::boltffi::__private::set_last_error(format!(
+                            "{}: wire decode failed: {} (buf_len={})",
+                            stringify!(#name),
+                            error,
+                            #len_name
+                        ));
+                        #empty_value
+                    }
+                }
+            };
+        };
+    }
+
+    if matches!(wire_param.kind, WireEncodedParamKind::Record) {
+        return quote! {
+            let #name: #rust_type = {
+                if #ptr_name.is_null() && #len_name > 0 {
+                    ::boltffi::__private::set_last_error(format!(
+                        "{}: null pointer with non-zero length (buf_len={})",
+                        stringify!(#name),
+                        #len_name
+                    ));
+                    return #on_wire_record_error;
+                }
+                let __bytes: &[u8] = if #len_name == 0 {
+                    &[]
+                } else {
+                    #bytes_expr
+                };
+                match ::boltffi::__private::wire::decode(__bytes) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        ::boltffi::__private::set_last_error(format!(
+                            "{}: wire decode failed: {} (buf_len={})",
+                            stringify!(#name),
+                            error,
+                            #len_name
+                        ));
+                        return #on_wire_record_error;
+                    }
+                }
+            };
+        };
+    }
+
+    let empty_value = wire_empty_value_expression(wire_param.kind);
+    quote! {
+        let #name: #rust_type = if #ptr_name.is_null() || #len_name == 0 {
+            #empty_value
+        } else {
+            let __bytes = #bytes_expr;
+            match ::boltffi::__private::wire::decode::<#rust_type>(__bytes) {
+                Ok(value) => value,
+                Err(error) => {
                     ::boltffi::__private::set_last_error(format!(
                         "{}: wire decode failed: {} (buf_len={})",
                         stringify!(#name),
                         error,
                         #len_name
                     ));
-                    panic!(
-                        "{}: wire decode failed: {} (buf_len={})",
-                        stringify!(#name),
-                        error,
-                        #len_name
-                    )
-                })
-            };
-        },
+                    #empty_value
+                }
+            }
+        };
     }
 }
 
@@ -412,6 +454,7 @@ fn push_wire_encoded_param(
     wire_param: &WireEncodedParam,
     custom_types: &CustomTypeRegistry,
     requires_unsafe: bool,
+    on_wire_record_error: &proc_macro2::TokenStream,
 ) {
     let ptr_name = ptr_ident(name);
     let len_name = len_ident(name);
@@ -424,6 +467,7 @@ fn push_wire_encoded_param(
         &len_name,
         custom_types,
         requires_unsafe,
+        on_wire_record_error,
     ));
 }
 
@@ -470,6 +514,7 @@ fn unsupported_async_param(transform: &ParamTransform) -> Option<UnsupportedAsyn
         | ParamTransform::SliceRef(_)
         | ParamTransform::VecPrimitive(_)
         | ParamTransform::WireEncoded(_)
+        | ParamTransform::Passable(_)
         | ParamTransform::ImplTrait(_)
         | ParamTransform::PassThrough => None,
     }
@@ -876,6 +921,7 @@ fn lower_wire_encoded_param_transform(
     wire_param: &WireEncodedParam,
     custom_types: &CustomTypeRegistry,
     mode: ParamExecutionMode,
+    on_wire_record_error: &proc_macro2::TokenStream,
 ) {
     push_wire_encoded_param(
         &mut acc.ffi_params,
@@ -884,6 +930,7 @@ fn lower_wire_encoded_param_transform(
         wire_param,
         custom_types,
         mode.requires_unsafe_wire_decode(),
+        on_wire_record_error,
     );
     if matches!(mode, ParamExecutionMode::Async) {
         acc.move_vars.push(name.clone());
@@ -971,6 +1018,7 @@ fn transform_params_with_mode(
     custom_types: &CustomTypeRegistry,
     callback_registry: &CallbackTraitRegistry,
     mode: ParamExecutionMode,
+    on_wire_record_error: &proc_macro2::TokenStream,
 ) -> ParamLoweringState {
     inputs
         .iter()
@@ -1050,7 +1098,25 @@ fn transform_params_with_mode(
                         &wire_param,
                         custom_types,
                         mode,
+                        on_wire_record_error,
                     ),
+                    ParamTransform::Passable(ref ty) if contains_custom_types(ty, custom_types) => {
+                        let wire_param = WireEncodedParam {
+                            kind: WireEncodedParamKind::Record,
+                            rust_type: ty.clone(),
+                        };
+                        lower_wire_encoded_param_transform(
+                            &mut acc,
+                            &name,
+                            &wire_param,
+                            custom_types,
+                            mode,
+                            on_wire_record_error,
+                        )
+                    }
+                    ParamTransform::Passable(ty) => {
+                        lower_passable_param_transform(&mut acc, &name, &ty, mode)
+                    }
                     ParamTransform::ImplTrait(trait_path) => {
                         lower_impl_trait_param_transform(
                             &mut acc,
@@ -1074,12 +1140,14 @@ pub fn transform_params(
     inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![,]>,
     custom_types: &CustomTypeRegistry,
     callback_registry: &CallbackTraitRegistry,
+    on_wire_record_error: &proc_macro2::TokenStream,
 ) -> FfiParams {
     transform_params_with_mode(
         inputs,
         custom_types,
         callback_registry,
         ParamExecutionMode::Sync,
+        on_wire_record_error,
     )
     .into_sync()
 }
@@ -1088,6 +1156,7 @@ pub fn transform_params_async(
     inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![,]>,
     custom_types: &CustomTypeRegistry,
     callback_registry: &CallbackTraitRegistry,
+    on_wire_record_error: &proc_macro2::TokenStream,
 ) -> syn::Result<AsyncFfiParams> {
     validate_async_params(inputs)?;
     Ok(transform_params_with_mode(
@@ -1095,6 +1164,7 @@ pub fn transform_params_async(
         custom_types,
         callback_registry,
         ParamExecutionMode::Async,
+        on_wire_record_error,
     )
     .into_async())
 }
@@ -1103,18 +1173,30 @@ pub fn transform_method_params(
     inputs: impl Iterator<Item = syn::FnArg>,
     custom_types: &CustomTypeRegistry,
     callback_registry: &CallbackTraitRegistry,
+    on_wire_record_error: &proc_macro2::TokenStream,
 ) -> FfiParams {
     let function_like_inputs: syn::punctuated::Punctuated<FnArg, syn::Token![,]> = inputs.collect();
-    transform_params(&function_like_inputs, custom_types, callback_registry)
+    transform_params(
+        &function_like_inputs,
+        custom_types,
+        callback_registry,
+        on_wire_record_error,
+    )
 }
 
 pub fn transform_method_params_async(
     inputs: impl Iterator<Item = syn::FnArg>,
     custom_types: &CustomTypeRegistry,
     callback_registry: &CallbackTraitRegistry,
+    on_wire_record_error: &proc_macro2::TokenStream,
 ) -> syn::Result<AsyncFfiParams> {
     let function_like_inputs: syn::punctuated::Punctuated<FnArg, syn::Token![,]> = inputs.collect();
-    transform_params_async(&function_like_inputs, custom_types, callback_registry)
+    transform_params_async(
+        &function_like_inputs,
+        custom_types,
+        callback_registry,
+        on_wire_record_error,
+    )
 }
 
 #[cfg(test)]

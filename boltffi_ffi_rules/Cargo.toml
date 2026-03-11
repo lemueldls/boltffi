@@ -9,7 +9,11 @@ repository = "https://github.com/boltffi/boltffi"
 keywords = ["ffi", "encoding", "transport", "bindings"]
 categories = ["development-tools::ffi"]
 
+[features]
+serde = ["dep:serde"]
+
 [dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
 
 [lints]
 workspace = true

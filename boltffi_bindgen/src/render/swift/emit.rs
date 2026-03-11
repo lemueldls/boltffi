@@ -149,6 +149,96 @@ pub fn swift_builtin(id: &BuiltinId) -> String {
     .to_string()
 }
 
+fn c_style_enum_read_at(tag_type: PrimitiveType, offset_expr: &str) -> String {
+    match tag_type {
+        PrimitiveType::Bool => format!("(wire.readBool(at: {offset_expr}) ? 1 : 0)"),
+        PrimitiveType::I8 => format!("wire.readI8(at: {offset_expr})"),
+        PrimitiveType::U8 => format!("wire.readU8(at: {offset_expr})"),
+        PrimitiveType::I16 => format!("wire.readI16(at: {offset_expr})"),
+        PrimitiveType::U16 => format!("wire.readU16(at: {offset_expr})"),
+        PrimitiveType::I32 => format!("wire.readI32(at: {offset_expr})"),
+        PrimitiveType::U32 => format!("wire.readU32(at: {offset_expr})"),
+        PrimitiveType::I64 => format!("wire.readI64(at: {offset_expr})"),
+        PrimitiveType::U64 => format!("wire.readU64(at: {offset_expr})"),
+        PrimitiveType::ISize => format!("Int(wire.readI64(at: {offset_expr}))"),
+        PrimitiveType::USize => format!("UInt(wire.readU64(at: {offset_expr}))"),
+        PrimitiveType::F32 => format!("wire.readF32(at: {offset_expr})"),
+        PrimitiveType::F64 => format!("wire.readF64(at: {offset_expr})"),
+    }
+}
+
+fn c_style_enum_read(tag_type: PrimitiveType) -> String {
+    match tag_type {
+        PrimitiveType::Bool => "(reader.readBool() ? 1 : 0)".into(),
+        PrimitiveType::I8 => "reader.readI8()".into(),
+        PrimitiveType::U8 => "reader.readU8()".into(),
+        PrimitiveType::I16 => "reader.readI16()".into(),
+        PrimitiveType::U16 => "reader.readU16()".into(),
+        PrimitiveType::I32 => "reader.readI32()".into(),
+        PrimitiveType::U32 => "reader.readU32()".into(),
+        PrimitiveType::I64 => "reader.readI64()".into(),
+        PrimitiveType::U64 => "reader.readU64()".into(),
+        PrimitiveType::ISize => "Int(reader.readI64())".into(),
+        PrimitiveType::USize => "UInt(reader.readU64())".into(),
+        PrimitiveType::F32 => "reader.readF32()".into(),
+        PrimitiveType::F64 => "reader.readF64()".into(),
+    }
+}
+
+fn c_style_enum_write_data(tag_type: PrimitiveType, value_expr: &str) -> String {
+    match tag_type {
+        PrimitiveType::Bool => format!("data.appendBool({value_expr} != 0)"),
+        PrimitiveType::I8 => format!("data.appendI8({value_expr})"),
+        PrimitiveType::U8 => format!("data.appendU8({value_expr})"),
+        PrimitiveType::I16 => format!("data.appendI16({value_expr})"),
+        PrimitiveType::U16 => format!("data.appendU16({value_expr})"),
+        PrimitiveType::I32 => format!("data.appendI32({value_expr})"),
+        PrimitiveType::U32 => format!("data.appendU32({value_expr})"),
+        PrimitiveType::I64 => format!("data.appendI64({value_expr})"),
+        PrimitiveType::U64 => format!("data.appendU64({value_expr})"),
+        PrimitiveType::ISize => format!("data.appendI64(Int64({value_expr}))"),
+        PrimitiveType::USize => format!("data.appendU64(UInt64({value_expr}))"),
+        PrimitiveType::F32 => format!("data.appendF32({value_expr})"),
+        PrimitiveType::F64 => format!("data.appendF64({value_expr})"),
+    }
+}
+
+fn c_style_enum_write_bytes(tag_type: PrimitiveType, value_expr: &str) -> String {
+    match tag_type {
+        PrimitiveType::Bool => format!("bytes.appendBool({value_expr} != 0)"),
+        PrimitiveType::I8 => format!("bytes.appendI8({value_expr})"),
+        PrimitiveType::U8 => format!("bytes.appendU8({value_expr})"),
+        PrimitiveType::I16 => format!("bytes.appendI16({value_expr})"),
+        PrimitiveType::U16 => format!("bytes.appendU16({value_expr})"),
+        PrimitiveType::I32 => format!("bytes.appendI32({value_expr})"),
+        PrimitiveType::U32 => format!("bytes.appendU32({value_expr})"),
+        PrimitiveType::I64 => format!("bytes.appendI64({value_expr})"),
+        PrimitiveType::U64 => format!("bytes.appendU64({value_expr})"),
+        PrimitiveType::ISize => format!("bytes.appendI64(Int64({value_expr}))"),
+        PrimitiveType::USize => format!("bytes.appendU64(UInt64({value_expr}))"),
+        PrimitiveType::F32 => format!("bytes.appendF32({value_expr})"),
+        PrimitiveType::F64 => format!("bytes.appendF64({value_expr})"),
+    }
+}
+
+fn c_style_enum_write_writer(tag_type: PrimitiveType, value_expr: &str) -> String {
+    match tag_type {
+        PrimitiveType::Bool => format!("writer.writeBool({value_expr} != 0)"),
+        PrimitiveType::I8 => format!("writer.writeI8({value_expr})"),
+        PrimitiveType::U8 => format!("writer.writeU8({value_expr})"),
+        PrimitiveType::I16 => format!("writer.writeI16({value_expr})"),
+        PrimitiveType::U16 => format!("writer.writeU16({value_expr})"),
+        PrimitiveType::I32 => format!("writer.writeI32({value_expr})"),
+        PrimitiveType::U32 => format!("writer.writeU32({value_expr})"),
+        PrimitiveType::I64 => format!("writer.writeI64({value_expr})"),
+        PrimitiveType::U64 => format!("writer.writeU64({value_expr})"),
+        PrimitiveType::ISize => format!("writer.writeI64(Int64({value_expr}))"),
+        PrimitiveType::USize => format!("writer.writeU64(UInt64({value_expr}))"),
+        PrimitiveType::F32 => format!("writer.writeF32({value_expr})"),
+        PrimitiveType::F64 => format!("writer.writeF64({value_expr})"),
+    }
+}
+
 fn swift_builtin_size_expr(id: &BuiltinId, value: &str) -> String {
     match id.as_str() {
         "Url" => format!("{}.absoluteString.utf8.count", value),
@@ -434,13 +524,13 @@ fn emit_read_op(op: &ReadOp, base_name: &str, base_expr: &str) -> (String, ReadR
         ReadOp::Enum { id, offset, layout } => {
             let offset_expr = emit_offset_expr(offset, base_name, base_expr);
             match layout {
-                EnumLayout::CStyle { .. } => (
+                EnumLayout::CStyle { tag_type, .. } => (
                     format!(
-                        "{}(fromC: wire.readI32(at: {}))",
+                        "{}(fromC: {})",
                         pascal_case(id.as_str()),
-                        offset_expr
+                        c_style_enum_read_at(*tag_type, &offset_expr)
                     ),
-                    ReadReturn::BareValue(4),
+                    ReadReturn::BareValue(tag_type.wire_size_bytes()),
                 ),
                 EnumLayout::Data { .. } | EnumLayout::Recursive => (
                     format!(
@@ -507,7 +597,9 @@ fn emit_write_data_op(op: &WriteOp) -> String {
         WriteOp::Enum { value, layout, .. } => {
             let v = render_value(value);
             match layout {
-                EnumLayout::CStyle { .. } => format!("data.appendI32({}.rawValue)", v),
+                EnumLayout::CStyle { tag_type, .. } => {
+                    c_style_enum_write_data(*tag_type, &format!("{}.rawValue", v))
+                }
                 EnumLayout::Data { .. } | EnumLayout::Recursive => {
                     format!("{}.wireEncodeTo(&data)", v)
                 }
@@ -597,7 +689,9 @@ fn emit_write_bytes_op(op: &WriteOp) -> String {
         WriteOp::Enum { value, layout, .. } => {
             let v = render_value(value);
             match layout {
-                EnumLayout::CStyle { .. } => format!("bytes.appendI32({}.rawValue)", v),
+                EnumLayout::CStyle { tag_type, .. } => {
+                    c_style_enum_write_bytes(*tag_type, &format!("{}.rawValue", v))
+                }
                 EnumLayout::Data { .. } | EnumLayout::Recursive => {
                     format!("{}.wireEncodeToBytes(&bytes)", v)
                 }
@@ -725,8 +819,12 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
             format!("{}.decode(from: &reader)", pascal_case(id.as_str()))
         }
         ReadOp::Enum { id, layout, .. } => match layout {
-            EnumLayout::CStyle { .. } => {
-                format!("{}(fromC: reader.readI32())", pascal_case(id.as_str()))
+            EnumLayout::CStyle { tag_type, .. } => {
+                format!(
+                    "{}(fromC: {})",
+                    pascal_case(id.as_str()),
+                    c_style_enum_read(*tag_type)
+                )
             }
             EnumLayout::Data { .. } | EnumLayout::Recursive => {
                 format!("{}.decode(from: &reader)", pascal_case(id.as_str()))
@@ -814,7 +912,9 @@ fn emit_writer_write_op(op: &WriteOp) -> String {
         WriteOp::Enum { value, layout, .. } => {
             let v = render_value(value);
             match layout {
-                EnumLayout::CStyle { .. } => format!("writer.writeI32({}.rawValue)", v),
+                EnumLayout::CStyle { tag_type, .. } => {
+                    c_style_enum_write_writer(*tag_type, &format!("{}.rawValue", v))
+                }
                 EnumLayout::Data { .. } | EnumLayout::Recursive => {
                     format!("{}.encode(to: &writer)", v)
                 }

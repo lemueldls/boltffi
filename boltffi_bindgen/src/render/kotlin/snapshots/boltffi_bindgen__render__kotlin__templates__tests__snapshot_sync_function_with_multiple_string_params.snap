@@ -2,6 +2,7 @@
 source: boltffi_bindgen/src/render/kotlin/templates.rs
 expression: template.render().unwrap()
 ---
+
 fun concat(a: String, b: String): String {
     val aWire = WireWriterPool.acquire(BoltFFIWire.sizeString(a))
     val bWire = WireWriterPool.acquire(BoltFFIWire.sizeString(b))

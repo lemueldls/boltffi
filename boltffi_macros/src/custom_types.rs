@@ -418,7 +418,7 @@ fn build_registry(manifest_dir: &Path) -> syn::Result<CustomTypeRegistry> {
     Ok(registry)
 }
 
-fn list_rs_files(src_root: &Path) -> syn::Result<Vec<PathBuf>> {
+pub(crate) fn list_rs_files(src_root: &Path) -> syn::Result<Vec<PathBuf>> {
     let mut out = Vec::<PathBuf>::new();
     collect_rs_files(src_root, &mut out)?;
     Ok(out)

@@ -2,6 +2,7 @@
 source: boltffi_bindgen/src/render/kotlin/templates.rs
 expression: template.render().unwrap()
 ---
+
 suspend fun fetchData(url: String): String = boltffiCallAsync(
     createFuture = {
         val urlWire = WireWriterPool.acquire(BoltFFIWire.sizeString(url))

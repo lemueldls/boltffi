@@ -115,7 +115,7 @@ pub enum EnumLayout {
 #[derive(Debug, Clone)]
 pub struct VariantLayout {
     pub name: VariantName,
-    pub discriminant: i64,
+    pub discriminant: i128,
     pub payload: VariantPayloadLayout,
 }
 

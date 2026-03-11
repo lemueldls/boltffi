@@ -1,22 +1,20 @@
 #![allow(dead_code)]
 
-pub mod build;
-pub mod cheader;
 pub mod ir;
 pub mod model;
 pub mod render;
 pub mod scan;
 
-pub use cheader::CHeaderGenerator;
 pub use model::{
     Class, Constructor, ConstructorParam, Deprecation, Enumeration, Function, Method, Module,
     Parameter, Primitive, Receiver, Record, RecordField, StreamMethod, StreamMode, Type, Variant,
 };
 
 pub use boltffi_ffi_rules::naming::ffi_prefix;
+pub use render::c::CHeaderLowerer;
 pub use render::kotlin::{FactoryStyle, KotlinApiStyle, KotlinOptions};
 pub use render::{Renderer, TypeConversion, TypeMapping, TypeMappings, swift::SwiftLowerer};
-pub use scan::{SourceScanner, scan_crate};
+pub use scan::{SourceScanner, scan_crate, scan_crate_with_pointer_width};
 
 #[cfg(test)]
 mod tests {

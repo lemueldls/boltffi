@@ -194,7 +194,7 @@ pub const fn info(p: Primitive) -> JniPrimitiveInfo {
             jni_return_cast: Some(".toLong()"),
             jni_param_cast: Some("toULong()"),
         },
-        Primitive::Isize => JniPrimitiveInfo {
+        Primitive::ISize => JniPrimitiveInfo {
             kotlin_type: "Long",
             jni_type: "jlong",
             signature: "J",
@@ -213,7 +213,7 @@ pub const fn info(p: Primitive) -> JniPrimitiveInfo {
             jni_return_cast: None,
             jni_param_cast: None,
         },
-        Primitive::Usize => JniPrimitiveInfo {
+        Primitive::USize => JniPrimitiveInfo {
             kotlin_type: "ULong",
             jni_type: "jlong",
             signature: "J",

@@ -1,4 +1,5 @@
 use boltffi_ffi_rules::naming;
+use boltffi_ffi_rules::primitive::Primitive;
 use proc_macro2::Span;
 use quote::quote;
 use std::collections::HashMap;
@@ -7,6 +8,8 @@ use std::fs;
 use std::path::{Path as FsPath, PathBuf};
 use syn::punctuated::Punctuated;
 use syn::{Item, Path, PathArguments, PathSegment, Type, UseTree};
+
+use crate::type_classification::NamedTypeTransport;
 
 pub fn ptr_ident(base: &syn::Ident) -> syn::Ident {
     syn::Ident::new(
@@ -38,6 +41,7 @@ pub enum ParamTransform {
     ImplTrait(syn::Path),
     VecPrimitive(syn::Type),
     WireEncoded(WireEncodedParam),
+    Passable(syn::Type),
 }
 
 #[derive(Clone)]
@@ -48,9 +52,9 @@ pub struct WireEncodedParam {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum WireEncodedParamKind {
+    Record,
     Vec,
     Option,
-    Record,
 }
 
 pub fn extract_closure_signature(ty: &Type) -> Option<(Vec<syn::Type>, Option<syn::Type>)> {
@@ -374,10 +378,8 @@ pub fn extract_option_param_inner(ty: &Type) -> Option<syn::Type> {
 }
 
 pub fn is_primitive_vec_inner(s: &str) -> bool {
-    matches!(
-        s,
-        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool"
-    )
+    s.parse::<Primitive>()
+        .is_ok_and(|primitive| !primitive.is_platform_sized())
 }
 
 pub fn classify_param_transform(ty: &Type) -> ParamTransform {
@@ -441,44 +443,38 @@ pub fn classify_param_transform(ty: &Type) -> ParamTransform {
         ParamTransform::StrRef
     } else if type_str == "String" || type_str == "std::string::String" {
         ParamTransform::OwnedString
-    } else if is_record_type(&type_str) {
-        ParamTransform::WireEncoded(WireEncodedParam {
-            kind: WireEncodedParamKind::Record,
-            rust_type: ty.clone(),
-        })
+    } else if is_named_nominal_type(ty) {
+        match crate::type_classification::classify_named_type_transport_for_call_site(ty) {
+            NamedTypeTransport::Passable => ParamTransform::Passable(ty.clone()),
+            NamedTypeTransport::WireEncoded => ParamTransform::WireEncoded(WireEncodedParam {
+                kind: WireEncodedParamKind::Record,
+                rust_type: ty.clone(),
+            }),
+        }
     } else {
         ParamTransform::PassThrough
     }
 }
 
-fn is_record_type(type_str: &str) -> bool {
-    if is_primitive_type(type_str) {
-        return false;
+fn is_named_nominal_type(ty: &Type) -> bool {
+    match ty {
+        Type::Path(type_path) if type_path.qself.is_none() => {
+            let Some(segment) = type_path.path.segments.last() else {
+                return false;
+            };
+            if !matches!(segment.arguments, PathArguments::None) {
+                return false;
+            }
+            let type_name = segment.ident.to_string();
+            !is_builtin_type(&type_name)
+                && type_name.chars().next().is_some_and(|ch| ch.is_uppercase())
+        }
+        Type::Group(group) => is_named_nominal_type(group.elem.as_ref()),
+        Type::Paren(paren) => is_named_nominal_type(paren.elem.as_ref()),
+        _ => false,
     }
-    if type_str.starts_with('&') || type_str.starts_with('*') {
-        return false;
-    }
-    if type_str.contains('<') || type_str.contains('>') {
-        return false;
-    }
-    type_str.chars().next().is_some_and(|c| c.is_uppercase())
 }
 
-fn is_primitive_type(s: &str) -> bool {
-    matches!(
-        s,
-        "i8" | "i16"
-            | "i32"
-            | "i64"
-            | "u8"
-            | "u16"
-            | "u32"
-            | "u64"
-            | "f32"
-            | "f64"
-            | "bool"
-            | "isize"
-            | "usize"
-            | "()"
-    )
+fn is_builtin_type(type_str: &str) -> bool {
+    type_str == "()" || type_str.parse::<Primitive>().is_ok()
 }

@@ -1,7 +1,10 @@
 use boltffi_ffi_rules::naming::{GlobalSymbol, Name, VtableField};
 
 use crate::ir::codec::CodecPlan;
-use crate::ir::ids::{CallbackId, ClassId, ParamName};
+use crate::ir::ids::{CallbackId, ClassId, EnumId, FieldName, ParamName, RecordId};
+use crate::ir::types::PrimitiveType;
+
+pub type PointerType = PrimitiveType;
 
 #[derive(Debug, Clone)]
 pub struct CallPlan {
@@ -25,45 +28,27 @@ pub enum CallPlanKind {
 #[derive(Debug, Clone)]
 pub struct AsyncPlan {
     pub completion_callback: CompletionCallback,
-    pub result: AsyncResult,
-}
-
-#[derive(Debug, Clone)]
-pub enum AsyncResult {
-    Void,
-    Value(ReturnValuePlan),
-    Fallible {
-        ok: ReturnValuePlan,
-        err_codec: CodecPlan,
-    },
+    pub result: ReturnPlan,
 }
 
 #[derive(Debug, Clone)]
 pub struct CompletionCallback {
     pub param_name: ParamName,
-    pub ffi_type: AbiType,
+    pub abi_type: AbiType,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParamPlan {
     pub name: ParamName,
-    pub strategy: ParamStrategy,
+    pub transport: Transport,
+    pub mutability: Mutability,
 }
 
 #[derive(Debug, Clone)]
-pub enum ParamStrategy {
-    Direct(DirectPlan),
-    Buffer {
-        element_abi: AbiType,
-        mutability: Mutability,
-    },
-    String {
-        mutability: Mutability,
-    },
-    Encoded {
-        codec: CodecPlan,
-        mutability: Mutability,
-    },
+pub enum Transport {
+    Scalar(ScalarOrigin),
+    Composite(CompositeLayout),
+    Span(SpanContent),
     Handle {
         class_id: ClassId,
         nullable: bool,
@@ -76,11 +61,46 @@ pub enum ParamStrategy {
 }
 
 #[derive(Debug, Clone)]
-pub struct DirectPlan {
-    pub abi_type: AbiType,
+pub enum SpanContent {
+    Scalar(ScalarOrigin),
+    Composite(CompositeLayout),
+    Utf8,
+    Encoded(CodecPlan),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+pub enum ScalarOrigin {
+    Primitive(PrimitiveType),
+    CStyleEnum {
+        tag_type: PrimitiveType,
+        enum_id: EnumId,
+    },
+}
+
+impl ScalarOrigin {
+    pub fn primitive(&self) -> PrimitiveType {
+        match self {
+            Self::Primitive(p) => *p,
+            Self::CStyleEnum { tag_type, .. } => *tag_type,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompositeLayout {
+    pub record_id: RecordId,
+    pub total_size: usize,
+    pub fields: Vec<CompositeField>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompositeField {
+    pub name: FieldName,
+    pub offset: usize,
+    pub primitive: PrimitiveType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AbiType {
     Void,
     Bool,
@@ -96,7 +116,31 @@ pub enum AbiType {
     USize,
     F32,
     F64,
-    Pointer,
+    Pointer(PointerType),
+    InlineCallbackFn(Vec<AbiType>),
+    Handle(ClassId),
+    CallbackHandle,
+    Struct(RecordId),
+}
+
+impl From<PrimitiveType> for AbiType {
+    fn from(p: PrimitiveType) -> Self {
+        match p {
+            PrimitiveType::Bool => Self::Bool,
+            PrimitiveType::I8 => Self::I8,
+            PrimitiveType::U8 => Self::U8,
+            PrimitiveType::I16 => Self::I16,
+            PrimitiveType::U16 => Self::U16,
+            PrimitiveType::I32 => Self::I32,
+            PrimitiveType::U32 => Self::U32,
+            PrimitiveType::I64 => Self::I64,
+            PrimitiveType::U64 => Self::U64,
+            PrimitiveType::ISize => Self::ISize,
+            PrimitiveType::USize => Self::USize,
+            PrimitiveType::F32 => Self::F32,
+            PrimitiveType::F64 => Self::F64,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,27 +156,8 @@ pub enum CallbackStyle {
 }
 
 #[derive(Debug, Clone)]
-pub enum ReturnValuePlan {
-    Void,
-    Direct(DirectPlan),
-    Encoded {
-        codec: CodecPlan,
-    },
-    Handle {
-        class_id: ClassId,
-        nullable: bool,
-    },
-    Callback {
-        callback_id: CallbackId,
-        nullable: bool,
-    },
-}
-
-#[derive(Debug, Clone)]
 pub enum ReturnPlan {
-    Value(ReturnValuePlan),
-    Fallible {
-        ok: ReturnValuePlan,
-        err_codec: CodecPlan,
-    },
+    Void,
+    Value(Transport),
+    Fallible { ok: Transport, err_codec: CodecPlan },
 }

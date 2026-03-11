@@ -1,5 +1,19 @@
-use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq, WriteSeq};
+use crate::ir::ops::{
+    OffsetExpr, ReadOp, ReadSeq, ValueExpr, WriteOp, WriteSeq, remap_root_in_seq,
+};
 use crate::render::swift::emit;
+
+#[derive(Debug, Clone)]
+pub struct CompositeFieldMapping {
+    pub swift_name: String,
+    pub c_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DirectBufferCompositeMapping {
+    pub swift_record_type: String,
+    pub fields: Vec<CompositeFieldMapping>,
+}
 
 #[derive(Debug, Clone)]
 pub enum SwiftCallMode {
@@ -36,6 +50,12 @@ pub enum SwiftAsyncResult {
         swift_type: String,
         conversion: SwiftAsyncConversion,
     },
+    DirectBuffer {
+        swift_type: String,
+        element_swift_type: String,
+        composite_mapping: Option<DirectBufferCompositeMapping>,
+        enum_mapping: Option<String>,
+    },
     Encoded {
         swift_type: String,
         ok_type: Option<String>,
@@ -55,14 +75,65 @@ impl SwiftAsyncResult {
         matches!(self, Self::Direct { .. })
     }
 
+    pub fn is_direct_buffer(&self) -> bool {
+        matches!(self, Self::DirectBuffer { .. })
+    }
+
     pub fn is_wire_encoded(&self) -> bool {
         matches!(self, Self::Encoded { .. })
+    }
+
+    pub fn direct_buffer_element_type(&self) -> Option<&str> {
+        match self {
+            Self::DirectBuffer {
+                element_swift_type, ..
+            } => Some(element_swift_type),
+            _ => None,
+        }
+    }
+
+    pub fn direct_buffer_composite_mapping(&self) -> Option<&DirectBufferCompositeMapping> {
+        match self {
+            Self::DirectBuffer {
+                composite_mapping, ..
+            } => composite_mapping.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn direct_buffer_enum_mapping(&self) -> Option<&str> {
+        match self {
+            Self::DirectBuffer {
+                enum_mapping: Some(e),
+                ..
+            } => Some(e.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn direct_buffer_is_data(&self) -> bool {
+        match self {
+            Self::DirectBuffer {
+                swift_type,
+                element_swift_type,
+                composite_mapping,
+                enum_mapping,
+            } => {
+                swift_type == "Data"
+                    && element_swift_type == "UInt8"
+                    && composite_mapping.is_none()
+                    && enum_mapping.is_none()
+            }
+            _ => false,
+        }
     }
 
     pub fn swift_type(&self) -> Option<&str> {
         match self {
             Self::Void => None,
-            Self::Direct { swift_type, .. } => Some(swift_type),
+            Self::Direct { swift_type, .. } | Self::DirectBuffer { swift_type, .. } => {
+                Some(swift_type)
+            }
             Self::Encoded {
                 throws: true,
                 ok_type: Some(ok),
@@ -75,7 +146,7 @@ impl SwiftAsyncResult {
     pub fn future_type(&self) -> &str {
         match self {
             Self::Void => "Void",
-            Self::Direct { swift_type, .. } => swift_type,
+            Self::Direct { swift_type, .. } | Self::DirectBuffer { swift_type, .. } => swift_type,
             Self::Encoded {
                 throws: true,
                 ok_type: Some(ok),
@@ -267,6 +338,7 @@ pub struct SwiftEnum {
     pub name: String,
     pub variants: Vec<SwiftVariant>,
     pub style: SwiftEnumStyle,
+    pub c_style_tag_type: Option<crate::ir::types::PrimitiveType>,
     pub is_error: bool,
     pub doc: Option<String>,
 }
@@ -286,7 +358,7 @@ impl SwiftEnum {
 #[derive(Debug, Clone)]
 pub struct SwiftVariant {
     pub swift_name: String,
-    pub discriminant: i64,
+    pub discriminant: i128,
     pub payload: SwiftVariantPayload,
     pub doc: Option<String>,
 }
@@ -638,7 +710,7 @@ impl SwiftMethod {
         } else if has_return {
             "return "
         } else {
-            "_ = "
+            ""
         };
         self.params
             .iter()
@@ -722,7 +794,12 @@ impl SwiftCallbackMethod {
 
     pub fn wire_return_encode(&self) -> Option<String> {
         self.encoded_return_encode().map(|encode| {
-            let writer_body = emit::emit_writer_write(encode);
+            let effective_encode = if self.throws() {
+                throws_success_encode(encode)
+            } else {
+                encode.clone()
+            };
+            let writer_body = emit::emit_writer_write(&effective_encode);
             let discriminant = if self.throws() {
                 "writer.writeU8(0); "
             } else {
@@ -767,6 +844,15 @@ impl SwiftCallbackMethod {
             },
             _ => None,
         }
+    }
+}
+
+fn throws_success_encode(encode: &WriteSeq) -> WriteSeq {
+    match encode.ops.first() {
+        Some(WriteOp::Result { ok, .. }) => {
+            remap_root_in_seq(ok.as_ref(), ValueExpr::Var("result".to_string()))
+        }
+        _ => encode.clone(),
     }
 }
 
@@ -839,7 +925,7 @@ impl SwiftFunction {
         } else if has_return {
             "return "
         } else {
-            "_ = "
+            ""
         };
         self.params
             .iter()
@@ -890,6 +976,14 @@ impl SwiftParam {
     pub fn ffi_arg(&self) -> String {
         match &self.conversion {
             SwiftConversion::Direct => self.name.clone(),
+            SwiftConversion::CStyleEnumRawValue => format!("{}.rawValue", self.name),
+            SwiftConversion::ToComposite { c_type, fields } => {
+                let field_inits: Vec<String> = fields
+                    .iter()
+                    .map(|f| format!("{}: {}.{}", f.c_name, self.name, f.swift_name))
+                    .collect();
+                format!("{}({})", c_type, field_inits.join(", "))
+            }
             SwiftConversion::ToString => format!(
                 "{}Buf.baseAddress!, UInt({}Buf.count)",
                 self.name, self.name
@@ -902,6 +996,13 @@ impl SwiftParam {
             }
             SwiftConversion::PrimitiveBuffer { .. } => {
                 format!("{}Ptr.baseAddress, UInt({}Ptr.count)", self.name, self.name)
+            }
+            SwiftConversion::EnumBufferInput { element_type, .. } => {
+                format!(
+                    "UnsafeRawPointer({n}Ptr.baseAddress!).assumingMemoryBound(to: {t}.self), UInt({n}Ptr.count)",
+                    n = self.name,
+                    t = element_type,
+                )
             }
             SwiftConversion::MutableBuffer { .. } => {
                 format!("{}Ptr.baseAddress, UInt({}Ptr.count)", self.name, self.name)
@@ -930,7 +1031,12 @@ impl SwiftParam {
     }
 
     pub fn needs_wrapper(&self) -> bool {
-        !matches!(self.conversion, SwiftConversion::Direct)
+        !matches!(
+            self.conversion,
+            SwiftConversion::Direct
+                | SwiftConversion::CStyleEnumRawValue
+                | SwiftConversion::ToComposite { .. }
+        )
     }
 
     pub fn wrapper_code(&self) -> Option<String> {
@@ -956,6 +1062,7 @@ impl SwiftParam {
                 | SwiftConversion::ToData
                 | SwiftConversion::PrimitiveBuffer { .. }
                 | SwiftConversion::MutableBuffer { .. }
+                | SwiftConversion::EnumBufferInput { .. }
         )
     }
 
@@ -974,6 +1081,10 @@ impl SwiftParam {
                 "{}.withUnsafeMutableBufferPointer {{ {}Ptr in",
                 self.name, self.name
             )),
+            SwiftConversion::EnumBufferInput { .. } => Some(format!(
+                "{}.withUnsafeBufferPointer {{ {}Ptr in",
+                self.name, self.name
+            )),
             _ => None,
         }
     }
@@ -981,9 +1092,9 @@ impl SwiftParam {
     pub fn closure_wrap_close(&self) -> Option<&'static str> {
         match &self.conversion {
             SwiftConversion::ToString | SwiftConversion::ToData => Some("}"),
-            SwiftConversion::PrimitiveBuffer { .. } | SwiftConversion::MutableBuffer { .. } => {
-                Some("}")
-            }
+            SwiftConversion::PrimitiveBuffer { .. }
+            | SwiftConversion::MutableBuffer { .. }
+            | SwiftConversion::EnumBufferInput { .. } => Some("}"),
             _ => None,
         }
     }
@@ -1038,14 +1149,37 @@ impl SwiftClosureTrampoline {
 #[derive(Debug, Clone)]
 pub enum SwiftConversion {
     Direct,
+    CStyleEnumRawValue,
     ToString,
     ToData,
-    ToWireBuffer { encode: WriteSeq },
-    PrimitiveBuffer { element_type: String },
-    MutableBuffer { element_type: String },
-    WrapCallback { protocol: String, nullable: bool },
-    InlineClosure { closure: SwiftClosureTrampoline },
-    PassHandle { class_name: String, nullable: bool },
+    ToWireBuffer {
+        encode: WriteSeq,
+    },
+    ToComposite {
+        c_type: String,
+        fields: Vec<CompositeFieldMapping>,
+    },
+    PrimitiveBuffer {
+        element_type: String,
+    },
+    EnumBufferInput {
+        swift_enum: String,
+        element_type: String,
+    },
+    MutableBuffer {
+        element_type: String,
+    },
+    WrapCallback {
+        protocol: String,
+        nullable: bool,
+    },
+    InlineClosure {
+        closure: SwiftClosureTrampoline,
+    },
+    PassHandle {
+        class_name: String,
+        nullable: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1073,10 +1207,24 @@ pub enum SwiftReturn {
     Direct {
         swift_type: String,
     },
+    CStyleEnumFromRawValue {
+        swift_type: String,
+    },
+    FromComposite {
+        swift_type: String,
+        c_type: String,
+        fields: Vec<CompositeFieldMapping>,
+    },
     FromWireBuffer {
         swift_type: String,
         decode: ReadSeq,
         encode: WriteSeq,
+    },
+    FromDirectBuffer {
+        swift_type: String,
+        element_swift_type: String,
+        composite_mapping: Option<DirectBufferCompositeMapping>,
+        enum_mapping: Option<String>,
     },
     Handle {
         class_name: String,
@@ -1085,6 +1233,7 @@ pub enum SwiftReturn {
     Throws {
         ok: Box<SwiftReturn>,
         err_type: String,
+        result_decode: ReadSeq,
         err_decode: ReadSeq,
         err_is_string: bool,
         err_encode: Option<WriteSeq>,
@@ -1096,7 +1245,10 @@ impl SwiftReturn {
         match self {
             SwiftReturn::Void => None,
             SwiftReturn::Direct { swift_type } => Some(swift_type.clone()),
+            SwiftReturn::CStyleEnumFromRawValue { swift_type } => Some(swift_type.clone()),
+            SwiftReturn::FromComposite { swift_type, .. } => Some(swift_type.clone()),
             SwiftReturn::FromWireBuffer { swift_type, .. } => Some(swift_type.clone()),
+            SwiftReturn::FromDirectBuffer { swift_type, .. } => Some(swift_type.clone()),
             SwiftReturn::Handle {
                 class_name,
                 nullable,
@@ -1120,15 +1272,97 @@ impl SwiftReturn {
     }
 
     pub fn is_wire_encoded(&self) -> bool {
+        matches!(
+            self,
+            SwiftReturn::FromWireBuffer { .. } | SwiftReturn::Throws { .. }
+        )
+    }
+
+    pub fn is_direct_buffer(&self) -> bool {
+        matches!(self, SwiftReturn::FromDirectBuffer { .. })
+    }
+
+    pub fn direct_buffer_element_type(&self) -> Option<&str> {
         match self {
-            SwiftReturn::FromWireBuffer { .. } => true,
-            SwiftReturn::Throws { ok, .. } => ok.is_wire_encoded(),
+            SwiftReturn::FromDirectBuffer {
+                element_swift_type, ..
+            } => Some(element_swift_type.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn direct_buffer_composite_mapping(&self) -> Option<&DirectBufferCompositeMapping> {
+        match self {
+            SwiftReturn::FromDirectBuffer {
+                composite_mapping, ..
+            } => composite_mapping.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn direct_buffer_enum_mapping(&self) -> Option<&str> {
+        match self {
+            SwiftReturn::FromDirectBuffer {
+                enum_mapping: Some(e),
+                ..
+            } => Some(e.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn direct_buffer_is_data(&self) -> bool {
+        match self {
+            SwiftReturn::FromDirectBuffer {
+                swift_type,
+                element_swift_type,
+                composite_mapping,
+                enum_mapping,
+            } => {
+                swift_type == "Data"
+                    && element_swift_type == "UInt8"
+                    && composite_mapping.is_none()
+                    && enum_mapping.is_none()
+            }
             _ => false,
         }
     }
 
     pub fn is_handle(&self) -> bool {
         matches!(self, SwiftReturn::Handle { .. })
+    }
+
+    pub fn is_c_style_enum(&self) -> bool {
+        matches!(self, SwiftReturn::CStyleEnumFromRawValue { .. })
+    }
+
+    pub fn c_style_enum_type(&self) -> Option<&str> {
+        match self {
+            SwiftReturn::CStyleEnumFromRawValue { swift_type } => Some(swift_type.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn is_composite(&self) -> bool {
+        match self {
+            SwiftReturn::FromComposite { .. } => true,
+            SwiftReturn::Throws { ok, .. } => ok.is_composite(),
+            _ => false,
+        }
+    }
+
+    pub fn composite_convert_expr(&self, raw_var: &str) -> Option<String> {
+        match self {
+            SwiftReturn::FromComposite {
+                swift_type, fields, ..
+            } => {
+                let field_assignments: Vec<String> = fields
+                    .iter()
+                    .map(|f| format!("{}: {}.{}", f.swift_name, raw_var, f.c_name))
+                    .collect();
+                Some(format!("{}({})", swift_type, field_assignments.join(", ")))
+            }
+            _ => None,
+        }
     }
 
     pub fn handle_info(&self) -> Option<(&str, bool)> {
@@ -1168,26 +1402,44 @@ impl SwiftReturn {
         match self {
             SwiftReturn::FromWireBuffer { decode, .. } => Some(emit::emit_reader_read(decode)),
             SwiftReturn::Throws {
-                ok, err_is_string, ..
-            } => match ok.as_ref() {
-                SwiftReturn::FromWireBuffer { decode, .. } => match decode.ops.first() {
-                    Some(ReadOp::Result { ok, err, .. }) => {
-                        let ok_read = emit::emit_reader_read(ok);
-                        let err_read = emit::emit_reader_read(err);
-                        let err_body = if *err_is_string {
-                            format!("FfiError(message: {})", err_read)
-                        } else {
-                            err_read
-                        };
-                        Some(format!(
-                            "try {{ let tag = reader.readU8(); if tag == 0 {{ return {} }} else {{ throw {} }} }}()",
-                            ok_read, err_body
-                        ))
+                ok,
+                result_decode,
+                err_is_string,
+                ..
+            } => Self::decode_result_from_seq(ok, result_decode, *err_is_string),
+            _ => None,
+        }
+    }
+
+    fn decode_result_from_seq(
+        ok_return: &SwiftReturn,
+        decode: &ReadSeq,
+        err_is_string: bool,
+    ) -> Option<String> {
+        let ops = match ok_return {
+            SwiftReturn::FromWireBuffer { decode, .. } => decode,
+            _ => decode,
+        };
+        match ops.ops.first() {
+            Some(ReadOp::Result { ok, err, .. }) => {
+                let raw_ok_read = emit::emit_reader_read(ok);
+                let ok_read = match ok_return {
+                    SwiftReturn::CStyleEnumFromRawValue { swift_type } => {
+                        format!("{}(rawValue: {})!", swift_type, raw_ok_read)
                     }
-                    _ => ok.reader_decode_expr(),
-                },
-                _ => ok.reader_decode_expr(),
-            },
+                    _ => raw_ok_read,
+                };
+                let err_read = emit::emit_reader_read(err);
+                let err_body = if err_is_string {
+                    format!("FfiError(message: {})", err_read)
+                } else {
+                    err_read
+                };
+                Some(format!(
+                    "try {{ let tag = reader.readU8(); if tag == 0 {{ return {} }} else {{ throw {} }} }}()",
+                    ok_read, err_body
+                ))
+            }
             _ => None,
         }
     }

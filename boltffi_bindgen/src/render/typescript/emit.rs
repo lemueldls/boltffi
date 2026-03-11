@@ -3,7 +3,72 @@ use boltffi_ffi_rules::naming::snake_to_camel as camel_case;
 use crate::ir::codec::VecLayout;
 use crate::ir::ids::BuiltinId;
 use crate::ir::ops::{ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
+use crate::ir::plan::CompositeLayout;
 use crate::ir::types::{PrimitiveType, TypeExpr};
+
+fn dataview_get(primitive: PrimitiveType, offset_expr: &str) -> String {
+    match primitive {
+        PrimitiveType::Bool => format!("v.getUint8({offset_expr}) !== 0"),
+        PrimitiveType::I8 => format!("v.getInt8({offset_expr})"),
+        PrimitiveType::U8 => format!("v.getUint8({offset_expr})"),
+        PrimitiveType::I16 => format!("v.getInt16({offset_expr}, true)"),
+        PrimitiveType::U16 => format!("v.getUint16({offset_expr}, true)"),
+        PrimitiveType::I32 => format!("v.getInt32({offset_expr}, true)"),
+        PrimitiveType::U32 => format!("v.getUint32({offset_expr}, true)"),
+        PrimitiveType::I64 | PrimitiveType::ISize => format!("v.getBigInt64({offset_expr}, true)"),
+        PrimitiveType::U64 | PrimitiveType::USize => format!("v.getBigUint64({offset_expr}, true)"),
+        PrimitiveType::F32 => format!("v.getFloat32({offset_expr}, true)"),
+        PrimitiveType::F64 => format!("v.getFloat64({offset_expr}, true)"),
+    }
+}
+
+pub fn composite_slot_decode_expr(layout: &CompositeLayout) -> String {
+    let stride = layout.total_size;
+    let fields: Vec<String> = layout
+        .fields
+        .iter()
+        .map(|f| {
+            let name = camel_case(f.name.as_str());
+            let read = dataview_get(f.primitive, &format!("o + {}", f.offset));
+            format!("{name}: {read}")
+        })
+        .collect();
+    let obj = fields.join(", ");
+    format!("_module.takeSlotStructArray({stride}, (v, o) => ({{ {obj} }}))")
+}
+
+pub fn composite_buf_decode_expr(layout: &CompositeLayout) -> String {
+    let stride = layout.total_size;
+    let fields: Vec<String> = layout
+        .fields
+        .iter()
+        .map(|f| {
+            let name = camel_case(f.name.as_str());
+            let read = dataview_get(f.primitive, &format!("o + {}", f.offset));
+            format!("{name}: {read}")
+        })
+        .collect();
+    let obj = fields.join(", ");
+    format!("_module.takeBufStructArray(outPtr, {stride}, (v, o) => ({{ {obj} }}))")
+}
+
+pub fn primitive_vec_read_expr(primitive: PrimitiveType) -> String {
+    match primitive {
+        PrimitiveType::Bool => "reader.readArray(() => reader.readBool())".into(),
+        PrimitiveType::I8 => "reader.readI8Array()".into(),
+        PrimitiveType::U8 => "reader.readBytes()".into(),
+        PrimitiveType::I16 => "reader.readI16Array()".into(),
+        PrimitiveType::U16 => "reader.readU16Array()".into(),
+        PrimitiveType::I32 => "reader.readI32Array()".into(),
+        PrimitiveType::U32 => "reader.readU32Array()".into(),
+        PrimitiveType::I64 => "reader.readI64Array()".into(),
+        PrimitiveType::U64 => "reader.readU64Array()".into(),
+        PrimitiveType::ISize => "reader.readI64Array()".into(),
+        PrimitiveType::USize => "reader.readU64Array()".into(),
+        PrimitiveType::F32 => "reader.readF32Array()".into(),
+        PrimitiveType::F64 => "reader.readF64Array()".into(),
+    }
+}
 
 const TS_KEYWORDS: &[&str] = &[
     "break",
@@ -184,24 +249,7 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
             element,
             ..
         } => match element_type {
-            TypeExpr::Primitive(prim) => match prim {
-                PrimitiveType::Bool => {
-                    let inner = emit_reader_read(element);
-                    format!("reader.readArray(() => {inner})")
-                }
-                PrimitiveType::I8 => "reader.readI8Array()".into(),
-                PrimitiveType::U8 => "reader.readBytes()".into(),
-                PrimitiveType::I16 => "reader.readI16Array()".into(),
-                PrimitiveType::U16 => "reader.readU16Array()".into(),
-                PrimitiveType::I32 => "reader.readI32Array()".into(),
-                PrimitiveType::U32 => "reader.readU32Array()".into(),
-                PrimitiveType::I64 => "reader.readI64Array()".into(),
-                PrimitiveType::U64 => "reader.readU64Array()".into(),
-                PrimitiveType::ISize => "reader.readI64Array()".into(),
-                PrimitiveType::USize => "reader.readU64Array()".into(),
-                PrimitiveType::F32 => "reader.readF32Array()".into(),
-                PrimitiveType::F64 => "reader.readF64Array()".into(),
-            },
+            TypeExpr::Primitive(prim) => primitive_vec_read_expr(*prim),
             _ => {
                 let inner = emit_reader_read(element);
                 format!("reader.readArray(() => {inner})")

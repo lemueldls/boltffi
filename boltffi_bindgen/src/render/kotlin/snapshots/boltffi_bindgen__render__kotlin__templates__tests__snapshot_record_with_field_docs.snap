@@ -2,6 +2,7 @@
 source: boltffi_bindgen/src/render/kotlin/templates.rs
 expression: template.render().unwrap()
 ---
+
 /**
  * A physical location with coordinates.
  */

@@ -1,3 +1,5 @@
+pub mod primitive;
+
 pub const FFI_PREFIX: &str = "boltffi";
 
 pub mod naming {
@@ -225,8 +227,8 @@ pub mod naming {
         Name::new(format!("{}_free", method_ffi_name(class_name, stream_name)))
     }
 
-    pub fn free_buf_u8() -> Name<GlobalSymbol> {
-        Name::new(format!("{}_free_buf_u8", FFI_PREFIX))
+    pub fn free_buf() -> Name<GlobalSymbol> {
+        Name::new(format!("{}_free_buf", FFI_PREFIX))
     }
 
     pub fn atomic_u8_cas() -> Name<GlobalSymbol> {
@@ -296,25 +298,6 @@ pub mod naming {
 }
 
 pub mod c_types {
-    pub fn primitive_to_c(rust_type: &str) -> &'static str {
-        match rust_type {
-            "bool" => "bool",
-            "i8" => "int8_t",
-            "u8" => "uint8_t",
-            "i16" => "int16_t",
-            "u16" => "uint16_t",
-            "i32" => "int32_t",
-            "u32" => "uint32_t",
-            "i64" => "int64_t",
-            "u64" => "uint64_t",
-            "f32" => "float",
-            "f64" => "double",
-            "usize" => "uintptr_t",
-            "isize" => "intptr_t",
-            _ => "void*",
-        }
-    }
-
     pub fn string_c_type() -> &'static str {
         "FfiString"
     }
@@ -499,23 +482,12 @@ pub mod signatures {
 
 pub mod callback {
     use super::naming::to_snake_case;
+    use super::primitive::Primitive;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum TypeId {
         Void,
-        Bool,
-        I8,
-        U8,
-        I16,
-        U16,
-        I32,
-        U32,
-        I64,
-        U64,
-        F32,
-        F64,
-        Isize,
-        Usize,
+        Primitive(Primitive),
         String,
         Bytes,
         Named(std::string::String),
@@ -523,42 +495,20 @@ pub mod callback {
 
     impl TypeId {
         pub fn from_rust_type_str(s: &str) -> Self {
+            if let Ok(primitive) = s.parse::<Primitive>() {
+                return Self::Primitive(primitive);
+            }
             match s {
-                "bool" => Self::Bool,
-                "i8" => Self::I8,
-                "u8" => Self::U8,
-                "i16" => Self::I16,
-                "u16" => Self::U16,
-                "i32" => Self::I32,
-                "u32" => Self::U32,
-                "i64" => Self::I64,
-                "u64" => Self::U64,
-                "f32" => Self::F32,
-                "f64" => Self::F64,
-                "isize" => Self::Isize,
-                "usize" => Self::Usize,
                 "String" | "&str" => Self::String,
                 "()" => Self::Void,
                 other => Self::Named(other.to_string()),
             }
         }
 
-        pub fn as_signature_part(&self) -> String {
+        pub fn as_signature_part(&self) -> std::string::String {
             match self {
                 Self::Void => "Void".into(),
-                Self::Bool => "Bool".into(),
-                Self::I8 => "I8".into(),
-                Self::U8 => "U8".into(),
-                Self::I16 => "I16".into(),
-                Self::U16 => "U16".into(),
-                Self::I32 => "I32".into(),
-                Self::U32 => "U32".into(),
-                Self::I64 => "I64".into(),
-                Self::U64 => "U64".into(),
-                Self::F32 => "F32".into(),
-                Self::F64 => "F64".into(),
-                Self::Isize => "Isize".into(),
-                Self::Usize => "Usize".into(),
+                Self::Primitive(primitive) => primitive.type_id().into(),
                 Self::String => "String".into(),
                 Self::Bytes => "Bytes".into(),
                 Self::Named(name) => name.clone(),
@@ -617,21 +567,25 @@ pub mod callback {
     mod tests {
         use super::*;
 
+        fn p(primitive: Primitive) -> TypeId {
+            TypeId::Primitive(primitive)
+        }
+
         #[test]
         fn type_id_from_rust_primitives() {
-            assert_eq!(TypeId::from_rust_type_str("bool"), TypeId::Bool);
-            assert_eq!(TypeId::from_rust_type_str("i8"), TypeId::I8);
-            assert_eq!(TypeId::from_rust_type_str("u8"), TypeId::U8);
-            assert_eq!(TypeId::from_rust_type_str("i16"), TypeId::I16);
-            assert_eq!(TypeId::from_rust_type_str("u16"), TypeId::U16);
-            assert_eq!(TypeId::from_rust_type_str("i32"), TypeId::I32);
-            assert_eq!(TypeId::from_rust_type_str("u32"), TypeId::U32);
-            assert_eq!(TypeId::from_rust_type_str("i64"), TypeId::I64);
-            assert_eq!(TypeId::from_rust_type_str("u64"), TypeId::U64);
-            assert_eq!(TypeId::from_rust_type_str("f32"), TypeId::F32);
-            assert_eq!(TypeId::from_rust_type_str("f64"), TypeId::F64);
-            assert_eq!(TypeId::from_rust_type_str("isize"), TypeId::Isize);
-            assert_eq!(TypeId::from_rust_type_str("usize"), TypeId::Usize);
+            assert_eq!(TypeId::from_rust_type_str("bool"), p(Primitive::Bool));
+            assert_eq!(TypeId::from_rust_type_str("i8"), p(Primitive::I8));
+            assert_eq!(TypeId::from_rust_type_str("u8"), p(Primitive::U8));
+            assert_eq!(TypeId::from_rust_type_str("i16"), p(Primitive::I16));
+            assert_eq!(TypeId::from_rust_type_str("u16"), p(Primitive::U16));
+            assert_eq!(TypeId::from_rust_type_str("i32"), p(Primitive::I32));
+            assert_eq!(TypeId::from_rust_type_str("u32"), p(Primitive::U32));
+            assert_eq!(TypeId::from_rust_type_str("i64"), p(Primitive::I64));
+            assert_eq!(TypeId::from_rust_type_str("u64"), p(Primitive::U64));
+            assert_eq!(TypeId::from_rust_type_str("f32"), p(Primitive::F32));
+            assert_eq!(TypeId::from_rust_type_str("f64"), p(Primitive::F64));
+            assert_eq!(TypeId::from_rust_type_str("isize"), p(Primitive::ISize));
+            assert_eq!(TypeId::from_rust_type_str("usize"), p(Primitive::USize));
         }
 
         #[test]
@@ -660,16 +614,16 @@ pub mod callback {
         #[test]
         fn type_id_signature_parts() {
             assert_eq!(TypeId::Void.as_signature_part(), "Void");
-            assert_eq!(TypeId::Bool.as_signature_part(), "Bool");
-            assert_eq!(TypeId::I32.as_signature_part(), "I32");
+            assert_eq!(p(Primitive::Bool).as_signature_part(), "Bool");
+            assert_eq!(p(Primitive::I32).as_signature_part(), "I32");
             assert_eq!(TypeId::String.as_signature_part(), "String");
             assert_eq!(TypeId::Named("Point".into()).as_signature_part(), "Point");
         }
 
         #[test]
         fn closure_i32_to_i32() {
-            let params = vec![TypeId::I32];
-            let returns = TypeId::I32;
+            let params = vec![p(Primitive::I32)];
+            let returns = p(Primitive::I32);
             assert_eq!(closure_signature_id(&params, &returns), "I32ToI32");
             assert_eq!(closure_callback_id(&params, &returns), "__Closure_I32ToI32");
             assert_eq!(
@@ -691,7 +645,7 @@ pub mod callback {
 
         #[test]
         fn closure_void_return() {
-            let params = vec![TypeId::I32];
+            let params = vec![p(Primitive::I32)];
             let returns = TypeId::Void;
             assert_eq!(closure_signature_id(&params, &returns), "I32");
             assert_eq!(closure_callback_id(&params, &returns), "__Closure_I32");
@@ -700,7 +654,7 @@ pub mod callback {
         #[test]
         fn closure_no_params_with_return() {
             let params = vec![];
-            let returns = TypeId::I32;
+            let returns = p(Primitive::I32);
             assert_eq!(closure_signature_id(&params, &returns), "ToI32");
             assert_eq!(closure_callback_id(&params, &returns), "__Closure_ToI32");
         }
@@ -715,8 +669,8 @@ pub mod callback {
 
         #[test]
         fn closure_multi_params() {
-            let params = vec![TypeId::I32, TypeId::String];
-            let returns = TypeId::Bool;
+            let params = vec![p(Primitive::I32), TypeId::String];
+            let returns = p(Primitive::Bool);
             assert_eq!(closure_signature_id(&params, &returns), "I32_StringToBool");
             assert_eq!(
                 closure_callback_id(&params, &returns),
@@ -727,17 +681,17 @@ pub mod callback {
         #[test]
         fn closure_all_primitives_void() {
             let params = vec![
-                TypeId::Bool,
-                TypeId::I8,
-                TypeId::U8,
-                TypeId::I16,
-                TypeId::U16,
-                TypeId::I32,
-                TypeId::U32,
-                TypeId::I64,
-                TypeId::U64,
-                TypeId::F32,
-                TypeId::F64,
+                p(Primitive::Bool),
+                p(Primitive::I8),
+                p(Primitive::U8),
+                p(Primitive::I16),
+                p(Primitive::U16),
+                p(Primitive::I32),
+                p(Primitive::U32),
+                p(Primitive::I64),
+                p(Primitive::U64),
+                p(Primitive::F32),
+                p(Primitive::F64),
             ];
             let returns = TypeId::Void;
             let sig = closure_signature_id(&params, &returns);
@@ -786,8 +740,8 @@ pub mod callback {
 
         #[test]
         fn inv09_naming_deterministic() {
-            let params = vec![TypeId::I32, TypeId::String];
-            let returns = TypeId::Bool;
+            let params = vec![p(Primitive::I32), TypeId::String];
+            let returns = p(Primitive::Bool);
 
             let id1 = closure_callback_id_snake(&params, &returns);
             let id2 = closure_callback_id_snake(&params, &returns);
@@ -842,7 +796,7 @@ pub mod transport {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum EncodedReturnStrategy {
         Utf8String,
-        PrimitiveVec,
+        DirectVec,
         OptionScalar,
         ResultScalar,
         WireEncoded,
@@ -882,6 +836,108 @@ pub mod transport {
                 BufferTransport::for_target("aarch64-linux-android"),
                 BufferTransport::Descriptor
             );
+        }
+    }
+}
+
+pub mod classification {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum PassableCategory {
+        Scalar,
+        Blittable,
+        WireEncoded,
+    }
+
+    pub fn classify_struct(is_repr_c: bool, field_types: &[FieldPrimitive]) -> PassableCategory {
+        if is_repr_c && !field_types.is_empty() && field_types.iter().all(|f| f.is_fixed_width) {
+            PassableCategory::Blittable
+        } else {
+            PassableCategory::WireEncoded
+        }
+    }
+
+    pub fn classify_enum(is_c_style: bool, has_integer_repr: bool) -> PassableCategory {
+        if is_c_style && has_integer_repr {
+            PassableCategory::Scalar
+        } else {
+            PassableCategory::WireEncoded
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct FieldPrimitive {
+        pub is_fixed_width: bool,
+    }
+
+    impl FieldPrimitive {
+        pub fn fixed() -> Self {
+            Self {
+                is_fixed_width: true,
+            }
+        }
+
+        pub fn platform_sized() -> Self {
+            Self {
+                is_fixed_width: false,
+            }
+        }
+
+        pub fn from_type_name(name: &str) -> Option<Self> {
+            match name {
+                "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64"
+                | "bool" => Some(Self::fixed()),
+                "isize" | "usize" => Some(Self::platform_sized()),
+                _ => None,
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn c_style_enum_with_repr_is_scalar() {
+            assert_eq!(classify_enum(true, true), PassableCategory::Scalar);
+        }
+
+        #[test]
+        fn data_enum_is_wire_encoded() {
+            assert_eq!(classify_enum(false, true), PassableCategory::WireEncoded);
+        }
+
+        #[test]
+        fn c_style_enum_without_repr_is_wire_encoded() {
+            assert_eq!(classify_enum(true, false), PassableCategory::WireEncoded);
+        }
+
+        #[test]
+        fn all_fixed_width_struct_is_blittable() {
+            let fields = vec![FieldPrimitive::fixed(), FieldPrimitive::fixed()];
+            assert_eq!(classify_struct(true, &fields), PassableCategory::Blittable);
+        }
+
+        #[test]
+        fn struct_with_platform_sized_is_wire_encoded() {
+            let fields = vec![FieldPrimitive::fixed(), FieldPrimitive::platform_sized()];
+            assert_eq!(
+                classify_struct(true, &fields),
+                PassableCategory::WireEncoded
+            );
+        }
+
+        #[test]
+        fn struct_without_repr_c_is_wire_encoded() {
+            let fields = vec![FieldPrimitive::fixed()];
+            assert_eq!(
+                classify_struct(false, &fields),
+                PassableCategory::WireEncoded
+            );
+        }
+
+        #[test]
+        fn empty_struct_is_wire_encoded() {
+            assert_eq!(classify_struct(true, &[]), PassableCategory::WireEncoded);
         }
     }
 }

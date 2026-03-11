@@ -282,8 +282,11 @@ final class FfiFutureState<T>: @unchecked Sendable {
 
     @inlinable mutating func writeBlittable<T>(_ value: T) {
         var copy = value
-        withUnsafePointer(to: &copy) { ptr in
-            data.append(UnsafeRawPointer(ptr).assumingMemoryBound(to: UInt8.self), count: MemoryLayout<T>.stride)
+        let size = MemoryLayout<T>.size
+        let stride = MemoryLayout<T>.stride
+        Swift.withUnsafeBytes(of: &copy) { data.append(contentsOf: $0) }
+        if stride > size {
+            data.append(contentsOf: repeatElement(UInt8(0), count: stride - size))
         }
     }
 

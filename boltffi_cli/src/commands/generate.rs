@@ -1,9 +1,10 @@
 use std::path::PathBuf;
+use std::path::{Component, Path};
 
 use boltffi_bindgen::render::typescript::{TypeScriptEmitter, TypeScriptLowerer};
 use boltffi_bindgen::{
-    CHeaderGenerator, FactoryStyle, KotlinOptions, TypeConversion as BindgenTypeConversion,
-    TypeMapping as BindgenTypeMapping, TypeMappings, ir, render, scan_crate,
+    CHeaderLowerer, FactoryStyle, KotlinOptions, TypeConversion as BindgenTypeConversion,
+    TypeMapping as BindgenTypeMapping, TypeMappings, ir, render, scan_crate_with_pointer_width,
 };
 
 use crate::config::{
@@ -89,6 +90,80 @@ fn convert_type_mappings(
         .collect()
 }
 
+fn scan_with_pointer_width(
+    crate_dir: &Path,
+    crate_name: &str,
+    pointer_width_bits: Option<u8>,
+) -> Result<boltffi_bindgen::Module> {
+    scan_crate_with_pointer_width(crate_dir, crate_name, pointer_width_bits).map_err(|error| {
+        CliError::CommandFailed {
+            command: format!("scan_crate: {}", error),
+            status: None,
+        }
+    })
+}
+
+fn host_pointer_width_bits() -> Option<u8> {
+    match usize::BITS {
+        32 => Some(32),
+        64 => Some(64),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JavaGenerationMode {
+    Jvm,
+    Android,
+}
+
+fn java_generation_mode(
+    selected_output_dir: &Path,
+    configured_jvm_output: &Path,
+    configured_android_output: &Path,
+    jvm_enabled: bool,
+    android_enabled: bool,
+) -> JavaGenerationMode {
+    let selected_output_dir = normalized_output_path(selected_output_dir);
+    let configured_jvm_output = normalized_output_path(configured_jvm_output);
+    let configured_android_output = normalized_output_path(configured_android_output);
+    if selected_output_dir == configured_jvm_output {
+        return JavaGenerationMode::Jvm;
+    }
+    if selected_output_dir == configured_android_output {
+        return JavaGenerationMode::Android;
+    }
+    match (jvm_enabled, android_enabled) {
+        (true, false) | (true, true) => JavaGenerationMode::Jvm,
+        (false, true) => JavaGenerationMode::Android,
+        _ => JavaGenerationMode::Jvm,
+    }
+}
+
+fn normalized_output_path(path: &Path) -> PathBuf {
+    let absolute_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|current_dir| current_dir.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    absolute_path
+        .components()
+        .fold(PathBuf::new(), |mut normalized_path, component| {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if normalized_path.file_name().is_some() {
+                        normalized_path.pop();
+                    }
+                }
+                _ => normalized_path.push(component.as_os_str()),
+            }
+            normalized_path
+        })
+}
+
 fn generate_swift(config: &Config, output: Option<PathBuf>) -> Result<()> {
     if !config.is_apple_enabled() {
         return Err(CliError::CommandFailed {
@@ -117,10 +192,7 @@ fn generate_swift(config: &Config, output: Option<PathBuf>) -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("."));
     let crate_name = config.library_name();
 
-    let mut module = scan_crate(&crate_dir, crate_name).map_err(|e| CliError::CommandFailed {
-        command: format!("scan_crate: {}", e),
-        status: None,
-    })?;
+    let mut module = scan_with_pointer_width(&crate_dir, crate_name, Some(64))?;
 
     let ffi_module_name = config
         .apple_swift_ffi_module_name()
@@ -175,10 +247,7 @@ fn generate_kotlin(config: &Config, output: Option<PathBuf>) -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("."));
     let crate_name = config.library_name();
 
-    let mut module = scan_crate(&crate_dir, crate_name).map_err(|e| CliError::CommandFailed {
-        command: format!("scan_crate: {}", e),
-        status: None,
-    })?;
+    let mut module = scan_with_pointer_width(&crate_dir, crate_name, None)?;
 
     let factory_style = match config.android_kotlin_factory_style() {
         ConfigFactoryStyle::Constructors => FactoryStyle::Constructors,
@@ -246,6 +315,8 @@ fn generate_java(config: &Config, output: Option<PathBuf>) -> Result<()> {
     let package_path = package_name.replace('.', "/");
     let module_name = config.java_module_name();
 
+    let configured_jvm_output = config.java_jvm_output();
+    let configured_android_output = config.java_android_output();
     let output_dir = output.unwrap_or_else(|| {
         if jvm_enabled {
             config.java_jvm_output()
@@ -270,10 +341,17 @@ fn generate_java(config: &Config, output: Option<PathBuf>) -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("."));
     let crate_name = config.library_name();
 
-    let mut module = scan_crate(&crate_dir, crate_name).map_err(|e| CliError::CommandFailed {
-        command: format!("scan_crate: {}", e),
-        status: None,
-    })?;
+    let java_pointer_width_bits = match java_generation_mode(
+        &output_dir,
+        &configured_jvm_output,
+        &configured_android_output,
+        jvm_enabled,
+        android_enabled,
+    ) {
+        JavaGenerationMode::Jvm => host_pointer_width_bits(),
+        JavaGenerationMode::Android => None,
+    };
+    let mut module = scan_with_pointer_width(&crate_dir, crate_name, java_pointer_width_bits)?;
 
     let contract = ir::build_contract(&mut module);
     let abi_contract = ir::Lowerer::new(&contract).to_abi_contract();
@@ -338,12 +416,16 @@ fn generate_header(config: &Config, output: Option<PathBuf>) -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("."));
     let crate_name = config.library_name();
 
-    let module = scan_crate(&crate_dir, crate_name).map_err(|e| CliError::CommandFailed {
-        command: format!("scan_crate: {}", e),
-        status: None,
-    })?;
+    let header_pointer_width_bits = if config.is_apple_enabled() && !config.is_android_enabled() {
+        Some(64)
+    } else {
+        None
+    };
+    let mut module = scan_with_pointer_width(&crate_dir, crate_name, header_pointer_width_bits)?;
 
-    let header_code = CHeaderGenerator::generate(&module);
+    let contract = ir::build_contract(&mut module);
+    let abi = ir::Lowerer::new(&contract).to_abi_contract();
+    let header_code = CHeaderLowerer::new(&contract, &abi).generate();
 
     std::fs::write(&output_path, header_code).map_err(|source| CliError::WriteFailed {
         path: output_path.clone(),
@@ -378,10 +460,7 @@ fn generate_typescript(config: &Config, output: Option<PathBuf>) -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("."));
     let crate_name = config.library_name();
 
-    let mut module = scan_crate(&crate_dir, crate_name).map_err(|e| CliError::CommandFailed {
-        command: format!("scan_crate: {}", e),
-        status: None,
-    })?;
+    let mut module = scan_with_pointer_width(&crate_dir, crate_name, Some(32))?;
 
     let contract = ir::build_contract(&mut module);
     let abi_contract = ir::Lowerer::new(&contract).to_abi_contract();
