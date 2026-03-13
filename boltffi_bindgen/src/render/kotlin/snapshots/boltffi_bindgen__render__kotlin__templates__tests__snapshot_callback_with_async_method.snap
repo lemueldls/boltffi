@@ -1,5 +1,6 @@
 ---
 source: boltffi_bindgen/src/render/kotlin/templates.rs
+assertion_line: 1112
 expression: template.render().unwrap()
 ---
 /**
@@ -47,8 +48,9 @@ object AsyncHandlerCallbacks {
     @JvmStatic
     fun on_complete(handle: Long, result: String, callbackPtr: Long, callbackData: Long) {
         val impl = AsyncHandlerMap.get(handle) ?: error("AsyncHandlerMap: invalid handle $handle")
+        val resultDecoded = result
         BoltFFIScope.launch {
-            impl.onComplete(result)
+            impl.onComplete(resultDecoded)
             Native.invokeOnComplete(callbackPtr, callbackData)
         }
     }

@@ -149,10 +149,7 @@ pub fn emit_size_expr(size: &SizeExpr) -> String {
 
 pub fn emit_size_expr_for_write_seq(seq: &WriteSeq) -> String {
     match seq.ops.first() {
-        Some(WriteOp::Custom { value, .. }) => emit_size_expr(&SizeExpr::WireSize {
-            value: value.clone(),
-            record_id: None,
-        }),
+        Some(WriteOp::Custom { underlying, .. }) => emit_size_expr(&underlying.size),
         Some(WriteOp::Result { ok, err, .. }) => {
             let ok_type = kotlin_type_for_write_seq(ok);
             let err_type = kotlin_type_for_write_seq(err);
@@ -236,9 +233,7 @@ pub fn emit_reader_read(seq: &ReadSeq) -> String {
             "Url" => "reader.readUri()".to_string(),
             _ => "reader.readString()".to_string(),
         },
-        ReadOp::Custom { id, .. } => {
-            format!("{}.decode(reader)", render_type_name(id.as_str()))
-        }
+        ReadOp::Custom { underlying, .. } => emit_reader_read(underlying),
     }
 }
 
@@ -348,9 +343,7 @@ pub fn emit_write_expr(seq: &WriteSeq) -> String {
             )
         }
         WriteOp::Builtin { id, value } => emit_write_builtin(id, &render_value(value)),
-        WriteOp::Custom { value, .. } => {
-            format!("{}.wireEncodeTo(wire)", render_value(value))
-        }
+        WriteOp::Custom { underlying, .. } => emit_write_expr(underlying),
     }
 }
 

@@ -57,10 +57,13 @@ object {{ callbacks_object }} {
     @JvmStatic
     fun {{ method.ffi_name }}(handle: Long{% for param in method.params %}, {{ param.name }}: {{ param.jni_type }}{% endfor %}, callbackPtr: Long, callbackData: Long) {
         val impl = {{ handle_map_name }}.get(handle) ?: error("{{ handle_map_name }}: invalid handle $handle")
+        {%- for param in method.params %}
+        val {{ param.name }}Decoded = {{ param.conversion }}
+        {%- endfor %}
         BoltFFIScope.launch {
-            {% match method.return_info %}{% when Some with (ret) %}{% match ret.error_type %}{% when Some with (err_ty) %}val result: BoltFFIResult<{{ ret.kotlin_type }}, {{ err_ty }}> = try { BoltFFIResult.Ok(impl.{{ method.name }}({% for param in method.params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})) } catch (e: {{ err_ty }}) { BoltFFIResult.Err(e) }
-            {% match ret.to_jni_result %}{% when Some with (result_encode) %}Native.{{ method.invoker_name }}(callbackPtr, callbackData, result{{ result_encode }}){% when None %}Native.{{ method.invoker_name }}(callbackPtr, callbackData, result{{ ret.to_jni }}){% endmatch %}{% when None %}val result = impl.{{ method.name }}({% for param in method.params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
-            Native.{{ method.invoker_name }}(callbackPtr, callbackData, result{{ ret.to_jni }}){% endmatch %}{% when None %}impl.{{ method.name }}({% for param in method.params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})
+            {% match method.return_info %}{% when Some with (ret) %}{% match ret.error_type %}{% when Some with (err_ty) %}val result: BoltFFIResult<{{ ret.kotlin_type }}, {{ err_ty }}> = try { BoltFFIResult.Ok(impl.{{ method.name }}({% for param in method.params %}{{ param.name }}Decoded{% if !loop.last %}, {% endif %}{% endfor %})) } catch (e: {{ err_ty }}) { BoltFFIResult.Err(e) }
+            {% match ret.to_jni_result %}{% when Some with (result_encode) %}Native.{{ method.invoker_name }}(callbackPtr, callbackData, result{{ result_encode }}){% when None %}Native.{{ method.invoker_name }}(callbackPtr, callbackData, result{{ ret.to_jni }}){% endmatch %}{% when None %}val result = impl.{{ method.name }}({% for param in method.params %}{{ param.name }}Decoded{% if !loop.last %}, {% endif %}{% endfor %})
+            Native.{{ method.invoker_name }}(callbackPtr, callbackData, result{{ ret.to_jni }}){% endmatch %}{% when None %}impl.{{ method.name }}({% for param in method.params %}{{ param.name }}Decoded{% if !loop.last %}, {% endif %}{% endfor %})
             Native.{{ method.invoker_name }}(callbackPtr, callbackData){% endmatch %}
         }
     }

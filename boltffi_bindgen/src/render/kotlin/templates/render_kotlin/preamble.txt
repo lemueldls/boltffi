@@ -21,17 +21,7 @@ import {{ import }}
 {%- for custom in custom_types %}
 {%- if !custom.has_native_mapping %}
 
-@JvmInline
-value class {{ custom.class_name }}(val value: {{ custom.repr_kotlin_type }}) {
-    internal fun wireEncodedSize(): Int = run { val repr = value; {{ custom.repr_size_expr }} }
-    internal fun wireEncodeTo(wire: WireWriter) { val repr = value; {{ custom.repr_encode_expr }} }
-
-    companion object {
-        internal fun decode(reader: WireReader): {{ custom.class_name }} {
-            return {{ custom.class_name }}({{ custom.repr_decode_expr }})
-        }
-    }
-}
+typealias {{ custom.class_name }} = {{ custom.repr_kotlin_type }}
 {%- else %}
 {% match custom.native_type %}
 {% when Some with (native_type) %}

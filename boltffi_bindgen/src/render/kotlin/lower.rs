@@ -377,6 +377,172 @@ impl<'a> KotlinLowerer<'a> {
         }
     }
 
+    fn native_conversion_for_type(&self, type_expr: &TypeExpr) -> Option<(String, String)> {
+        match type_expr {
+            TypeExpr::Custom(id) => self
+                .type_mappings
+                .get(id.as_str())
+                .map(|mapping| self.custom_native_conversion_wrappers(mapping)),
+            _ => None,
+        }
+    }
+
+    fn apply_native_decode_conversion(&self, type_expr: &TypeExpr, decode_expr: String) -> String {
+        self.native_conversion_for_type(type_expr)
+            .map(|(decode_wrapper, _)| decode_wrapper.replace("$0", &decode_expr))
+            .unwrap_or(decode_expr)
+    }
+
+    fn decode_expr_with_native_conversion(
+        &self,
+        type_expr: &TypeExpr,
+        decode_seq: &ReadSeq,
+    ) -> String {
+        match (type_expr, decode_seq.ops.first()) {
+            (TypeExpr::Option(inner), Some(ReadOp::Option { some, .. })) => {
+                let inner_expr = self.decode_expr_with_native_conversion(inner, some);
+                format!("reader.readOptional {{ {} }}", inner_expr)
+            }
+            (
+                TypeExpr::Vec(inner),
+                Some(ReadOp::Vec {
+                    element_type,
+                    element,
+                    layout,
+                    ..
+                }),
+            ) => self.decode_vec_expr_with_native_conversion(inner, element_type, element, layout),
+            (
+                TypeExpr::Result { ok, err },
+                Some(ReadOp::Result {
+                    ok: ok_seq,
+                    err: err_seq,
+                    ..
+                }),
+            ) => {
+                let ok_expr = self.decode_expr_with_native_conversion(ok, ok_seq);
+                let err_expr = self.decode_expr_with_native_conversion(err, err_seq);
+                format!("reader.readResult({{ {} }}, {{ {} }})", ok_expr, err_expr)
+            }
+            _ => {
+                let base_decode = emit::emit_reader_read(decode_seq);
+                self.apply_native_decode_conversion(type_expr, base_decode)
+            }
+        }
+    }
+
+    fn decode_vec_expr_with_native_conversion(
+        &self,
+        inner_type: &TypeExpr,
+        element_type: &TypeExpr,
+        element: &ReadSeq,
+        layout: &VecLayout,
+    ) -> String {
+        match layout {
+            VecLayout::Blittable { .. } => match element_type {
+                TypeExpr::Primitive(primitive) => {
+                    let method = match primitive {
+                        PrimitiveType::I32 | PrimitiveType::U32 => "readIntArray",
+                        PrimitiveType::I16 | PrimitiveType::U16 => "readShortArray",
+                        PrimitiveType::I64
+                        | PrimitiveType::U64
+                        | PrimitiveType::ISize
+                        | PrimitiveType::USize => "readLongArray",
+                        PrimitiveType::F32 => "readFloatArray",
+                        PrimitiveType::F64 => "readDoubleArray",
+                        PrimitiveType::U8 | PrimitiveType::I8 => "readBytes",
+                        PrimitiveType::Bool => "readBooleanArray",
+                    };
+                    format!("reader.{}()", method)
+                }
+                _ => {
+                    let inner_expr = self.decode_expr_with_native_conversion(inner_type, element);
+                    format!("reader.readList {{ {} }}", inner_expr)
+                }
+            },
+            VecLayout::Encoded => {
+                let inner_expr = self.decode_expr_with_native_conversion(inner_type, element);
+                format!("reader.readList {{ {} }}", inner_expr)
+            }
+        }
+    }
+
+    fn apply_native_encode_conversion(
+        &self,
+        type_expr: &TypeExpr,
+        encode_expr: String,
+        field_name: &str,
+    ) -> String {
+        self.apply_native_encode_conversion_for_binding(type_expr, encode_expr, field_name)
+    }
+
+    fn apply_native_encode_conversion_for_binding(
+        &self,
+        type_expr: &TypeExpr,
+        encode_expr: String,
+        binding_name: &str,
+    ) -> String {
+        match type_expr {
+            TypeExpr::Custom(_) => self
+                .native_conversion_for_type(type_expr)
+                .map(|(_, encode_wrapper)| {
+                    let converted = encode_wrapper.replace("$0", binding_name);
+                    Self::replace_identifier_occurrences(&encode_expr, binding_name, &converted)
+                })
+                .unwrap_or(encode_expr),
+            TypeExpr::Option(inner) => {
+                self.apply_native_encode_conversion_for_binding(inner, encode_expr, "v")
+            }
+            TypeExpr::Vec(inner) => {
+                self.apply_native_encode_conversion_for_binding(inner, encode_expr, "item")
+            }
+            TypeExpr::Result { ok, err } => {
+                let with_ok =
+                    self.apply_native_encode_conversion_for_binding(ok, encode_expr, "okVal");
+                self.apply_native_encode_conversion_for_binding(err, with_ok, "errVal")
+            }
+            _ => encode_expr,
+        }
+    }
+
+    fn replace_identifier_occurrences(
+        expression: &str,
+        identifier: &str,
+        replacement: &str,
+    ) -> String {
+        if identifier.is_empty() {
+            return expression.to_string();
+        }
+
+        let mut result = String::with_capacity(expression.len());
+        let mut cursor = 0;
+
+        while let Some(relative_index) = expression[cursor..].find(identifier) {
+            let start = cursor + relative_index;
+            let end = start + identifier.len();
+            let previous = expression[..start].chars().next_back();
+            let next = expression[end..].chars().next();
+            let previous_is_identifier = previous.map(Self::is_identifier_char).unwrap_or(false);
+            let next_is_identifier = next.map(Self::is_identifier_char).unwrap_or(false);
+
+            if previous_is_identifier || next_is_identifier {
+                result.push_str(&expression[cursor..end]);
+                cursor = end;
+            } else {
+                result.push_str(&expression[cursor..start]);
+                result.push_str(replacement);
+                cursor = end;
+            }
+        }
+
+        result.push_str(&expression[cursor..]);
+        result
+    }
+
+    fn is_identifier_char(character: char) -> bool {
+        character.is_ascii_alphanumeric() || character == '_'
+    }
+
     fn custom_read_seq(&self, custom: &CustomTypeDef) -> ReadSeq {
         self.find_custom_read_seq(&custom.id)
             .unwrap_or_else(|| self.read_seq_from_repr(&custom.repr))
@@ -606,14 +772,21 @@ impl<'a> KotlinLowerer<'a> {
     ) -> KotlinEnumField {
         let (kotlin_type, decode_name) =
             self.kotlin_type_with_disambiguation(&field.type_expr, variant_names);
-        let wire_decode_expr = emit::emit_reader_read(&field.decode);
-        let wire_decode_expr = self.qualify_decode_expr(wire_decode_expr, decode_name.as_deref());
+        let field_name = NamingConvention::property_name(field.name.as_str());
+        let base_decode = self.decode_expr_with_native_conversion(&field.type_expr, &field.decode);
+        let wire_decode_expr = self.qualify_decode_expr(base_decode, decode_name.as_deref());
+        let base_size = emit::emit_size_expr_for_write_seq(&field.encode);
+        let wire_size_expr =
+            self.apply_native_encode_conversion(&field.type_expr, base_size, &field_name);
+        let base_encode = emit::emit_write_expr(&field.encode);
+        let wire_encode =
+            self.apply_native_encode_conversion(&field.type_expr, base_encode, &field_name);
         KotlinEnumField {
-            name: NamingConvention::property_name(field.name.as_str()),
+            name: field_name,
             kotlin_type,
             wire_decode_expr,
-            wire_size_expr: emit::emit_size_expr_for_write_seq(&field.encode),
-            wire_encode: emit::emit_write_expr(&field.encode),
+            wire_size_expr,
+            wire_encode,
         }
     }
 
@@ -726,16 +899,25 @@ impl<'a> KotlinLowerer<'a> {
         let encode_seq = self
             .record_field_write_seq(&record.id, &field.name)
             .expect("record field encode ops");
+        let field_name = NamingConvention::property_name(field.name.as_str());
+        let wire_decode_expr =
+            self.decode_expr_with_native_conversion(&field.type_expr, &decode_seq);
+        let base_size = emit::emit_size_expr_for_write_seq(&encode_seq);
+        let wire_size_expr =
+            self.apply_native_encode_conversion(&field.type_expr, base_size, &field_name);
+        let base_encode = emit::emit_write_expr(&encode_seq);
+        let wire_encode =
+            self.apply_native_encode_conversion(&field.type_expr, base_encode, &field_name);
         KotlinRecordField {
-            name: NamingConvention::property_name(field.name.as_str()),
+            name: field_name,
             kotlin_type: self.kotlin_type(&field.type_expr),
             default_value: field
                 .default
                 .as_ref()
                 .map(|d| kotlin_default_literal(d, &self.kotlin_type(&field.type_expr))),
-            wire_decode_expr: emit::emit_reader_read(&decode_seq),
-            wire_size_expr: emit::emit_size_expr_for_write_seq(&encode_seq),
-            wire_encode: emit::emit_write_expr(&encode_seq),
+            wire_decode_expr,
+            wire_size_expr,
+            wire_encode,
             padding_after: self.field_padding_after(&record.id, &field.name),
             doc: field.doc.clone(),
         }
@@ -1269,7 +1451,7 @@ impl<'a> KotlinLowerer<'a> {
             .collect();
         let return_info =
             self.callback_return_info(&method.returns, output_route, &abi_method.error);
-        let invoker = self.async_callback_invoker(&return_info);
+        let invoker = self.async_callback_invoker(&return_info, output_route);
         KotlinAsyncCallbackMethod {
             name: NamingConvention::method_name(method.id.as_str()),
             ffi_name: abi_method.vtable_field.as_str().to_string(),
@@ -1310,9 +1492,10 @@ impl<'a> KotlinLowerer<'a> {
     fn async_callback_invoker(
         &self,
         return_info: &Option<KotlinCallbackReturn>,
+        ret_shape: &ReturnShape,
     ) -> KotlinAsyncCallbackInvoker {
         let mut result_jni_type = return_info.as_ref().map(|ret| ret.jni_type.clone());
-        let suffix = self.invoker_suffix_from_jni_type(&result_jni_type);
+        let suffix = self.invoker_suffix_from_return_shape(ret_shape);
         if suffix == "Void" {
             result_jni_type = None;
         }
@@ -1322,20 +1505,31 @@ impl<'a> KotlinLowerer<'a> {
         }
     }
 
-    fn invoker_suffix_from_jni_type(&self, result_jni_type: &Option<String>) -> String {
-        match result_jni_type.as_deref() {
+    fn invoker_suffix_from_return_shape(&self, ret_shape: &ReturnShape) -> String {
+        match &ret_shape.transport {
             None => "Void".to_string(),
-            Some("Boolean") => "Bool".to_string(),
-            Some("Byte") => "I8".to_string(),
-            Some("Short") => "I16".to_string(),
-            Some("Int") => "I32".to_string(),
-            Some("Long") => "I64".to_string(),
-            Some("Float") => "F32".to_string(),
-            Some("Double") => "F64".to_string(),
-            Some("ByteArray") => "Wire".to_string(),
-            Some("ByteBuffer") => "Object".to_string(),
-            Some("String") => "Object".to_string(),
-            Some(_) => "Object".to_string(),
+            Some(Transport::Scalar(origin)) => {
+                self.invoker_suffix_from_primitive(origin.primitive())
+            }
+            Some(Transport::Handle { .. }) | Some(Transport::Callback { .. }) => {
+                "Handle".to_string()
+            }
+            Some(_) => "Wire".to_string(),
+        }
+    }
+
+    fn invoker_suffix_from_primitive(&self, primitive: PrimitiveType) -> String {
+        match primitive {
+            PrimitiveType::Bool => "Bool".to_string(),
+            PrimitiveType::I8 | PrimitiveType::U8 => "I8".to_string(),
+            PrimitiveType::I16 | PrimitiveType::U16 => "I16".to_string(),
+            PrimitiveType::I32 | PrimitiveType::U32 => "I32".to_string(),
+            PrimitiveType::I64
+            | PrimitiveType::U64
+            | PrimitiveType::ISize
+            | PrimitiveType::USize => "I64".to_string(),
+            PrimitiveType::F32 => "F32".to_string(),
+            PrimitiveType::F64 => "F64".to_string(),
         }
     }
 
@@ -1696,7 +1890,7 @@ impl<'a> KotlinLowerer<'a> {
                             &abi_method.returns,
                             &abi_method.error,
                         );
-                        self.async_callback_invoker(&return_info)
+                        self.async_callback_invoker(&return_info, &abi_method.returns)
                     })
             })
             .fold(

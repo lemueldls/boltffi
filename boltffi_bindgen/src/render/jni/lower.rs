@@ -3,13 +3,13 @@ use std::collections::{HashMap, HashSet};
 use boltffi_ffi_rules::naming;
 
 use crate::ir::abi::{
-    AbiCall, AbiCallbackInvocation, AbiContract, AbiParam, AbiStream, AsyncCall, CallId, CallMode,
-    ErrorTransport,
+    AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiContract, AbiParam, AbiStream, AsyncCall,
+    CallId, CallMode, ErrorTransport,
 };
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{
     CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef, EnumRepr,
-    FunctionDef, MethodDef, ParamDef, ParamPassing, Receiver, ReturnDef, StreamDef,
+    FunctionDef, MethodDef, ParamDef, Receiver, ReturnDef, StreamDef,
 };
 use crate::ir::ids::{CallbackId, EnumId, ParamName, RecordId};
 use crate::ir::ops::SizeExpr;
@@ -481,16 +481,15 @@ impl<'a> JniLowerer<'a> {
 
     fn supports_param(&self, param: &ParamDef) -> bool {
         match &param.type_expr {
-            TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Enum(_) => true,
-            TypeExpr::Handle(_) | TypeExpr::Callback(_) => true,
-            TypeExpr::Record(id) => self.is_record_blittable(id),
-            TypeExpr::Vec(inner) => match inner.as_ref() {
-                TypeExpr::Primitive(_) => true,
-                TypeExpr::Record(id) => {
-                    matches!(param.passing, ParamPassing::Value) && self.is_record_blittable(id)
-                }
-                _ => false,
-            },
+            TypeExpr::Primitive(_)
+            | TypeExpr::String
+            | TypeExpr::Enum(_)
+            | TypeExpr::Handle(_)
+            | TypeExpr::Callback(_)
+            | TypeExpr::Record(_) => true,
+            TypeExpr::Vec(inner) => {
+                matches!(inner.as_ref(), TypeExpr::Primitive(_) | TypeExpr::Record(_))
+            }
             TypeExpr::Option(inner) => self.supports_option_inner(inner),
             _ => false,
         }
@@ -498,13 +497,12 @@ impl<'a> JniLowerer<'a> {
 
     fn supports_param_type(&self, ty: &TypeExpr) -> bool {
         match ty {
-            TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Enum(_) => true,
-            TypeExpr::Record(id) => self.is_record_blittable(id),
-            TypeExpr::Vec(inner) => match inner.as_ref() {
-                TypeExpr::Primitive(_) => true,
-                TypeExpr::Record(id) => self.is_record_blittable(id),
-                _ => false,
-            },
+            TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Enum(_) | TypeExpr::Record(_) => {
+                true
+            }
+            TypeExpr::Vec(inner) => {
+                matches!(inner.as_ref(), TypeExpr::Primitive(_) | TypeExpr::Record(_))
+            }
             TypeExpr::Option(inner) => self.supports_option_inner(inner),
             _ => false,
         }
@@ -516,13 +514,11 @@ impl<'a> JniLowerer<'a> {
             | TypeExpr::String
             | TypeExpr::Enum(_)
             | TypeExpr::Handle(_)
-            | TypeExpr::Callback(_) => true,
-            TypeExpr::Record(id) => self.is_record_blittable(id),
-            TypeExpr::Vec(inner) => match inner.as_ref() {
-                TypeExpr::Primitive(_) => true,
-                TypeExpr::Record(id) => self.is_record_blittable(id),
-                _ => false,
-            },
+            | TypeExpr::Callback(_)
+            | TypeExpr::Record(_) => true,
+            TypeExpr::Vec(inner) => {
+                matches!(inner.as_ref(), TypeExpr::Primitive(_) | TypeExpr::Record(_))
+            }
             _ => false,
         }
     }
@@ -530,8 +526,27 @@ impl<'a> JniLowerer<'a> {
     fn supports_return_type(&self, returns: &ReturnDef) -> bool {
         match returns {
             ReturnDef::Void => true,
-            ReturnDef::Value(ty) => self.supports_param_type(ty),
-            ReturnDef::Result { ok, .. } => self.supports_option_inner(ok),
+            ReturnDef::Value(ty) => self.supports_return_value_type(ty),
+            ReturnDef::Result { ok, .. } => self.supports_return_value_type(ok),
+        }
+    }
+
+    fn supports_return_value_type(&self, ty: &TypeExpr) -> bool {
+        match ty {
+            TypeExpr::Primitive(_)
+            | TypeExpr::String
+            | TypeExpr::Enum(_)
+            | TypeExpr::Record(_)
+            | TypeExpr::Bytes
+            | TypeExpr::Builtin(_)
+            | TypeExpr::Handle(_)
+            | TypeExpr::Callback(_) => true,
+            TypeExpr::Vec(inner) => matches!(
+                inner.as_ref(),
+                TypeExpr::Primitive(_) | TypeExpr::Record(_) | TypeExpr::String | TypeExpr::Enum(_)
+            ),
+            TypeExpr::Option(inner) => self.supports_return_value_type(inner),
+            _ => false,
         }
     }
 
@@ -1500,6 +1515,11 @@ impl<'a> JniLowerer<'a> {
     ) -> JniCallbackTrait {
         let trait_name = NamingConvention::class_name(callback.id.as_str());
         let callbacks_class = format!("{}Callbacks", trait_name);
+        let abi_methods: HashMap<_, _> = abi_callback
+            .methods
+            .iter()
+            .map(|method| (method.id.clone(), method))
+            .collect();
 
         let sync_methods = callback
             .methods
@@ -1514,7 +1534,10 @@ impl<'a> JniLowerer<'a> {
             .iter()
             .filter(|method| method.is_async)
             .filter(|method| self.is_supported_callback_method(method))
-            .map(|method| self.lower_async_callback_method(method, jni_prefix))
+            .filter_map(|method| {
+                let abi_method = abi_methods.get(&method.id)?;
+                Some(self.lower_async_callback_method(method, abi_method, jni_prefix))
+            })
             .collect();
 
         JniCallbackTrait {
@@ -1528,14 +1551,18 @@ impl<'a> JniLowerer<'a> {
     }
 
     fn is_supported_callback_method(&self, method: &CallbackMethodDef) -> bool {
-        let supported_return = match &method.returns {
-            ReturnDef::Void => true,
-            ReturnDef::Value(TypeExpr::Void) => true,
-            ReturnDef::Value(TypeExpr::Primitive(_)) => true,
-            ReturnDef::Result { ok, .. } => {
-                matches!(ok, TypeExpr::Void | TypeExpr::Primitive(_))
+        let supported_return = if method.is_async {
+            true
+        } else {
+            match &method.returns {
+                ReturnDef::Void => true,
+                ReturnDef::Value(TypeExpr::Void) => true,
+                ReturnDef::Value(TypeExpr::Primitive(_)) => true,
+                ReturnDef::Result { ok, .. } => {
+                    matches!(ok, TypeExpr::Void | TypeExpr::Primitive(_))
+                }
+                _ => false,
             }
-            _ => false,
         };
 
         let supported_params = method
@@ -1616,18 +1643,11 @@ impl<'a> JniLowerer<'a> {
     fn lower_async_callback_method(
         &self,
         method: &CallbackMethodDef,
+        abi_method: &AbiCallbackMethod,
         jni_prefix: &str,
     ) -> JniAsyncCallbackMethod {
-        let invoker_suffix = self.async_invoker_suffix(&method.returns);
-
-        let return_c_type = if matches!(method.returns, ReturnDef::Void) {
-            None
-        } else if invoker_suffix == "Wire" {
-            Some("wire".to_string())
-        } else {
-            let return_type = self.callback_return_type(&method.returns);
-            Some(self.c_type_for_callback(return_type))
-        };
+        let invoker_suffix = self.async_invoker_suffix(&abi_method.returns);
+        let return_c_type = self.async_callback_return_c_type(&abi_method.returns);
 
         let lowered_params: Vec<LoweredCallbackParam> = method
             .params
@@ -1747,15 +1767,29 @@ impl<'a> JniLowerer<'a> {
         }
     }
 
-    fn async_invoker_suffix(&self, returns: &ReturnDef) -> String {
-        match returns {
-            ReturnDef::Void => "Void".to_string(),
-            ReturnDef::Value(TypeExpr::Primitive(p)) => {
-                let model_primitive = *p;
-                primitives::info(model_primitive).invoker_suffix.to_string()
+    fn async_callback_return_c_type(&self, ret_shape: &ReturnShape) -> Option<String> {
+        match &ret_shape.transport {
+            None => None,
+            Some(Transport::Scalar(origin)) => {
+                Some(self.c_return_type_for_abi(&AbiType::from(origin.primitive())))
             }
-            ReturnDef::Result { .. } => "Wire".to_string(),
-            _ => "Wire".to_string(),
+            Some(Transport::Handle { .. }) | Some(Transport::Callback { .. }) => {
+                Some("void*".to_string())
+            }
+            Some(_) => Some("wire".to_string()),
+        }
+    }
+
+    fn async_invoker_suffix(&self, ret_shape: &ReturnShape) -> String {
+        match &ret_shape.transport {
+            None => "Void".to_string(),
+            Some(Transport::Scalar(origin)) => primitives::info(origin.primitive())
+                .invoker_suffix
+                .to_string(),
+            Some(Transport::Handle { .. }) | Some(Transport::Callback { .. }) => {
+                "Handle".to_string()
+            }
+            Some(_) => "Wire".to_string(),
         }
     }
 
@@ -2063,6 +2097,10 @@ impl<'a> JniLowerer<'a> {
             }),
             "I64" => Some(JniInvokerResult {
                 c_type: "int64_t".to_string(),
+                jni_type: "jlong".to_string(),
+            }),
+            "Handle" => Some(JniInvokerResult {
+                c_type: "void*".to_string(),
                 jni_type: "jlong".to_string(),
             }),
             "F32" => Some(JniInvokerResult {
