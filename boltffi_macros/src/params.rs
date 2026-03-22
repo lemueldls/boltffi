@@ -2,13 +2,14 @@ use proc_macro2::Span;
 use quote::quote;
 use syn::{FnArg, Pat};
 
+use boltffi_ffi_rules::transport::{ReturnInvocationContext, ReturnPlatform, ValueReturnMethod};
+
 use crate::callback_registry::CallbackTraitRegistry;
 use crate::custom_types::{
     CustomTypeRegistry, contains_custom_types, from_wire_expr_owned, to_wire_expr_owned,
     wire_type_for,
 };
-use crate::data_types;
-use crate::type_classification::{NamedTypeTransport, classify_named_type_transport};
+use crate::returns::{ReturnAbi, classify_return_type};
 use crate::util::{
     ParamTransform, WireEncodedParam, WireEncodedParamKind, classify_param_transform,
     foreign_trait_path, is_primitive_vec_inner, len_ident, ptr_ident,
@@ -145,16 +146,32 @@ fn generate_wasm_closure_codegen(
         quote! { , #first #(, #rest)* }
     };
 
-    let return_is_primitive = returns
-        .map(|ty| {
-            let ty_str = quote!(#ty).to_string().replace(' ', "");
-            is_primitive_vec_inner(&ty_str)
-        })
-        .unwrap_or(true);
+    let return_abi = returns.map(|ty| ReturnAbi::lower(classify_return_type(ty), custom_types));
+    let wasm_return_method = return_abi.as_ref().map(|abi| {
+        abi.value_return_method(ReturnInvocationContext::InlineClosure, ReturnPlatform::Wasm)
+    });
 
-    if return_is_primitive {
-        let ffi_return_type = returns.map(|ty| quote! { -> #ty }).unwrap_or_default();
-        let closure_return_type = ffi_return_type.clone();
+    if matches!(wasm_return_method, None | Some(ValueReturnMethod::DirectReturn)) {
+        let ffi_return_type = match (returns, return_abi.as_ref()) {
+            (Some(ty), Some(ReturnAbi::Passable { .. })) => {
+                quote! { -> <#ty as ::boltffi::__private::Passable>::Out }
+            }
+            (Some(ty), _) => quote! { -> #ty },
+            (None, _) => quote! {},
+        };
+        let closure_return_type = returns
+            .map(|ty| quote! { -> #ty })
+            .unwrap_or_default();
+        let direct_return = match (returns, return_abi.as_ref()) {
+            (Some(ty), Some(ReturnAbi::Passable { .. })) => quote! {
+                unsafe {
+                    <#ty as ::boltffi::__private::Passable>::unpack(
+                        #call_import_ident(#owner_name.handle() #(, #call_args)*)
+                    )
+                }
+            },
+            _ => quote! { unsafe { #call_import_ident(#owner_name.handle() #(, #call_args)*) } },
+        };
 
         quote! {
             #[cfg(target_arch = "wasm32")]
@@ -167,7 +184,7 @@ fn generate_wasm_closure_codegen(
                 let #owner_name = ::boltffi::__private::WasmCallbackOwner::new(#name, #free_import_ident);
                 move |#closure_params_tokens| #closure_return_type {
                     #(#wire_vars)*
-                    unsafe { #call_import_ident(#owner_name.handle() #(, #call_args)*) }
+                    #direct_return
                 }
             };
         }
@@ -638,19 +655,29 @@ fn lower_callback_param_transform(
                 },
             );
 
-            let closure_return_strategy = returns
+            let closure_return_abi = returns
                 .as_ref()
-                .map(|ty| classify_closure_return_transport(ty, custom_types));
+                .map(|ty| ReturnAbi::lower(classify_return_type(ty), custom_types));
+            let closure_return_method = closure_return_abi.as_ref().map(|abi| {
+                abi.value_return_method(ReturnInvocationContext::InlineClosure, ReturnPlatform::Native)
+            });
             let ffi_return_type = returns
                 .as_ref()
-                .map(|ty| match closure_return_strategy.as_ref() {
-                    Some(ClosureReturnTransport::Direct) => {
-                        quote! { -> <#ty as ::boltffi::__private::Passable>::Out }
-                    }
-                    Some(ClosureReturnTransport::WireBuffer) => {
+                .zip(closure_return_abi.as_ref())
+                .map(|(ty, abi)| match (closure_return_method, abi) {
+                    (Some(ValueReturnMethod::DirectReturn), ReturnAbi::Encoded { .. }) => {
                         quote! { -> ::boltffi::__private::FfiBuf }
                     }
-                    None => quote! {},
+                    (Some(ValueReturnMethod::DirectReturn), _) => {
+                        quote! { -> <#ty as ::boltffi::__private::Passable>::Out }
+                    }
+                    (Some(ValueReturnMethod::WriteToReturnSlot), _) => {
+                        quote! { -> ::boltffi::__private::FfiBuf }
+                    }
+                    (None, _) => quote! {},
+                    (Some(other), _) => {
+                        unreachable!("unsupported foreign callable return method: {other:?}")
+                    }
                 })
                 .unwrap_or_default();
             let closure_return_type = returns
@@ -659,17 +686,10 @@ fn lower_callback_param_transform(
                 .unwrap_or_default();
             let native_callback_invocation = returns
                 .as_ref()
-                .map(|ty| match closure_return_strategy.as_ref() {
-                    Some(ClosureReturnTransport::Direct) => {
-                        quote! {
-                            unsafe {
-                                <#ty as ::boltffi::__private::Passable>::unpack(
-                                    #cb_name(#ud_name, #(#cb_call_args),*)
-                                )
-                            }
-                        }
-                    }
-                    Some(ClosureReturnTransport::WireBuffer) => {
+                .zip(closure_return_abi.as_ref())
+                .map(|(ty, abi)| match (closure_return_method, abi) {
+                    (Some(ValueReturnMethod::DirectReturn), ReturnAbi::Encoded { .. })
+                    | (Some(ValueReturnMethod::WriteToReturnSlot), _) => {
                         let decode_expr = wire_decoded_callback_return_expr(ty, custom_types);
                         quote! {
                             {
@@ -679,7 +699,19 @@ fn lower_callback_param_transform(
                             }
                         }
                     }
-                    None => quote! { #cb_name(#ud_name, #(#cb_call_args),*) },
+                    (Some(ValueReturnMethod::DirectReturn), _) => {
+                        quote! {
+                            unsafe {
+                                <#ty as ::boltffi::__private::Passable>::unpack(
+                                    #cb_name(#ud_name, #(#cb_call_args),*)
+                                )
+                            }
+                        }
+                    }
+                    (None, _) => quote! { #cb_name(#ud_name, #(#cb_call_args),*) },
+                    (Some(other), _) => {
+                        unreachable!("unsupported foreign callable return method: {other:?}")
+                    }
                 })
                 .unwrap_or_else(|| quote! { #cb_name(#ud_name, #(#cb_call_args),*) });
 
@@ -770,63 +802,6 @@ fn lower_impl_trait_param_transform(
             acc.move_vars.push(boxed_name.clone());
             acc.call_args.push(quote! { *#boxed_name });
         }
-    }
-}
-
-enum ClosureReturnTransport {
-    Direct,
-    WireBuffer,
-}
-
-fn classify_closure_return_transport(
-    ty: &syn::Type,
-    custom_types: &CustomTypeRegistry,
-) -> ClosureReturnTransport {
-    let data_types = data_types::registry_for_current_crate()
-        .ok()
-        .unwrap_or_default();
-
-    if closure_return_is_direct(ty, custom_types, &data_types) {
-        ClosureReturnTransport::Direct
-    } else {
-        ClosureReturnTransport::WireBuffer
-    }
-}
-
-fn closure_return_is_direct(
-    ty: &syn::Type,
-    custom_types: &CustomTypeRegistry,
-    data_types: &data_types::DataTypeRegistry,
-) -> bool {
-    let type_str = quote!(#ty).to_string().replace(' ', "");
-
-    if is_primitive_vec_inner(&type_str) {
-        return true;
-    }
-
-    match ty {
-        syn::Type::Group(group) => {
-            closure_return_is_direct(group.elem.as_ref(), custom_types, data_types)
-        }
-        syn::Type::Paren(paren) => {
-            closure_return_is_direct(paren.elem.as_ref(), custom_types, data_types)
-        }
-        syn::Type::Path(type_path)
-            if type_path.qself.is_none()
-                && type_path.path.segments.last().is_some_and(|segment| {
-                    matches!(
-                        segment.ident.to_string().as_str(),
-                        "Vec" | "Option" | "Result"
-                    )
-                }) =>
-        {
-            false
-        }
-        syn::Type::Path(_) => matches!(
-            classify_named_type_transport(ty, custom_types, data_types),
-            NamedTypeTransport::Passable
-        ),
-        _ => false,
     }
 }
 

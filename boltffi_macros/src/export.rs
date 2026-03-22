@@ -9,7 +9,7 @@ use crate::custom_types;
 use crate::params::{FfiParams, transform_params, transform_params_async};
 use crate::returns::{
     ReturnAbi, WasmOptionScalarEncoding, classify_return, encoded_return_body,
-    encoded_return_buffer_expression, lower_return_abi,
+    encoded_return_buffer_expression,
 };
 use crate::safety;
 
@@ -204,10 +204,8 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
     let export_name = format!("{}_{}", naming::ffi_prefix(), fn_name);
     let export_ident = syn::Ident::new(&export_name, fn_name.span());
 
-    let return_abi = lower_return_abi(classify_return(fn_output), &custom_types);
-    let on_wire_record_error = return_abi
-        .sync_export_return_shape()
-        .early_return_statement();
+    let return_abi = ReturnAbi::lower(classify_return(fn_output), &custom_types);
+    let on_wire_record_error = return_abi.invalid_arg_early_return_statement();
     let FfiParams {
         ffi_params,
         conversions,
@@ -445,7 +443,7 @@ fn generate_async_export(
         Ok(params) => params,
         Err(error) => return error.to_compile_error().into(),
     };
-    let return_abi = ReturnAbi::from_output(fn_output, custom_types);
+    let return_abi = ReturnAbi::lower(classify_return(fn_output), custom_types);
 
     let ffi_return_type = return_abi.async_ffi_return_type();
     let rust_return_type = return_abi.async_rust_return_type();

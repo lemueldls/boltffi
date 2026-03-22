@@ -1,5 +1,8 @@
 use boltffi_ffi_rules::primitive::Primitive;
-pub use boltffi_ffi_rules::transport::EncodedReturnStrategy;
+pub use boltffi_ffi_rules::transport::{
+    EncodedReturnStrategy, ErrorReturnStrategy, ReturnInvocationContext, ReturnPlatform,
+    ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
+};
 use proc_macro2::Span;
 use quote::quote;
 use syn::{ReturnType, Type};
@@ -41,21 +44,6 @@ pub enum ReturnAbi {
     Passable {
         rust_type: syn::Type,
     },
-}
-
-#[derive(Clone, Copy)]
-pub enum WasmEncodedReturnShape {
-    PackedBuffer,
-    OptionalScalarF64,
-    ReturnSlot,
-}
-
-#[derive(Clone)]
-pub enum SyncExportReturnShape {
-    Unit,
-    Scalar,
-    Encoded(WasmEncodedReturnShape),
-    Passable { rust_type: syn::Type },
 }
 
 #[derive(Clone, Copy)]
@@ -113,66 +101,68 @@ fn primitive_for_type(ty: &Type) -> Option<Primitive> {
 pub fn classify_return(output: &ReturnType) -> ReturnKind {
     match output {
         ReturnType::Default => ReturnKind::Unit,
-        ReturnType::Type(_, ty) => {
-            let type_str = quote!(#ty).to_string().replace(' ', "");
+        ReturnType::Type(_, ty) => classify_return_type(ty),
+    }
+}
 
-            if type_str == "String" || type_str == "std::string::String" {
-                return ReturnKind::String;
-            }
+pub fn classify_return_type(ty: &Type) -> ReturnKind {
+    let type_str = quote!(#ty).to_string().replace(' ', "");
 
-            if let Some(inner) = extract_vec_inner(ty) {
-                return ReturnKind::Vec(inner);
-            }
+    if type_str == "String" || type_str == "std::string::String" {
+        return ReturnKind::String;
+    }
 
-            if let Type::Path(path) = ty.as_ref()
-                && let Some(segment) = path.path.segments.last()
-            {
-                if segment.ident == "Result"
-                    && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-                    && args.args.len() >= 2
-                    && let Some(syn::GenericArgument::Type(ok_ty)) = args.args.first()
-                    && let Some(syn::GenericArgument::Type(err_ty)) = args.args.iter().nth(1)
-                {
-                    let ok_str = quote!(#ok_ty).to_string().replace(' ', "");
-                    if ok_str == "String" || ok_str == "std::string::String" {
-                        return ReturnKind::ResultString {
-                            err: err_ty.clone(),
-                        };
-                    } else if ok_str == "()" {
-                        return ReturnKind::ResultUnit {
-                            err: err_ty.clone(),
-                        };
-                    } else {
-                        return ReturnKind::ResultPrimitive {
-                            ok: ok_ty.clone(),
-                            err: err_ty.clone(),
-                        };
-                    }
-                }
-                if segment.ident == "Option"
-                    && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-                    && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
-                {
-                    if let Some(vec_inner) = extract_vec_inner(inner_ty) {
-                        return ReturnKind::Option(OptionReturnAbi::Vec { inner: vec_inner });
-                    }
+    if let Some(inner) = extract_vec_inner(ty) {
+        return ReturnKind::Vec(inner);
+    }
 
-                    if is_string_like_type(inner_ty) {
-                        return ReturnKind::Option(OptionReturnAbi::OutFfiString);
-                    }
-
-                    return ReturnKind::Option(OptionReturnAbi::OutValue {
-                        inner: inner_ty.clone(),
-                    });
-                }
-            }
-
-            if is_primitive_type(&type_str) {
-                ReturnKind::Primitive(ty.as_ref().clone())
+    if let Type::Path(path) = ty
+        && let Some(segment) = path.path.segments.last()
+    {
+        if segment.ident == "Result"
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && args.args.len() >= 2
+            && let Some(syn::GenericArgument::Type(ok_ty)) = args.args.first()
+            && let Some(syn::GenericArgument::Type(err_ty)) = args.args.iter().nth(1)
+        {
+            let ok_str = quote!(#ok_ty).to_string().replace(' ', "");
+            if ok_str == "String" || ok_str == "std::string::String" {
+                return ReturnKind::ResultString {
+                    err: err_ty.clone(),
+                };
+            } else if ok_str == "()" {
+                return ReturnKind::ResultUnit {
+                    err: err_ty.clone(),
+                };
             } else {
-                ReturnKind::WireEncoded(ty.as_ref().clone())
+                return ReturnKind::ResultPrimitive {
+                    ok: ok_ty.clone(),
+                    err: err_ty.clone(),
+                };
             }
         }
+        if segment.ident == "Option"
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
+        {
+            if let Some(vec_inner) = extract_vec_inner(inner_ty) {
+                return ReturnKind::Option(OptionReturnAbi::Vec { inner: vec_inner });
+            }
+
+            if is_string_like_type(inner_ty) {
+                return ReturnKind::Option(OptionReturnAbi::OutFfiString);
+            }
+
+            return ReturnKind::Option(OptionReturnAbi::OutValue {
+                inner: inner_ty.clone(),
+            });
+        }
+    }
+
+    if is_primitive_type(&type_str) {
+        ReturnKind::Primitive(ty.clone())
+    } else {
+        ReturnKind::WireEncoded(ty.clone())
     }
 }
 
@@ -193,80 +183,163 @@ pub fn type_is_primitive(ty: &Type) -> bool {
     is_primitive_type(&type_str)
 }
 
-pub fn lower_return_abi(kind: ReturnKind, custom_types: &CustomTypeRegistry) -> ReturnAbi {
-    let data_types = data_types::registry_for_current_crate()
+fn passable_data_type_category(ty: &Type) -> Option<data_types::DataTypeCategory> {
+    data_types::registry_for_current_crate()
         .ok()
-        .unwrap_or_default();
-    match kind {
-        ReturnKind::Unit => ReturnAbi::Unit,
-        ReturnKind::Primitive(rust_type) => ReturnAbi::Scalar { rust_type },
-        ReturnKind::String => ReturnAbi::Encoded {
-            rust_type: syn::parse_quote!(String),
-            strategy: EncodedReturnStrategy::Utf8String,
-        },
-        ReturnKind::Vec(inner) => {
-            let strategy = if supports_direct_vec_transport(&inner, custom_types, &data_types) {
-                EncodedReturnStrategy::DirectVec
-            } else {
-                EncodedReturnStrategy::WireEncoded
-            };
-            ReturnAbi::Encoded {
-                rust_type: syn::parse_quote!(Vec<#inner>),
-                strategy,
-            }
-        }
-        ReturnKind::Option(abi) => match abi {
-            OptionReturnAbi::OutValue { inner } if type_is_primitive(&inner) => {
-                ReturnAbi::Encoded {
-                    rust_type: syn::parse_quote!(Option<#inner>),
-                    strategy: EncodedReturnStrategy::OptionScalar,
-                }
-            }
-            other => ReturnAbi::Encoded {
-                rust_type: option_rust_type(other),
-                strategy: EncodedReturnStrategy::WireEncoded,
-            },
-        },
-        ReturnKind::ResultString { err } => ReturnAbi::Encoded {
-            rust_type: result_rust_type(syn::parse_quote!(String), err),
-            strategy: EncodedReturnStrategy::WireEncoded,
-        },
-        ReturnKind::ResultPrimitive { ok, err } => {
-            if type_is_primitive(&ok) && type_is_primitive(&err) {
-                ReturnAbi::Encoded {
-                    rust_type: result_rust_type(ok.clone(), err.clone()),
-                    strategy: EncodedReturnStrategy::ResultScalar,
-                }
-            } else {
-                ReturnAbi::Encoded {
-                    rust_type: result_rust_type(ok, err),
-                    strategy: EncodedReturnStrategy::WireEncoded,
-                }
-            }
-        }
-        ReturnKind::ResultUnit { err } => ReturnAbi::Encoded {
-            rust_type: result_rust_type(syn::parse_quote!(()), err),
-            strategy: EncodedReturnStrategy::WireEncoded,
-        },
-        ReturnKind::WireEncoded(rust_type) => {
-            match classify_named_type_transport(&rust_type, custom_types, &data_types) {
-                NamedTypeTransport::Passable => ReturnAbi::Passable { rust_type },
-                NamedTypeTransport::WireEncoded => ReturnAbi::Encoded {
-                    rust_type,
-                    strategy: EncodedReturnStrategy::WireEncoded,
-                },
-            }
-        }
-    }
+        .and_then(|registry| registry.category_for(ty))
 }
 
 impl ReturnAbi {
-    pub fn from_output(output: &ReturnType, custom_types: &CustomTypeRegistry) -> Self {
-        lower_return_abi(classify_return(output), custom_types)
+    pub fn lower(kind: ReturnKind, custom_types: &CustomTypeRegistry) -> Self {
+        let data_types = data_types::registry_for_current_crate()
+            .ok()
+            .unwrap_or_default();
+        match kind {
+            ReturnKind::Unit => Self::Unit,
+            ReturnKind::Primitive(rust_type) => Self::Scalar { rust_type },
+            ReturnKind::String => Self::Encoded {
+                rust_type: syn::parse_quote!(String),
+                strategy: EncodedReturnStrategy::Utf8String,
+            },
+            ReturnKind::Vec(inner) => {
+                let strategy = if supports_direct_vec_transport(&inner, custom_types, &data_types) {
+                    EncodedReturnStrategy::DirectVec
+                } else {
+                    EncodedReturnStrategy::WireEncoded
+                };
+                Self::Encoded {
+                    rust_type: syn::parse_quote!(Vec<#inner>),
+                    strategy,
+                }
+            }
+            ReturnKind::Option(abi) => match abi {
+                OptionReturnAbi::OutValue { inner } if type_is_primitive(&inner) => {
+                    Self::Encoded {
+                        rust_type: syn::parse_quote!(Option<#inner>),
+                        strategy: EncodedReturnStrategy::OptionScalar,
+                    }
+                }
+                other => Self::Encoded {
+                    rust_type: option_rust_type(other),
+                    strategy: EncodedReturnStrategy::WireEncoded,
+                },
+            },
+            ReturnKind::ResultString { err } => Self::Encoded {
+                rust_type: result_rust_type(syn::parse_quote!(String), err),
+                strategy: EncodedReturnStrategy::WireEncoded,
+            },
+            ReturnKind::ResultPrimitive { ok, err } => {
+                if type_is_primitive(&ok) && type_is_primitive(&err) {
+                    Self::Encoded {
+                        rust_type: result_rust_type(ok.clone(), err.clone()),
+                        strategy: EncodedReturnStrategy::ResultScalar,
+                    }
+                } else {
+                    Self::Encoded {
+                        rust_type: result_rust_type(ok, err),
+                        strategy: EncodedReturnStrategy::WireEncoded,
+                    }
+                }
+            }
+            ReturnKind::ResultUnit { err } => Self::Encoded {
+                rust_type: result_rust_type(syn::parse_quote!(()), err),
+                strategy: EncodedReturnStrategy::WireEncoded,
+            },
+            ReturnKind::WireEncoded(rust_type) => {
+                match classify_named_type_transport(&rust_type, custom_types, &data_types) {
+                    NamedTypeTransport::Passable => Self::Passable { rust_type },
+                    NamedTypeTransport::WireEncoded => Self::Encoded {
+                        rust_type,
+                        strategy: EncodedReturnStrategy::WireEncoded,
+                    },
+                }
+            }
+        }
     }
 
-    pub fn sync_export_return_shape(&self) -> SyncExportReturnShape {
-        SyncExportReturnShape::from_return_abi(self)
+    pub fn value_return_strategy(&self) -> ValueReturnStrategy {
+        match self {
+            Self::Unit => ValueReturnStrategy::Void,
+            Self::Scalar { .. } => {
+                ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue)
+            }
+            Self::Encoded { strategy, .. } => match strategy {
+                EncodedReturnStrategy::DirectVec => ValueReturnStrategy::DirectBuffer,
+                EncodedReturnStrategy::Utf8String
+                | EncodedReturnStrategy::OptionScalar
+                | EncodedReturnStrategy::ResultScalar
+                | EncodedReturnStrategy::WireEncoded => ValueReturnStrategy::EncodedBuffer,
+            },
+            Self::Passable { rust_type } => match passable_data_type_category(rust_type) {
+                Some(data_types::DataTypeCategory::Scalar) => {
+                    ValueReturnStrategy::Scalar(ScalarReturnStrategy::CStyleEnumTag)
+                }
+                Some(data_types::DataTypeCategory::Blittable) => {
+                    ValueReturnStrategy::CompositeValue
+                }
+                Some(data_types::DataTypeCategory::WireEncoded) | None => {
+                    unreachable!("passable return abi requires a scalar or blittable data type")
+                }
+            },
+        }
+    }
+
+    pub fn value_return_method(
+        &self,
+        context: ReturnInvocationContext,
+        platform: ReturnPlatform,
+    ) -> ValueReturnMethod {
+        self.value_return_strategy()
+            .return_method(ErrorReturnStrategy::None, context, platform)
+    }
+
+    pub fn invalid_arg_early_return_statement(&self) -> proc_macro2::TokenStream {
+        match self {
+            Self::Unit => quote! {
+                return ::boltffi::__private::FfiStatus::INVALID_ARG;
+            },
+            Self::Scalar { .. } => quote! {
+                return ::core::default::Default::default();
+            },
+            Self::Encoded {
+                rust_type,
+                strategy: EncodedReturnStrategy::OptionScalar,
+            } => {
+                let _ = WasmOptionScalarEncoding::from_option_rust_type(rust_type)
+                    .expect("OptionScalar return must have a primitive Option inner type");
+                quote! {
+                    return f64::NAN;
+                }
+            }
+            Self::Encoded { .. }
+                if matches!(
+                    self.value_return_method(
+                        ReturnInvocationContext::SyncExport,
+                        ReturnPlatform::Wasm,
+                    ),
+                    ValueReturnMethod::WriteToReturnSlot
+                ) =>
+            {
+                quote! {
+                    return;
+                }
+            }
+            Self::Encoded { .. } => quote! {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return ::boltffi::__private::FfiBuf::default().into_packed();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    return ::boltffi::__private::FfiBuf::default();
+                }
+            },
+            Self::Passable { rust_type } => quote! {
+                return unsafe {
+                    ::core::mem::MaybeUninit::<<#rust_type as ::boltffi::__private::Passable>::Out>::zeroed().assume_init()
+                };
+            },
+        }
     }
 
     pub fn async_ffi_return_type(&self) -> proc_macro2::TokenStream {
@@ -331,68 +404,6 @@ impl ReturnAbi {
             Self::Scalar { .. } => quote! { Default::default() },
             Self::Encoded { .. } => quote! { ::boltffi::__private::FfiBuf::default() },
             Self::Passable { .. } => quote! { Default::default() },
-        }
-    }
-}
-
-impl SyncExportReturnShape {
-    pub fn from_return_abi(return_abi: &ReturnAbi) -> Self {
-        match return_abi {
-            ReturnAbi::Unit => Self::Unit,
-            ReturnAbi::Scalar { .. } => Self::Scalar,
-            ReturnAbi::Encoded {
-                rust_type,
-                strategy,
-            } => match strategy {
-                EncodedReturnStrategy::DirectVec => {
-                    Self::Encoded(WasmEncodedReturnShape::ReturnSlot)
-                }
-                EncodedReturnStrategy::OptionScalar => {
-                    let _ = WasmOptionScalarEncoding::from_option_rust_type(rust_type)
-                        .expect("OptionScalar return must have a primitive Option inner type");
-                    Self::Encoded(WasmEncodedReturnShape::OptionalScalarF64)
-                }
-                EncodedReturnStrategy::Utf8String
-                | EncodedReturnStrategy::ResultScalar
-                | EncodedReturnStrategy::WireEncoded => {
-                    Self::Encoded(WasmEncodedReturnShape::PackedBuffer)
-                }
-            },
-            ReturnAbi::Passable { rust_type } => Self::Passable {
-                rust_type: rust_type.clone(),
-            },
-        }
-    }
-
-    pub fn early_return_statement(&self) -> proc_macro2::TokenStream {
-        match self {
-            Self::Unit => quote! {
-                return ::boltffi::__private::FfiStatus::INVALID_ARG;
-            },
-            Self::Scalar => quote! {
-                return ::core::default::Default::default();
-            },
-            Self::Encoded(WasmEncodedReturnShape::PackedBuffer) => quote! {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    return ::boltffi::__private::FfiBuf::default().into_packed();
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    return ::boltffi::__private::FfiBuf::default();
-                }
-            },
-            Self::Encoded(WasmEncodedReturnShape::OptionalScalarF64) => quote! {
-                return f64::NAN;
-            },
-            Self::Encoded(WasmEncodedReturnShape::ReturnSlot) => quote! {
-                return;
-            },
-            Self::Passable { rust_type } => quote! {
-                return unsafe {
-                    ::core::mem::MaybeUninit::<<#rust_type as ::boltffi::__private::Passable>::Out>::zeroed().assume_init()
-                };
-            },
         }
     }
 }
@@ -501,10 +512,11 @@ fn wire_encode_expression(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ReturnAbi, SyncExportReturnShape, WasmEncodedReturnShape, WasmOptionScalarEncoding,
+    use super::{ReturnAbi, WasmOptionScalarEncoding};
+    use boltffi_ffi_rules::transport::{
+        EncodedReturnStrategy, ReturnInvocationContext, ReturnPlatform, ValueReturnMethod,
+        ValueReturnStrategy,
     };
-    use boltffi_ffi_rules::transport::EncodedReturnStrategy;
     use syn::parse_quote;
 
     #[test]
@@ -521,16 +533,23 @@ mod tests {
 
     #[test]
     fn packed_encoded_return_uses_packed_default_on_wasm_failure() {
-        let shape = SyncExportReturnShape::from_return_abi(&ReturnAbi::Encoded {
+        let return_abi = ReturnAbi::Encoded {
             rust_type: parse_quote!(std::time::Duration),
             strategy: EncodedReturnStrategy::WireEncoded,
-        });
+        };
 
-        let statement = shape.early_return_statement().to_string();
+        let statement = return_abi.invalid_arg_early_return_statement().to_string();
 
         assert!(matches!(
-            shape,
-            SyncExportReturnShape::Encoded(WasmEncodedReturnShape::PackedBuffer)
+            return_abi.value_return_strategy(),
+            ValueReturnStrategy::EncodedBuffer
+        ));
+        assert!(matches!(
+            return_abi.value_return_method(
+                ReturnInvocationContext::SyncExport,
+                ReturnPlatform::Wasm,
+            ),
+            ValueReturnMethod::DirectReturn
         ));
         assert!(statement.contains("FfiBuf :: default () . into_packed ()"));
         assert!(statement.contains("return :: boltffi :: __private :: FfiBuf :: default ()"));
@@ -538,15 +557,21 @@ mod tests {
 
     #[test]
     fn direct_vec_return_uses_void_wasm_failure() {
-        let shape = SyncExportReturnShape::from_return_abi(&ReturnAbi::Encoded {
+        let return_abi = ReturnAbi::Encoded {
             rust_type: parse_quote!(Vec<i32>),
             strategy: EncodedReturnStrategy::DirectVec,
-        });
+        };
 
         assert!(matches!(
-            shape,
-            SyncExportReturnShape::Encoded(WasmEncodedReturnShape::ReturnSlot)
+            return_abi.value_return_method(
+                ReturnInvocationContext::SyncExport,
+                ReturnPlatform::Wasm,
+            ),
+            ValueReturnMethod::WriteToReturnSlot
         ));
-        assert_eq!(shape.early_return_statement().to_string(), "return ;");
+        assert_eq!(
+            return_abi.invalid_arg_early_return_statement().to_string(),
+            "return ;"
+        );
     }
 }

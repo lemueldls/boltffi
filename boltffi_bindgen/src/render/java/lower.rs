@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use boltffi_ffi_rules::transport::{
-    ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
+    ReturnInvocationContext, ReturnPlatform, ScalarReturnStrategy, ValueReturnMethod,
+    ValueReturnStrategy,
 };
 
 use super::JavaOptions;
@@ -687,14 +688,19 @@ impl<'a> JavaLowerer<'a> {
 
     fn return_strategy(&self, returns: &ReturnDef, call: &AbiCall) -> JavaReturnStrategy {
         match returns {
-            ReturnDef::Void | ReturnDef::Result { .. } => JavaReturnStrategy::Void,
+            ReturnDef::Void => JavaReturnStrategy::Void,
+            ReturnDef::Result { .. } => self.result_decode_strategy(returns, call),
             ReturnDef::Value(ty) => self.java_return_strategy_for_value(ty, call),
         }
     }
 
     fn java_return_strategy_for_value(&self, ty: &TypeExpr, call: &AbiCall) -> JavaReturnStrategy {
         let value_return_strategy = call.returns.value_return_strategy();
-        let value_return_method = call.returns.value_return_method(&call.error);
+        let value_return_method = call.returns.value_return_method(
+            &call.error,
+            ReturnInvocationContext::HostCall,
+            ReturnPlatform::Native,
+        );
         match ty {
             TypeExpr::Void => JavaReturnStrategy::Void,
             _ => match (value_return_strategy, value_return_method) {

@@ -9,7 +9,7 @@ use crate::method_common::{impl_type_name, is_factory_constructor, is_result_of_
 use crate::params::{FfiParams, transform_method_params, transform_method_params_async};
 use crate::returns::{
     ReturnAbi, WasmOptionScalarEncoding, classify_return, encoded_return_body,
-    encoded_return_buffer_expression, lower_return_abi,
+    encoded_return_buffer_expression,
 };
 use boltffi_ffi_rules::transport::EncodedReturnStrategy;
 
@@ -547,10 +547,8 @@ fn generate_method_export(
         );
     }
 
-    let return_abi = lower_return_abi(classify_return(&method.sig.output), custom_types);
-    let on_wire_record_error = return_abi
-        .sync_export_return_shape()
-        .early_return_statement();
+    let return_abi = ReturnAbi::lower(classify_return(&method.sig.output), custom_types);
+    let on_wire_record_error = return_abi.invalid_arg_early_return_statement();
     let other_inputs = method.sig.inputs.iter().skip(1).cloned();
     let FfiParams {
         ffi_params,
@@ -743,10 +741,8 @@ fn generate_static_method_export(
         method_name.span(),
     );
 
-    let return_abi = lower_return_abi(classify_return(&method.sig.output), custom_types);
-    let on_wire_record_error = return_abi
-        .sync_export_return_shape()
-        .early_return_statement();
+    let return_abi = ReturnAbi::lower(classify_return(&method.sig.output), custom_types);
+    let on_wire_record_error = return_abi.invalid_arg_early_return_statement();
     let all_inputs = method.sig.inputs.iter().cloned();
     let FfiParams {
         ffi_params,
@@ -957,7 +953,7 @@ fn generate_async_method_export(
     };
 
     let fn_output = &method.sig.output;
-    let return_abi = ReturnAbi::from_output(fn_output, custom_types);
+    let return_abi = ReturnAbi::lower(classify_return(fn_output), custom_types);
 
     let ffi_return_type = return_abi.async_ffi_return_type();
     let rust_return_type = return_abi.async_rust_return_type();
