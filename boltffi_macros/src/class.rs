@@ -5,13 +5,11 @@ use syn::{FnArg, ReturnType, Type};
 
 use crate::callback_registry;
 use crate::custom_types;
-use crate::method_common::{
-    impl_type_name, is_factory_constructor, is_result_of_self_type_path, sync_error_return_expr,
-};
+use crate::method_common::{impl_type_name, is_factory_constructor, is_result_of_self_type_path};
 use crate::params::{FfiParams, transform_method_params, transform_method_params_async};
 use crate::returns::{
-    ReturnAbi, classify_return, encoded_return_body, encoded_return_buffer_expression,
-    lower_return_abi,
+    ReturnAbi, WasmOptionScalarEncoding, classify_return, encoded_return_body,
+    encoded_return_buffer_expression, lower_return_abi,
 };
 use boltffi_ffi_rules::transport::EncodedReturnStrategy;
 
@@ -550,7 +548,9 @@ fn generate_method_export(
     }
 
     let return_abi = lower_return_abi(classify_return(&method.sig.output), custom_types);
-    let on_wire_record_error = sync_error_return_expr(&return_abi);
+    let on_wire_record_error = return_abi
+        .sync_export_return_shape()
+        .early_return_statement();
     let other_inputs = method.sig.inputs.iter().skip(1).cloned();
     let FfiParams {
         ffi_params,
@@ -602,6 +602,11 @@ fn generate_method_export(
             let result_ident = syn::Ident::new("result", method_name.span());
 
             if matches!(strategy, EncodedReturnStrategy::OptionScalar) {
+                let option_value_ident = syn::Ident::new("value", method_name.span());
+                let option_scalar_encoding =
+                    WasmOptionScalarEncoding::from_option_rust_type(&inner_ty)
+                        .expect("OptionScalar return must have a primitive Option inner type");
+                let some_expression = option_scalar_encoding.some_expression(&option_value_ident);
                 let call_and_bind = if has_conversions {
                     quote! {
                         #(#conversions)*
@@ -616,7 +621,7 @@ fn generate_method_export(
                 let wasm_body = quote! {
                     #call_and_bind
                     match #result_ident {
-                        Some(v) => v as f64,
+                        Some(#option_value_ident) => #some_expression,
                         None => f64::NAN,
                     }
                 };
@@ -739,7 +744,9 @@ fn generate_static_method_export(
     );
 
     let return_abi = lower_return_abi(classify_return(&method.sig.output), custom_types);
-    let on_wire_record_error = sync_error_return_expr(&return_abi);
+    let on_wire_record_error = return_abi
+        .sync_export_return_shape()
+        .early_return_statement();
     let all_inputs = method.sig.inputs.iter().cloned();
     let FfiParams {
         ffi_params,
@@ -790,6 +797,11 @@ fn generate_static_method_export(
             let result_ident = syn::Ident::new("result", method_name.span());
 
             if matches!(strategy, EncodedReturnStrategy::OptionScalar) {
+                let option_value_ident = syn::Ident::new("value", method_name.span());
+                let option_scalar_encoding =
+                    WasmOptionScalarEncoding::from_option_rust_type(&inner_ty)
+                        .expect("OptionScalar return must have a primitive Option inner type");
+                let some_expression = option_scalar_encoding.some_expression(&option_value_ident);
                 let call_and_bind = if has_conversions {
                     quote! {
                         #(#conversions)*
@@ -804,7 +816,7 @@ fn generate_static_method_export(
                 let wasm_body = quote! {
                     #call_and_bind
                     match #result_ident {
-                        Some(v) => v as f64,
+                        Some(#option_value_ident) => #some_expression,
                         None => f64::NAN,
                     }
                 };

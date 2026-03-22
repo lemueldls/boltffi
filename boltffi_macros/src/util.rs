@@ -10,7 +10,7 @@ use syn::punctuated::Punctuated;
 use syn::{Item, Path, PathArguments, PathSegment, Type, UseTree};
 
 use crate::data_types::{self, DataTypeCategory};
-use crate::type_classification::{NamedTypeTransport, classify_named_type_transport_for_call_site};
+use crate::type_classification::{classify_named_type_transport_for_call_site, NamedTypeTransport};
 
 pub fn ptr_ident(base: &syn::Ident) -> syn::Ident {
     syn::Ident::new(
@@ -454,7 +454,7 @@ pub fn classify_param_transform(ty: &Type) -> ParamTransform {
     } else if type_str == "String" || type_str == "std::string::String" {
         ParamTransform::OwnedString
     } else if is_named_nominal_type(ty) {
-        match crate::type_classification::classify_named_type_transport_for_call_site(ty) {
+        match classify_named_type_transport_for_call_site(ty) {
             NamedTypeTransport::Passable => ParamTransform::Passable(ty.clone()),
             NamedTypeTransport::WireEncoded => ParamTransform::WireEncoded(WireEncodedParam {
                 kind: WireEncodedParamKind::Required,
@@ -496,11 +496,11 @@ fn is_named_nominal_type(ty: &Type) -> bool {
 
 fn is_generic_nominal_type(ty: &Type) -> bool {
     match ty {
-        Type::Path(type_path) if type_path.qself.is_none() => type_path
-            .path
-            .segments
-            .last()
-            .is_some_and(|segment| matches!(segment.arguments, PathArguments::AngleBracketed(_))),
+        Type::Path(type_path) if type_path.qself.is_none() => {
+            type_path.path.segments.last().is_some_and(|segment| {
+                matches!(segment.arguments, PathArguments::AngleBracketed(_))
+            })
+        }
         Type::Group(group) => is_generic_nominal_type(group.elem.as_ref()),
         Type::Paren(paren) => is_generic_nominal_type(paren.elem.as_ref()),
         _ => false,

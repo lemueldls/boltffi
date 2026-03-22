@@ -43,10 +43,42 @@ pub enum ReturnAbi {
     },
 }
 
+#[derive(Clone, Copy)]
+pub enum WasmEncodedReturnShape {
+    PackedBuffer,
+    OptionalScalarF64,
+    ReturnSlot,
+}
+
+#[derive(Clone)]
+pub enum SyncExportReturnShape {
+    Unit,
+    Scalar,
+    Encoded(WasmEncodedReturnShape),
+    Passable { rust_type: syn::Type },
+}
+
+#[derive(Clone, Copy)]
+pub struct WasmOptionScalarEncoding {
+    primitive: Primitive,
+}
+
 pub fn extract_vec_inner(ty: &Type) -> Option<syn::Type> {
     if let Type::Path(path) = ty
         && let Some(segment) = path.path.segments.last()
         && segment.ident == "Vec"
+        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+        && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
+    {
+        return Some(inner_ty.clone());
+    }
+    None
+}
+
+pub fn extract_option_inner(ty: &Type) -> Option<syn::Type> {
+    if let Type::Path(path) = ty
+        && let Some(segment) = path.path.segments.last()
+        && segment.ident == "Option"
         && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
         && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
     {
@@ -72,6 +104,10 @@ fn is_string_like_type(ty: &Type) -> bool {
 
 pub fn is_primitive_type(s: &str) -> bool {
     s == "()" || s.parse::<Primitive>().is_ok()
+}
+
+fn primitive_for_type(ty: &Type) -> Option<Primitive> {
+    quote!(#ty).to_string().replace(' ', "").parse().ok()
 }
 
 pub fn classify_return(output: &ReturnType) -> ReturnKind {
@@ -229,6 +265,10 @@ impl ReturnAbi {
         lower_return_abi(classify_return(output), custom_types)
     }
 
+    pub fn sync_export_return_shape(&self) -> SyncExportReturnShape {
+        SyncExportReturnShape::from_return_abi(self)
+    }
+
     pub fn async_ffi_return_type(&self) -> proc_macro2::TokenStream {
         match self {
             Self::Unit => quote! { () },
@@ -291,6 +331,98 @@ impl ReturnAbi {
             Self::Scalar { .. } => quote! { Default::default() },
             Self::Encoded { .. } => quote! { ::boltffi::__private::FfiBuf::default() },
             Self::Passable { .. } => quote! { Default::default() },
+        }
+    }
+}
+
+impl SyncExportReturnShape {
+    pub fn from_return_abi(return_abi: &ReturnAbi) -> Self {
+        match return_abi {
+            ReturnAbi::Unit => Self::Unit,
+            ReturnAbi::Scalar { .. } => Self::Scalar,
+            ReturnAbi::Encoded {
+                rust_type,
+                strategy,
+            } => match strategy {
+                EncodedReturnStrategy::DirectVec => {
+                    Self::Encoded(WasmEncodedReturnShape::ReturnSlot)
+                }
+                EncodedReturnStrategy::OptionScalar => {
+                    let _ = WasmOptionScalarEncoding::from_option_rust_type(rust_type)
+                        .expect("OptionScalar return must have a primitive Option inner type");
+                    Self::Encoded(WasmEncodedReturnShape::OptionalScalarF64)
+                }
+                EncodedReturnStrategy::Utf8String
+                | EncodedReturnStrategy::ResultScalar
+                | EncodedReturnStrategy::WireEncoded => {
+                    Self::Encoded(WasmEncodedReturnShape::PackedBuffer)
+                }
+            },
+            ReturnAbi::Passable { rust_type } => Self::Passable {
+                rust_type: rust_type.clone(),
+            },
+        }
+    }
+
+    pub fn early_return_statement(&self) -> proc_macro2::TokenStream {
+        match self {
+            Self::Unit => quote! {
+                return ::boltffi::__private::FfiStatus::INVALID_ARG;
+            },
+            Self::Scalar => quote! {
+                return ::core::default::Default::default();
+            },
+            Self::Encoded(WasmEncodedReturnShape::PackedBuffer) => quote! {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return ::boltffi::__private::FfiBuf::default().into_packed();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    return ::boltffi::__private::FfiBuf::default();
+                }
+            },
+            Self::Encoded(WasmEncodedReturnShape::OptionalScalarF64) => quote! {
+                return f64::NAN;
+            },
+            Self::Encoded(WasmEncodedReturnShape::ReturnSlot) => quote! {
+                return;
+            },
+            Self::Passable { rust_type } => quote! {
+                return unsafe {
+                    ::core::mem::MaybeUninit::<<#rust_type as ::boltffi::__private::Passable>::Out>::zeroed().assume_init()
+                };
+            },
+        }
+    }
+}
+
+impl WasmOptionScalarEncoding {
+    pub fn from_option_rust_type(rust_type: &Type) -> Option<Self> {
+        extract_option_inner(rust_type)
+            .and_then(|inner| primitive_for_type(&inner))
+            .map(|primitive| Self { primitive })
+    }
+
+    pub fn some_expression(self, value_ident: &syn::Ident) -> proc_macro2::TokenStream {
+        match self.primitive {
+            Primitive::Bool => quote! {
+                if #value_ident { 1.0 } else { 0.0 }
+            },
+            Primitive::F64 => quote! { #value_ident },
+            Primitive::I8
+            | Primitive::U8
+            | Primitive::I16
+            | Primitive::U16
+            | Primitive::I32
+            | Primitive::U32
+            | Primitive::I64
+            | Primitive::U64
+            | Primitive::ISize
+            | Primitive::USize
+            | Primitive::F32 => quote! {
+                #value_ident as f64
+            },
         }
     }
 }
@@ -364,5 +496,57 @@ fn wire_encode_expression(
         _ => quote! {
             ::boltffi::__private::FfiBuf::wire_encode(&#result_ident)
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ReturnAbi, SyncExportReturnShape, WasmEncodedReturnShape, WasmOptionScalarEncoding,
+    };
+    use boltffi_ffi_rules::transport::EncodedReturnStrategy;
+    use syn::parse_quote;
+
+    #[test]
+    fn wasm_option_bool_uses_numeric_bool_encoding() {
+        let value_ident = syn::Ident::new("value", proc_macro2::Span::call_site());
+        let expression =
+            WasmOptionScalarEncoding::from_option_rust_type(&parse_quote!(Option<bool>))
+                .expect("expected bool option encoding")
+                .some_expression(&value_ident)
+                .to_string();
+
+        assert_eq!(expression, "if value { 1.0 } else { 0.0 }");
+    }
+
+    #[test]
+    fn packed_encoded_return_uses_packed_default_on_wasm_failure() {
+        let shape = SyncExportReturnShape::from_return_abi(&ReturnAbi::Encoded {
+            rust_type: parse_quote!(std::time::Duration),
+            strategy: EncodedReturnStrategy::WireEncoded,
+        });
+
+        let statement = shape.early_return_statement().to_string();
+
+        assert!(matches!(
+            shape,
+            SyncExportReturnShape::Encoded(WasmEncodedReturnShape::PackedBuffer)
+        ));
+        assert!(statement.contains("FfiBuf :: default () . into_packed ()"));
+        assert!(statement.contains("return :: boltffi :: __private :: FfiBuf :: default ()"));
+    }
+
+    #[test]
+    fn direct_vec_return_uses_void_wasm_failure() {
+        let shape = SyncExportReturnShape::from_return_abi(&ReturnAbi::Encoded {
+            rust_type: parse_quote!(Vec<i32>),
+            strategy: EncodedReturnStrategy::DirectVec,
+        });
+
+        assert!(matches!(
+            shape,
+            SyncExportReturnShape::Encoded(WasmEncodedReturnShape::ReturnSlot)
+        ));
+        assert_eq!(shape.early_return_statement().to_string(), "return ;");
     }
 }

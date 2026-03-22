@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde::Deserialize;
+
 use crate::build::{BuildOptions, Builder, OutputCallback, all_successful, failed_targets};
 use crate::commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_output};
 use crate::config::{
@@ -168,7 +170,7 @@ fn pack_apple(config: &Config, options: PackAppleOptions, reporter: &Reporter) -
         step.finish_success();
     }
 
-    let libraries = discover_built_libraries(&config.crate_artifact_name(), options.release);
+    let libraries = discover_built_libraries(&config.crate_artifact_name(), options.release)?;
     let apple_libraries: Vec<_> = libraries
         .into_iter()
         .filter(|lib| lib.target.platform().is_apple())
@@ -397,7 +399,7 @@ fn pack_android(config: &Config, options: PackAndroidOptions, reporter: &Reporte
         step.finish_success();
     }
 
-    let libraries = discover_built_libraries(&config.crate_artifact_name(), options.release);
+    let libraries = discover_built_libraries(&config.crate_artifact_name(), options.release)?;
     let android_libraries: Vec<_> = libraries
         .into_iter()
         .filter(|lib| lib.target.platform() == Platform::Android)
@@ -1025,8 +1027,51 @@ fn generate_wasm_readme(
     Ok(readme_path)
 }
 
-fn discover_built_libraries(crate_artifact_name: &str, release: bool) -> Vec<BuiltLibrary> {
-    BuiltLibrary::discover(&PathBuf::from("target"), crate_artifact_name, release)
+#[derive(Deserialize)]
+struct CargoMetadataTargetDirectory {
+    target_directory: PathBuf,
+}
+
+fn discover_built_libraries(crate_artifact_name: &str, release: bool) -> Result<Vec<BuiltLibrary>> {
+    let target_directory = cargo_target_directory()?;
+    Ok(BuiltLibrary::discover(
+        &target_directory,
+        crate_artifact_name,
+        release,
+    ))
+}
+
+fn cargo_target_directory() -> Result<PathBuf> {
+    let crate_dir = std::env::current_dir().map_err(|source| CliError::CommandFailed {
+        command: format!("current_dir: {source}"),
+        status: None,
+    })?;
+    let output = Command::new("cargo")
+        .current_dir(&crate_dir)
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .output()
+        .map_err(|source| CliError::CommandFailed {
+            command: format!("cargo metadata: {source}"),
+            status: None,
+        })?;
+
+    if !output.status.success() {
+        return Err(CliError::CommandFailed {
+            command: "cargo metadata --format-version 1 --no-deps".to_string(),
+            status: output.status.code(),
+        });
+    }
+
+    parse_cargo_target_directory(&output.stdout)
+}
+
+fn parse_cargo_target_directory(metadata: &[u8]) -> Result<PathBuf> {
+    serde_json::from_slice::<CargoMetadataTargetDirectory>(metadata)
+        .map(|parsed| parsed.target_directory)
+        .map_err(|source| CliError::CommandFailed {
+            command: format!("parse cargo metadata target_directory: {source}"),
+            status: None,
+        })
 }
 
 fn existing_xcframework_checksum(config: &Config) -> Result<String> {
@@ -1054,4 +1099,28 @@ fn detect_version() -> Option<String> {
                         .map(|s| s.trim().trim_matches('"').to_string())
                 })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_cargo_target_directory;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_target_directory_from_cargo_metadata() {
+        let metadata = br#"{
+            "packages": [],
+            "workspace_members": [],
+            "workspace_default_members": [],
+            "resolve": null,
+            "target_directory": "/tmp/boltffi-target",
+            "version": 1,
+            "workspace_root": "/tmp/demo"
+        }"#;
+
+        let target_directory =
+            parse_cargo_target_directory(metadata).expect("expected target directory");
+
+        assert_eq!(target_directory, PathBuf::from("/tmp/boltffi-target"));
+    }
 }

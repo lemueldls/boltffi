@@ -6,11 +6,10 @@ use syn::ItemFn;
 
 use crate::callback_registry;
 use crate::custom_types;
-use crate::method_common::sync_error_return_expr;
 use crate::params::{FfiParams, transform_params, transform_params_async};
 use crate::returns::{
-    ReturnAbi, classify_return, encoded_return_body, encoded_return_buffer_expression,
-    lower_return_abi,
+    ReturnAbi, WasmOptionScalarEncoding, classify_return, encoded_return_body,
+    encoded_return_buffer_expression, lower_return_abi,
 };
 use crate::safety;
 
@@ -177,21 +176,19 @@ fn build_void_wasm_return_exports(
     })
 }
 
-pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
-    let input = syn::parse_macro_input!(item as ItemFn);
-
+fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
     let violations = safety::scan_function(&input);
     if !violations.is_empty() {
-        return TokenStream::from(safety::violations_to_compile_errors(&violations));
+        return safety::violations_to_compile_errors(&violations);
     }
 
     let custom_types = match custom_types::registry_for_current_crate() {
         Ok(registry) => registry,
-        Err(error) => return error.to_compile_error().into(),
+        Err(error) => return error.to_compile_error(),
     };
     let callback_registry = match callback_registry::registry_for_current_crate() {
         Ok(registry) => registry,
-        Err(error) => return error.to_compile_error().into(),
+        Err(error) => return error.to_compile_error(),
     };
 
     let fn_name = &input.sig.ident;
@@ -201,14 +198,16 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
     let is_async = input.sig.asyncness.is_some();
 
     if is_async {
-        return generate_async_export(&input, &custom_types, &callback_registry);
+        return generate_async_export(&input, &custom_types, &callback_registry).into();
     }
 
     let export_name = format!("{}_{}", naming::ffi_prefix(), fn_name);
     let export_ident = syn::Ident::new(&export_name, fn_name.span());
 
     let return_abi = lower_return_abi(classify_return(fn_output), &custom_types);
-    let on_wire_record_error = sync_error_return_expr(&return_abi);
+    let on_wire_record_error = return_abi
+        .sync_export_return_shape()
+        .early_return_statement();
     let FfiParams {
         ffi_params,
         conversions,
@@ -292,6 +291,11 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
             let result_ident = syn::Ident::new("result", fn_name.span());
 
             if matches!(strategy, EncodedReturnStrategy::OptionScalar) {
+                let option_value_ident = syn::Ident::new("value", fn_name.span());
+                let option_scalar_encoding =
+                    WasmOptionScalarEncoding::from_option_rust_type(&inner_ty)
+                        .expect("OptionScalar return must have a primitive Option inner type");
+                let some_expression = option_scalar_encoding.some_expression(&option_value_ident);
                 let call_and_bind = quote! {
                     #(#conversions)*
                     let #result_ident: #inner_ty = #fn_name(#(#call_args),*);
@@ -300,7 +304,7 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                 let wasm_body = quote! {
                     #call_and_bind
                     match #result_ident {
-                        Some(v) => v as f64,
+                        Some(#option_value_ident) => #some_expression,
                         None => f64::NAN,
                     }
                 };
@@ -317,7 +321,8 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                     &ffi_params,
                     wasm_body,
                     native_body,
-                );
+                )
+                .into();
             }
 
             if matches!(strategy, EncodedReturnStrategy::DirectVec) {
@@ -345,7 +350,8 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                     &ffi_params,
                     wasm_body,
                     native_body,
-                );
+                )
+                .into();
             }
 
             let encode_body = encoded_return_body(
@@ -363,7 +369,8 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                 &export_ident,
                 &ffi_params,
                 encode_body,
-            );
+            )
+            .into();
         }
         ReturnAbi::Passable { rust_type } => {
             let body = quote! {
@@ -399,7 +406,12 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
         }
     };
 
-    TokenStream::from(expanded)
+    expanded
+}
+
+pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(item as ItemFn);
+    TokenStream::from(ffi_export_item_impl(input))
 }
 
 fn generate_async_export(

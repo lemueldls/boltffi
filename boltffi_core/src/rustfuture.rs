@@ -1,9 +1,9 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicU64, Ordering};
 #[cfg(target_arch = "wasm32")]
 use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 

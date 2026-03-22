@@ -58,6 +58,7 @@ pub struct TypeMeta {
 #[derive(Default)]
 pub struct TypeRegistry {
     types: IndexMap<String, TypeMeta>,
+    custom_type_names_by_remote_key: HashMap<CustomTypeLookupKey, String>,
 }
 
 impl TypeRegistry {
@@ -210,6 +211,53 @@ impl TypeRegistry {
                 repr: Box::new(repr.clone()),
             },
         })
+    }
+
+    pub fn classify_type_spelling(&self, spelling: &str) -> Option<MType> {
+        self.classify_named_type(spelling).or_else(|| {
+            syn::parse_str::<Type>(spelling)
+                .ok()
+                .and_then(|rust_type| self.classify_custom_remote_type(&rust_type))
+        })
+    }
+
+    pub fn classify_custom_remote_type(&self, rust_type: &Type) -> Option<MType> {
+        let custom_type_name = CustomTypeLookupKey::lookup_keys_for_rust_type(rust_type)
+            .into_iter()
+            .find_map(|lookup_key| self.custom_type_names_by_remote_key.get(&lookup_key))?;
+        self.classify_named_type(custom_type_name)
+    }
+
+    pub fn register_custom_remote_type(
+        &mut self,
+        custom_type_name: &str,
+        rust_type: &Type,
+    ) -> Result<(), String> {
+        let normalized_lookup_key = CustomTypeLookupKey::Normalized(CustomTypeNormalizedSpelling(
+            normalize_type(rust_type),
+        ));
+
+        if let Some(existing_custom_type_name) = self
+            .custom_type_names_by_remote_key
+            .get(&normalized_lookup_key)
+            .filter(|existing_custom_type_name| {
+                existing_custom_type_name.as_str() != custom_type_name
+            })
+        {
+            return Err(format!(
+                "custom_type!: remote type already registered by `{}`",
+                existing_custom_type_name
+            ));
+        }
+
+        self.custom_type_names_by_remote_key
+            .insert(normalized_lookup_key, custom_type_name.to_string());
+        self.custom_type_names_by_remote_key
+            .entry(CustomTypeLookupKey::Shape(CustomTypeShapeKey(
+                type_shape_key(rust_type),
+            )))
+            .or_insert_with(|| custom_type_name.to_string());
+        Ok(())
     }
 
     pub fn register_callback(&mut self, name: String) {
@@ -827,6 +875,8 @@ impl SourceScanner {
                 shape: TypeShape::Custom { repr: repr.clone() },
             },
         );
+        self.type_registry
+            .register_custom_remote_type(&name, &spec.remote)?;
         Ok(())
     }
 
@@ -1534,7 +1584,29 @@ impl SourceScanner {
 
 struct CustomTypeMacroSpec {
     name: syn::Ident,
+    remote: syn::Type,
     repr: syn::Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CustomTypeNormalizedSpelling(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CustomTypeShapeKey(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum CustomTypeLookupKey {
+    Normalized(CustomTypeNormalizedSpelling),
+    Shape(CustomTypeShapeKey),
+}
+
+impl CustomTypeLookupKey {
+    fn lookup_keys_for_rust_type(rust_type: &Type) -> [Self; 2] {
+        [
+            Self::Normalized(CustomTypeNormalizedSpelling(normalize_type(rust_type))),
+            Self::Shape(CustomTypeShapeKey(type_shape_key(rust_type))),
+        ]
+    }
 }
 
 impl syn::parse::Parse for CustomTypeMacroSpec {
@@ -1543,13 +1615,14 @@ impl syn::parse::Parse for CustomTypeMacroSpec {
         let name: syn::Ident = input.parse()?;
         input.parse::<syn::Token![,]>()?;
 
+        let mut remote: Option<syn::Type> = None;
         let mut repr: Option<syn::Type> = None;
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
             input.parse::<syn::Token![=]>()?;
             match key.to_string().as_str() {
                 "remote" => {
-                    let _: syn::Type = input.parse()?;
+                    remote = Some(input.parse()?);
                 }
                 "repr" => {
                     repr = Some(input.parse()?);
@@ -1570,9 +1643,48 @@ impl syn::parse::Parse for CustomTypeMacroSpec {
             }
         }
 
+        let remote = remote.ok_or_else(|| input.error("custom_type!: missing `remote = ...`"))?;
         let repr = repr.ok_or_else(|| input.error("custom_type!: missing `repr = ...`"))?;
 
-        Ok(Self { name, repr })
+        Ok(Self { name, remote, repr })
+    }
+}
+
+fn normalize_type(rust_type: &Type) -> String {
+    quote::quote!(#rust_type).to_string().replace(' ', "")
+}
+
+fn type_shape_key(rust_type: &Type) -> String {
+    match rust_type {
+        Type::Reference(reference) => type_shape_key(reference.elem.as_ref()),
+        Type::Path(type_path) => type_path
+            .path
+            .segments
+            .last()
+            .map(shape_key_for_segment)
+            .unwrap_or_else(|| normalize_type(rust_type)),
+        _ => normalize_type(rust_type),
+    }
+}
+
+fn shape_key_for_segment(path_segment: &syn::PathSegment) -> String {
+    let segment_name = path_segment.ident.to_string();
+    let generic_shape_keys = match &path_segment.arguments {
+        syn::PathArguments::AngleBracketed(arguments) => arguments
+            .args
+            .iter()
+            .filter_map(|argument| match argument {
+                syn::GenericArgument::Type(rust_type) => Some(type_shape_key(rust_type)),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+
+    if generic_shape_keys.is_empty() {
+        segment_name
+    } else {
+        format!("{}<{}>", segment_name, generic_shape_keys.join(","))
     }
 }
 
@@ -2210,6 +2322,10 @@ fn rust_type_to_ffi_type(
     compiler_canonical_types: &HashMap<String, String>,
     self_type_name: Option<&str>,
 ) -> Option<MType> {
+    if let Some(custom_type) = registry.classify_custom_remote_type(ty) {
+        return Some(custom_type);
+    }
+
     match ty {
         Type::Path(type_path) => {
             let last_segment = type_path.path.segments.last()?;
@@ -2500,7 +2616,7 @@ fn string_to_ffi_type(
             })
         }
         s => {
-            if let Some(ty) = registry.classify_named_type(s) {
+            if let Some(ty) = registry.classify_type_spelling(s) {
                 return Some(ty);
             }
 
@@ -2512,12 +2628,12 @@ fn string_to_ffi_type(
 
             BuiltinId::from_rust_path(canonical)
                 .map(MType::Builtin)
-                .or_else(|| registry.classify_named_type(canonical))
+                .or_else(|| registry.classify_type_spelling(canonical))
                 .or_else(|| {
                     canonical
                         .rsplit("::")
                         .next()
-                        .and_then(|name| registry.classify_named_type(name))
+                        .and_then(|name| registry.classify_type_spelling(name))
                 })
         }
     }
@@ -2628,6 +2744,7 @@ pub fn scan_crate_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn extract_doc_from_single_line() {
@@ -2806,6 +2923,56 @@ mod tests {
             Some(MType::Custom { .. })
         ));
         assert!(!reg.is_enum("Timestamp"));
+    }
+
+    #[test]
+    fn type_registry_custom_type_classifies_remote_generic_type() {
+        let mut reg = TypeRegistry::default();
+        reg.register(
+            "UtcDateTime".into(),
+            TypeMeta {
+                doc: None,
+                shape: TypeShape::Custom {
+                    repr: MType::Primitive(Primitive::I64),
+                },
+            },
+        );
+        reg.register_custom_remote_type("UtcDateTime", &syn::parse_quote!(DateTime<Utc>))
+            .unwrap();
+
+        assert!(matches!(
+            reg.classify_type_spelling("DateTime<Utc>"),
+            Some(MType::Custom { .. })
+        ));
+        assert!(matches!(
+            reg.classify_type_spelling("chrono::DateTime<chrono::Utc>"),
+            Some(MType::Custom { .. })
+        ));
+    }
+
+    #[test]
+    fn scan_demo_crate_includes_datetime_custom_type_exports() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let demo_crate_path = repo_root.join("examples").join("demo");
+        let module = scan_crate(&demo_crate_path, "demo").unwrap();
+
+        assert!(
+            module
+                .functions
+                .iter()
+                .any(|function| function.name == "echo_datetime"),
+            "expected echo_datetime to be exported"
+        );
+        assert!(
+            module
+                .functions
+                .iter()
+                .any(|function| function.name == "datetime_to_millis"),
+            "expected datetime_to_millis to be exported"
+        );
     }
 
     #[test]

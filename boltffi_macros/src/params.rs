@@ -659,29 +659,27 @@ fn lower_callback_param_transform(
                 .unwrap_or_default();
             let native_callback_invocation = returns
                 .as_ref()
-                .map(|ty| {
-                    match closure_return_strategy.as_ref() {
-                        Some(ClosureReturnTransport::Direct) => {
-                            quote! {
-                                unsafe {
-                                    <#ty as ::boltffi::__private::Passable>::unpack(
-                                        #cb_name(#ud_name, #(#cb_call_args),*)
-                                    )
-                                }
+                .map(|ty| match closure_return_strategy.as_ref() {
+                    Some(ClosureReturnTransport::Direct) => {
+                        quote! {
+                            unsafe {
+                                <#ty as ::boltffi::__private::Passable>::unpack(
+                                    #cb_name(#ud_name, #(#cb_call_args),*)
+                                )
                             }
                         }
-                        Some(ClosureReturnTransport::WireBuffer) => {
-                            let decode_expr = wire_decoded_callback_return_expr(ty, custom_types);
-                            quote! {
-                                {
-                                    let __result_buf = #cb_name(#ud_name, #(#cb_call_args),*);
-                                    let __result_bytes = unsafe { __result_buf.as_byte_slice() };
-                                    #decode_expr
-                                }
-                            }
-                        }
-                        None => quote! { #cb_name(#ud_name, #(#cb_call_args),*) },
                     }
+                    Some(ClosureReturnTransport::WireBuffer) => {
+                        let decode_expr = wire_decoded_callback_return_expr(ty, custom_types);
+                        quote! {
+                            {
+                                let __result_buf = #cb_name(#ud_name, #(#cb_call_args),*);
+                                let __result_bytes = unsafe { __result_buf.as_byte_slice() };
+                                #decode_expr
+                            }
+                        }
+                    }
+                    None => quote! { #cb_name(#ud_name, #(#cb_call_args),*) },
                 })
                 .unwrap_or_else(|| quote! { #cb_name(#ud_name, #(#cb_call_args),*) });
 
@@ -815,11 +813,12 @@ fn closure_return_is_direct(
         }
         syn::Type::Path(type_path)
             if type_path.qself.is_none()
-                && type_path
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|segment| matches!(segment.ident.to_string().as_str(), "Vec" | "Option" | "Result")) =>
+                && type_path.path.segments.last().is_some_and(|segment| {
+                    matches!(
+                        segment.ident.to_string().as_str(),
+                        "Vec" | "Option" | "Result"
+                    )
+                }) =>
         {
             false
         }

@@ -1,5 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
+use boltffi_ffi_rules::transport::{
+    ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
+};
+
 use super::JavaOptions;
 use super::mappings;
 use super::names::NamingConvention;
@@ -637,68 +641,136 @@ impl<'a> JavaLowerer<'a> {
     fn return_strategy(&self, returns: &ReturnDef, call: &AbiCall) -> JavaReturnStrategy {
         match returns {
             ReturnDef::Void | ReturnDef::Result { .. } => JavaReturnStrategy::Void,
-            ReturnDef::Value(ty) => match ty {
-                TypeExpr::Void => JavaReturnStrategy::Void,
-                TypeExpr::Primitive(_) => JavaReturnStrategy::Direct,
-                TypeExpr::String => JavaReturnStrategy::WireDecode {
-                    decode_expr: "reader.readString()".to_string(),
-                },
-                TypeExpr::Option(_) => match &call.returns.decode_ops {
-                    Some(decode_seq) => JavaReturnStrategy::WireDecode {
-                        decode_expr: super::emit::emit_reader_read(decode_seq),
-                    },
-                    None => panic!(
-                        "unsupported direct Option return transport for Java backend: {:?}",
-                        ty
-                    ),
-                },
-                TypeExpr::Record(id) => JavaReturnStrategy::WireDecode {
-                    decode_expr: format!(
-                        "{}.decode(reader)",
-                        NamingConvention::class_name(id.as_str())
-                    ),
-                },
-                TypeExpr::Enum(id) => {
-                    if let Some(Transport::Scalar(ScalarOrigin::CStyleEnum { tag_type, .. })) =
-                        call.returns.transport.as_ref()
-                    {
-                        JavaReturnStrategy::CStyleEnumDecode {
-                            class_name: NamingConvention::class_name(id.as_str()),
-                            native_type: mappings::java_type(*tag_type).to_string(),
-                        }
-                    } else {
-                        JavaReturnStrategy::WireDecode {
-                            decode_expr: format!(
-                                "{}.decode(reader)",
-                                NamingConvention::class_name(id.as_str())
-                            ),
-                        }
-                    }
+            ReturnDef::Value(ty) => self.java_return_strategy_for_value(ty, call),
+        }
+    }
+
+    fn java_return_strategy_for_value(&self, ty: &TypeExpr, call: &AbiCall) -> JavaReturnStrategy {
+        let value_return_strategy = call.returns.value_return_strategy();
+        let value_return_method = call.returns.value_return_method(&call.error);
+        match ty {
+            TypeExpr::Void => JavaReturnStrategy::Void,
+            _ => match (value_return_strategy, value_return_method) {
+                (ValueReturnStrategy::Void, _) => JavaReturnStrategy::Void,
+                (
+                    ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue),
+                    ValueReturnMethod::DirectReturn,
+                ) => {
+                    JavaReturnStrategy::Direct
                 }
-                TypeExpr::Handle(class_id) => {
-                    let nullable = matches!(
-                        call.returns.transport.as_ref(),
-                        Some(Transport::Handle { nullable: true, .. })
-                    );
-                    JavaReturnStrategy::HandleReturn {
-                        class_name: NamingConvention::class_name(class_id.as_str()),
-                        nullable,
-                    }
+                (
+                    ValueReturnStrategy::Scalar(ScalarReturnStrategy::CStyleEnumTag),
+                    ValueReturnMethod::DirectReturn,
+                ) => {
+                    self.java_c_style_enum_return_strategy(ty, call)
                 }
-                TypeExpr::Bytes => JavaReturnStrategy::BufferDecode {
-                    decode_expr: "_buf != null ? _buf : new byte[0]".to_string(),
-                },
-                TypeExpr::Vec(inner) => match &call.returns.decode_ops {
-                    Some(decode_seq) => JavaReturnStrategy::WireDecode {
-                        decode_expr: super::emit::emit_reader_read(decode_seq),
-                    },
-                    None => JavaReturnStrategy::BufferDecode {
-                        decode_expr: self
-                            .vec_buffer_decode_expr(inner, call.returns.transport.as_ref()),
-                    },
-                },
+                (
+                    ValueReturnStrategy::CompositeValue | ValueReturnStrategy::EncodedBuffer,
+                    ValueReturnMethod::DirectReturn | ValueReturnMethod::WriteToOutBufferParts,
+                ) => {
+                    self.java_wire_decode_return_strategy(ty, call)
+                }
+                (
+                    ValueReturnStrategy::DirectBuffer,
+                    ValueReturnMethod::DirectReturn | ValueReturnMethod::WriteToOutBufferParts,
+                ) => self.java_buffer_return_strategy(ty, call),
+                (
+                    ValueReturnStrategy::ObjectHandle,
+                    ValueReturnMethod::DirectReturn,
+                ) => self.java_handle_return_strategy(call),
+                (
+                    ValueReturnStrategy::CallbackHandle,
+                    ValueReturnMethod::DirectReturn,
+                ) => JavaReturnStrategy::Direct,
                 _ => JavaReturnStrategy::Void,
             },
+        }
+    }
+
+    fn java_c_style_enum_return_strategy(
+        &self,
+        ty: &TypeExpr,
+        call: &AbiCall,
+    ) -> JavaReturnStrategy {
+        match (ty, call.returns.transport.as_ref()) {
+            (
+                TypeExpr::Enum(enum_id),
+                Some(Transport::Scalar(ScalarOrigin::CStyleEnum { tag_type, .. })),
+            ) => JavaReturnStrategy::CStyleEnumDecode {
+                class_name: NamingConvention::class_name(enum_id.as_str()),
+                native_type: mappings::java_type(*tag_type).to_string(),
+            },
+            _ => JavaReturnStrategy::Direct,
+        }
+    }
+
+    fn java_wire_decode_return_strategy(
+        &self,
+        ty: &TypeExpr,
+        call: &AbiCall,
+    ) -> JavaReturnStrategy {
+        match ty {
+            TypeExpr::String => JavaReturnStrategy::WireDecode {
+                decode_expr: "reader.readString()".to_string(),
+            },
+            TypeExpr::Option(_) => match &call.returns.decode_ops {
+                Some(decode_seq) => JavaReturnStrategy::WireDecode {
+                    decode_expr: super::emit::emit_reader_read(decode_seq),
+                },
+                None => panic!(
+                    "unsupported direct Option return transport for Java backend: {:?}",
+                    ty
+                ),
+            },
+            TypeExpr::Record(id) => JavaReturnStrategy::WireDecode {
+                decode_expr: format!(
+                    "{}.decode(reader)",
+                    NamingConvention::class_name(id.as_str())
+                ),
+            },
+            TypeExpr::Enum(id) => JavaReturnStrategy::WireDecode {
+                decode_expr: format!(
+                    "{}.decode(reader)",
+                    NamingConvention::class_name(id.as_str())
+                ),
+            },
+            TypeExpr::Vec(_) => match &call.returns.decode_ops {
+                Some(decode_seq) => JavaReturnStrategy::WireDecode {
+                    decode_expr: super::emit::emit_reader_read(decode_seq),
+                },
+                None => JavaReturnStrategy::Void,
+            },
+            TypeExpr::Bytes => JavaReturnStrategy::BufferDecode {
+                decode_expr: "_buf != null ? _buf : new byte[0]".to_string(),
+            },
+            _ => JavaReturnStrategy::Void,
+        }
+    }
+
+    fn java_buffer_return_strategy(
+        &self,
+        ty: &TypeExpr,
+        call: &AbiCall,
+    ) -> JavaReturnStrategy {
+        match ty {
+            TypeExpr::Bytes => JavaReturnStrategy::BufferDecode {
+                decode_expr: "_buf != null ? _buf : new byte[0]".to_string(),
+            },
+            TypeExpr::Vec(inner) => JavaReturnStrategy::BufferDecode {
+                decode_expr: self
+                    .vec_buffer_decode_expr(inner, call.returns.transport.as_ref()),
+            },
+            _ => self.java_wire_decode_return_strategy(ty, call),
+        }
+    }
+
+    fn java_handle_return_strategy(&self, call: &AbiCall) -> JavaReturnStrategy {
+        match call.returns.transport.as_ref() {
+            Some(Transport::Handle { class_id, nullable }) => JavaReturnStrategy::HandleReturn {
+                class_name: NamingConvention::class_name(class_id.as_str()),
+                nullable: *nullable,
+            },
+            _ => JavaReturnStrategy::Void,
         }
     }
 
@@ -784,11 +856,11 @@ impl<'a> JavaLowerer<'a> {
 
         let constructors = self.resolve_constructor_collisions(
             class
-            .constructors
-            .iter()
-            .enumerate()
-            .map(|(index, ctor)| self.lower_constructor(class, ctor, index))
-            .collect(),
+                .constructors
+                .iter()
+                .enumerate()
+                .map(|(index, ctor)| self.lower_constructor(class, ctor, index))
+                .collect(),
         );
 
         let methods = class
@@ -814,24 +886,27 @@ impl<'a> JavaLowerer<'a> {
             .iter()
             .enumerate()
             .filter(|(_, constructor)| !constructor.is_factory())
-            .fold(HashMap::<Vec<String>, usize>::new(), |mut indices, (index, constructor)| {
-                let signature = Self::constructor_signature(constructor);
-                match indices.get(&signature).copied() {
-                    Some(existing_index)
-                        if Self::prefers_constructor_surface(
-                            constructor,
-                            &constructors[existing_index],
-                        ) =>
-                    {
-                        indices.insert(signature, index);
+            .fold(
+                HashMap::<Vec<String>, usize>::new(),
+                |mut indices, (index, constructor)| {
+                    let signature = Self::constructor_signature(constructor);
+                    match indices.get(&signature).copied() {
+                        Some(existing_index)
+                            if Self::prefers_constructor_surface(
+                                constructor,
+                                &constructors[existing_index],
+                            ) =>
+                        {
+                            indices.insert(signature, index);
+                        }
+                        None => {
+                            indices.insert(signature, index);
+                        }
+                        Some(_) => {}
                     }
-                    None => {
-                        indices.insert(signature, index);
-                    }
-                    Some(_) => {}
-                }
-                indices
-            });
+                    indices
+                },
+            );
 
         constructors
             .into_iter()
@@ -858,10 +933,7 @@ impl<'a> JavaLowerer<'a> {
             .collect()
     }
 
-    fn prefers_constructor_surface(
-        candidate: &JavaConstructor,
-        current: &JavaConstructor,
-    ) -> bool {
+    fn prefers_constructor_surface(candidate: &JavaConstructor, current: &JavaConstructor) -> bool {
         Self::constructor_priority(candidate) < Self::constructor_priority(current)
     }
 

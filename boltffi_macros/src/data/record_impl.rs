@@ -7,7 +7,6 @@ use crate::callback_registry;
 use crate::custom_types;
 use crate::method_common::{
     exported_methods, impl_type_name, is_factory_constructor, is_result_of_self_type_path,
-    sync_error_return_expr,
 };
 use crate::params::{FfiParams, transform_method_params};
 use crate::returns::{ReturnAbi, classify_return, encoded_return_body, lower_return_abi};
@@ -100,7 +99,9 @@ fn generate_record_constructor_export(
 
     let resolved_output = resolve_self_in_return_type(&method.sig.output, type_name);
     let return_abi = lower_return_abi(classify_return(&resolved_output), custom_types);
-    let on_error = sync_error_return_expr(&return_abi);
+    let on_error = return_abi
+        .sync_export_return_shape()
+        .early_return_statement();
 
     let inputs = method.sig.inputs.iter().cloned();
     let FfiParams {
@@ -142,7 +143,9 @@ fn generate_record_instance_export(
 
     let resolved_output = resolve_self_in_return_type(&method.sig.output, type_name);
     let return_abi = lower_return_abi(classify_return(&resolved_output), custom_types);
-    let on_error = sync_error_return_expr(&return_abi);
+    let on_error = return_abi
+        .sync_export_return_shape()
+        .early_return_statement();
 
     let other_inputs = method.sig.inputs.iter().skip(1).cloned();
     let FfiParams {
@@ -244,7 +247,9 @@ fn generate_record_static_export(
 
     let resolved_output = resolve_self_in_return_type(&method.sig.output, type_name);
     let return_abi = lower_return_abi(classify_return(&resolved_output), custom_types);
-    let on_error = sync_error_return_expr(&return_abi);
+    let on_error = return_abi
+        .sync_export_return_shape()
+        .early_return_statement();
 
     let all_inputs = method.sig.inputs.iter().cloned();
     let FfiParams {
@@ -281,7 +286,9 @@ fn generate_value_return_export(
     return_abi: &ReturnAbi,
     custom_types: &custom_types::CustomTypeRegistry,
 ) -> Option<proc_macro2::TokenStream> {
-    let on_error = sync_error_return_expr(return_abi);
+    let on_error = return_abi
+        .sync_export_return_shape()
+        .early_return_statement();
 
     let unwrapped_call = if is_fallible {
         quote! {

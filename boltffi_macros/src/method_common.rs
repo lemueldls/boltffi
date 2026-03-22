@@ -1,20 +1,4 @@
-use quote::quote;
 use syn::{FnArg, ReturnType, Type};
-
-use crate::returns::ReturnAbi;
-
-pub fn sync_error_return_expr(return_abi: &ReturnAbi) -> proc_macro2::TokenStream {
-    match return_abi {
-        ReturnAbi::Unit => quote! { ::boltffi::__private::FfiStatus::INVALID_ARG },
-        ReturnAbi::Scalar { .. } => quote! { ::core::default::Default::default() },
-        ReturnAbi::Encoded { .. } => quote! { ::boltffi::__private::FfiBuf::default() },
-        ReturnAbi::Passable { rust_type } => quote! {
-            unsafe {
-                ::core::mem::MaybeUninit::<<#rust_type as ::boltffi::__private::Passable>::Out>::zeroed().assume_init()
-            }
-        },
-    }
-}
 
 pub fn is_factory_constructor(method: &syn::ImplItemFn, type_name: &syn::Ident) -> bool {
     let has_self = method

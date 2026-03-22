@@ -256,7 +256,6 @@ impl CustomTypeRegistry {
 }
 
 struct CustomTypeMacroSpec {
-    visibility: syn::Visibility,
     name: syn::Ident,
     repr: String,
     remote: syn::Type,
@@ -264,7 +263,7 @@ struct CustomTypeMacroSpec {
 
 impl Parse for CustomTypeMacroSpec {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let visibility: syn::Visibility = input.parse()?;
+        let _: syn::Visibility = input.parse()?;
         let name: syn::Ident = input.parse()?;
         input.parse::<syn::Token![,]>()?;
 
@@ -296,7 +295,6 @@ impl Parse for CustomTypeMacroSpec {
         let repr = repr.ok_or_else(|| input.error("custom_type!: missing `repr = ...`"))?;
         let remote = remote.ok_or_else(|| input.error("custom_type!: missing `remote = ...`"))?;
         Ok(Self {
-            visibility,
             name,
             repr: quote::quote!(#repr).to_string(),
             remote,
@@ -347,10 +345,6 @@ impl<'a> CustomTypeCollector<'a> {
 
         let spec: CustomTypeMacroSpec = syn::parse2(item_macro.mac.tokens.clone())?;
         let name = spec.name.to_string();
-
-        if !matches!(spec.visibility, syn::Visibility::Public(_)) {
-            return Ok(());
-        }
 
         let entry = CustomTypeEntry {
             module_path: self.module_path.iter().map(|id| id.to_string()).collect(),
@@ -741,5 +735,34 @@ fn shape_key_for_segment(segment: &syn::PathSegment) -> String {
         ident.clone()
     } else {
         format!("{}<{}>", ident, args.join(","))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collector_registers_inherited_visibility_custom_type_macro() {
+        let item_macro: syn::ItemMacro = syn::parse_quote! {
+            custom_type!(
+                UtcDateTime,
+                remote = DateTime<Utc>,
+                repr = i64,
+                into_ffi = |dt: &DateTime<Utc>| dt.timestamp_millis(),
+                try_from_ffi = |millis: i64| {
+                    DateTime::from_timestamp_millis(millis).ok_or(CustomTypeConversionError)
+                },
+            );
+        };
+        let mut registry = CustomTypeRegistry::default();
+        CustomTypeCollector {
+            module_path: Vec::new(),
+            custom_types: &mut registry,
+        }
+        .collect_item_macro(&item_macro)
+        .unwrap();
+
+        assert!(registry.lookup(&syn::parse_quote!(DateTime<Utc>)).is_some());
     }
 }
