@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use boltffi_ffi_rules::transport::{ScalarReturnStrategy, ValueReturnStrategy};
+
 use crate::ir::abi::{
     AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiContract, AbiEnum, AbiEnumField,
     AbiEnumPayload, AbiEnumVariant, AbiParam, AbiRecord, AbiStream, CallId, CallMode,
@@ -1851,15 +1853,20 @@ impl<'a> KotlinLowerer<'a> {
     }
 
     fn invoker_suffix_from_return_shape(&self, ret_shape: &ReturnShape) -> String {
-        match &ret_shape.transport {
-            None => "Void".to_string(),
-            Some(Transport::Scalar(origin)) => {
+        match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => "Void".to_string(),
+            ValueReturnStrategy::Scalar(_) => {
+                let Some(Transport::Scalar(origin)) = &ret_shape.transport else {
+                    unreachable!("scalar return strategy requires scalar transport");
+                };
                 self.invoker_suffix_from_primitive(origin.primitive())
             }
-            Some(Transport::Handle { .. }) | Some(Transport::Callback { .. }) => {
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
                 "Handle".to_string()
             }
-            Some(_) => "Wire".to_string(),
+            ValueReturnStrategy::CompositeValue
+            | ValueReturnStrategy::DirectBuffer
+            | ValueReturnStrategy::EncodedBuffer => "Wire".to_string(),
         }
     }
 
@@ -1886,9 +1893,12 @@ impl<'a> KotlinLowerer<'a> {
     ) -> Option<KotlinCallbackReturn> {
         let kotlin_type = self.kotlin_return_type_from_def(returns, ret_shape)?;
         let return_type = self.callback_return_type(returns);
-        let (jni_type, default_value, to_jni) = match &ret_shape.transport {
-            None => return None,
-            Some(Transport::Scalar(origin)) => {
+        let (jni_type, default_value, to_jni) = match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => return None,
+            ValueReturnStrategy::Scalar(_) => {
+                let Some(Transport::Scalar(origin)) = &ret_shape.transport else {
+                    unreachable!("scalar return strategy requires scalar transport");
+                };
                 let abi_type = AbiType::from(origin.primitive());
                 (
                     self.jni_type_for_abi(&abi_type),
@@ -1896,9 +1906,9 @@ impl<'a> KotlinLowerer<'a> {
                     self.callback_return_cast(return_type, &abi_type),
                 )
             }
-            Some(Transport::Span(SpanContent::Encoded(_)))
-            | Some(Transport::Composite(_))
-            | Some(Transport::Span(_)) => {
+            ValueReturnStrategy::CompositeValue
+            | ValueReturnStrategy::DirectBuffer
+            | ValueReturnStrategy::EncodedBuffer => {
                 let to_jni = ret_shape
                     .encode_ops
                     .as_ref()
@@ -1912,20 +1922,31 @@ impl<'a> KotlinLowerer<'a> {
                     .unwrap_or_default();
                 ("ByteArray".to_string(), "byteArrayOf()".to_string(), to_jni)
             }
-            Some(Transport::Handle { class_id, nullable }) => (
-                "Long".to_string(),
-                "0L".to_string(),
-                self.callback_return_handle_cast(class_id, *nullable),
-            ),
-            Some(Transport::Callback {
-                callback_id,
-                nullable,
-                ..
-            }) => (
-                "Long".to_string(),
-                "0L".to_string(),
-                self.callback_return_callback_cast(callback_id, *nullable),
-            ),
+            ValueReturnStrategy::ObjectHandle => {
+                let Some(Transport::Handle { class_id, nullable }) = &ret_shape.transport else {
+                    unreachable!("object handle return strategy requires handle transport");
+                };
+                (
+                    "Long".to_string(),
+                    "0L".to_string(),
+                    self.callback_return_handle_cast(class_id, *nullable),
+                )
+            }
+            ValueReturnStrategy::CallbackHandle => {
+                let Some(Transport::Callback {
+                    callback_id,
+                    nullable,
+                    ..
+                }) = &ret_shape.transport
+                else {
+                    unreachable!("callback handle return strategy requires callback transport");
+                };
+                (
+                    "Long".to_string(),
+                    "0L".to_string(),
+                    self.callback_return_callback_cast(callback_id, *nullable),
+                )
+            }
         };
         let (error_type, error_is_throwable) = match returns {
             ReturnDef::Result { err, .. } => {
@@ -2409,13 +2430,20 @@ impl<'a> KotlinLowerer<'a> {
     }
 
     fn jni_type_for_return_shape(&self, ret_shape: &ReturnShape) -> String {
-        match &ret_shape.transport {
-            None => "Unit".to_string(),
-            Some(Transport::Scalar(origin)) => {
+        match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => "Unit".to_string(),
+            ValueReturnStrategy::Scalar(_) => {
+                let Some(Transport::Scalar(origin)) = &ret_shape.transport else {
+                    unreachable!("scalar return strategy requires scalar transport");
+                };
                 self.jni_type_for_abi(&AbiType::from(origin.primitive()))
             }
-            Some(Transport::Handle { .. }) | Some(Transport::Callback { .. }) => "Long".to_string(),
-            _ => "ByteArray?".to_string(),
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+                "Long".to_string()
+            }
+            ValueReturnStrategy::CompositeValue
+            | ValueReturnStrategy::DirectBuffer
+            | ValueReturnStrategy::EncodedBuffer => "ByteArray?".to_string(),
         }
     }
 
@@ -2795,13 +2823,17 @@ impl<'a> KotlinLowerer<'a> {
     }
 
     fn kotlin_return_meta(&self, ret_shape: &ReturnShape) -> KotlinReturnMeta {
-        match &ret_shape.transport {
-            None => KotlinReturnMeta {
+        match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => KotlinReturnMeta {
                 is_unit: true,
                 is_direct: false,
                 cast: String::new(),
             },
-            Some(Transport::Scalar(origin)) => {
+            ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue)
+            | ValueReturnStrategy::Scalar(ScalarReturnStrategy::CStyleEnumTag) => {
+                let Some(Transport::Scalar(origin)) = &ret_shape.transport else {
+                    unreachable!("scalar return strategy requires scalar transport");
+                };
                 let cast = match origin {
                     ScalarOrigin::CStyleEnum { enum_id, .. } => {
                         let enum_name = NamingConvention::class_name(enum_id.as_str());
@@ -2815,21 +2847,34 @@ impl<'a> KotlinLowerer<'a> {
                     cast,
                 }
             }
-            Some(Transport::Handle { class_id, nullable }) => KotlinReturnMeta {
-                is_unit: false,
-                is_direct: true,
-                cast: self.kotlin_handle_return_cast(class_id, *nullable),
-            },
-            Some(Transport::Callback {
-                callback_id,
-                nullable,
-                ..
-            }) => KotlinReturnMeta {
-                is_unit: false,
-                is_direct: true,
-                cast: self.kotlin_callback_return_cast(callback_id, *nullable),
-            },
-            _ => KotlinReturnMeta {
+            ValueReturnStrategy::ObjectHandle => {
+                let Some(Transport::Handle { class_id, nullable }) = &ret_shape.transport else {
+                    unreachable!("object handle return strategy requires handle transport");
+                };
+                KotlinReturnMeta {
+                    is_unit: false,
+                    is_direct: true,
+                    cast: self.kotlin_handle_return_cast(class_id, *nullable),
+                }
+            }
+            ValueReturnStrategy::CallbackHandle => {
+                let Some(Transport::Callback {
+                    callback_id,
+                    nullable,
+                    ..
+                }) = &ret_shape.transport
+                else {
+                    unreachable!("callback handle return strategy requires callback transport");
+                };
+                KotlinReturnMeta {
+                    is_unit: false,
+                    is_direct: true,
+                    cast: self.kotlin_callback_return_cast(callback_id, *nullable),
+                }
+            }
+            ValueReturnStrategy::CompositeValue
+            | ValueReturnStrategy::DirectBuffer
+            | ValueReturnStrategy::EncodedBuffer => KotlinReturnMeta {
                 is_unit: false,
                 is_direct: false,
                 cast: String::new(),

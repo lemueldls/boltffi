@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use boltffi_ffi_rules::naming;
+use boltffi_ffi_rules::transport::{ScalarReturnStrategy, ValueReturnStrategy};
 
 use crate::ir::abi::{
     AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiContract, AbiParam, AbiStream, AsyncCall,
@@ -1738,11 +1739,20 @@ impl<'a> JniLowerer<'a> {
             .collect::<Vec<_>>()
             .join("");
 
-        let return_sig = match &ret_shape.transport {
-            None => "V".to_string(),
-            Some(Transport::Scalar(origin)) => self.primitive_signature(origin.primitive()),
-            Some(Transport::Handle { .. } | Transport::Callback { .. }) => "J".to_string(),
-            Some(Transport::Span(_) | Transport::Composite(_)) => "[B".to_string(),
+        let return_sig = match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => "V".to_string(),
+            ValueReturnStrategy::Scalar(_) => {
+                let Some(Transport::Scalar(origin)) = &ret_shape.transport else {
+                    unreachable!("scalar return strategy requires scalar transport");
+                };
+                self.primitive_signature(origin.primitive())
+            }
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+                "J".to_string()
+            }
+            ValueReturnStrategy::CompositeValue
+            | ValueReturnStrategy::DirectBuffer
+            | ValueReturnStrategy::EncodedBuffer => "[B".to_string(),
         };
 
         format!("({}){}", params_sig, return_sig)
@@ -1776,9 +1786,12 @@ impl<'a> JniLowerer<'a> {
             .map(|param| param.name.as_str().to_string())
             .unwrap_or_else(|| "out_len".to_string());
 
-        match &ret_shape.transport {
-            None => None,
-            Some(Transport::Scalar(origin)) => {
+        match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => None,
+            ValueReturnStrategy::Scalar(_) => {
+                let Some(Transport::Scalar(origin)) = &ret_shape.transport else {
+                    unreachable!("scalar return strategy requires scalar transport");
+                };
                 let primitive = origin.primitive();
                 Some(JniCallbackReturn {
                     jni_type: primitives::info(primitive).jni_type.to_string(),
@@ -1789,23 +1802,19 @@ impl<'a> JniLowerer<'a> {
                     out_len_name: None,
                 })
             }
-            Some(Transport::Handle { .. }) => Some(JniCallbackReturn {
-                jni_type: "jlong".to_string(),
-                jni_call_type: "Long".to_string(),
-                c_type: "uint8_t*".to_string(),
-                is_wire_encoded: false,
-                out_ptr_name: Some(out_ptr_name),
-                out_len_name: None,
-            }),
-            Some(Transport::Callback { .. }) => Some(JniCallbackReturn {
-                jni_type: "jlong".to_string(),
-                jni_call_type: "Long".to_string(),
-                c_type: "uint8_t*".to_string(),
-                is_wire_encoded: false,
-                out_ptr_name: Some(out_ptr_name),
-                out_len_name: None,
-            }),
-            Some(Transport::Span(_) | Transport::Composite(_)) => Some(JniCallbackReturn {
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+                Some(JniCallbackReturn {
+                    jni_type: "jlong".to_string(),
+                    jni_call_type: "Long".to_string(),
+                    c_type: "uint8_t*".to_string(),
+                    is_wire_encoded: false,
+                    out_ptr_name: Some(out_ptr_name),
+                    out_len_name: None,
+                })
+            }
+            ValueReturnStrategy::CompositeValue
+            | ValueReturnStrategy::DirectBuffer
+            | ValueReturnStrategy::EncodedBuffer => Some(JniCallbackReturn {
                 jni_type: "jbyteArray".to_string(),
                 jni_call_type: "Object".to_string(),
                 c_type: "uint8_t*".to_string(),
@@ -1817,28 +1826,39 @@ impl<'a> JniLowerer<'a> {
     }
 
     fn async_callback_return_c_type(&self, ret_shape: &ReturnShape) -> Option<String> {
-        match &ret_shape.transport {
-            None => None,
-            Some(Transport::Scalar(origin)) => {
+        match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => None,
+            ValueReturnStrategy::Scalar(_) => {
+                let Some(Transport::Scalar(origin)) = &ret_shape.transport else {
+                    unreachable!("scalar return strategy requires scalar transport");
+                };
                 Some(self.c_return_type_for_abi(&AbiType::from(origin.primitive())))
             }
-            Some(Transport::Handle { .. }) | Some(Transport::Callback { .. }) => {
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
                 Some("void*".to_string())
             }
-            Some(_) => Some("wire".to_string()),
+            ValueReturnStrategy::CompositeValue
+            | ValueReturnStrategy::DirectBuffer
+            | ValueReturnStrategy::EncodedBuffer => Some("wire".to_string()),
         }
     }
 
     fn async_invoker_suffix(&self, ret_shape: &ReturnShape) -> String {
-        match &ret_shape.transport {
-            None => "Void".to_string(),
-            Some(Transport::Scalar(origin)) => primitives::info(origin.primitive())
-                .invoker_suffix
-                .to_string(),
-            Some(Transport::Handle { .. }) | Some(Transport::Callback { .. }) => {
+        match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => "Void".to_string(),
+            ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue)
+            | ValueReturnStrategy::Scalar(ScalarReturnStrategy::CStyleEnumTag) => {
+                let Some(Transport::Scalar(origin)) = &ret_shape.transport else {
+                    unreachable!("scalar return strategy requires scalar transport");
+                };
+                primitives::info(origin.primitive()).invoker_suffix.to_string()
+            }
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
                 "Handle".to_string()
             }
-            Some(_) => "Wire".to_string(),
+            ValueReturnStrategy::CompositeValue
+            | ValueReturnStrategy::DirectBuffer
+            | ValueReturnStrategy::EncodedBuffer => "Wire".to_string(),
         }
     }
 

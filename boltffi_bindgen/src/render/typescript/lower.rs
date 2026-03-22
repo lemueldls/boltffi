@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use boltffi_ffi_rules::callback as cb_naming;
 use boltffi_ffi_rules::naming::{self, snake_to_camel as camel_case};
+use boltffi_ffi_rules::transport::{ErrorReturnStrategy, ValueReturnStrategy};
 
 use crate::ir::abi::{
     AbiCall, AbiCallbackInvocation, AbiContract, AbiEnum, AbiEnumPayload, AbiParam, AbiRecord,
@@ -1021,62 +1022,61 @@ impl<'a> TypeScriptLowerer<'a> {
         returns: &ReturnShape,
         execution_model: TsExecutionModel,
     ) -> (Option<String>, TsOutputRoute) {
-        match returns {
-            ReturnShape {
-                transport: None, ..
-            } => (None, TsOutputRoute::void()),
-            ReturnShape {
-                transport: Some(Transport::Scalar(origin)),
-                decode_ops: None,
-                ..
-            } => self.scalar_output_route(AbiType::from(origin.primitive()), execution_model),
-            ReturnShape {
-                transport: Some(Transport::Handle { class_id, nullable }),
-                ..
-            } => self.handle_output_route(class_id.as_str(), *nullable, execution_model),
-            ReturnShape {
-                transport: Some(Transport::Callback { .. }),
-                ..
-            } => match execution_model {
+        match returns.value_return_strategy() {
+            ValueReturnStrategy::Void => (None, TsOutputRoute::void()),
+            ValueReturnStrategy::Scalar(_) => {
+                let Some(Transport::Scalar(origin)) = &returns.transport else {
+                    unreachable!("scalar return strategy requires scalar transport");
+                };
+                self.scalar_output_route(AbiType::from(origin.primitive()), execution_model)
+            }
+            ValueReturnStrategy::ObjectHandle => {
+                let Some(Transport::Handle { class_id, nullable }) = &returns.transport else {
+                    unreachable!("object handle return strategy requires handle transport");
+                };
+                self.handle_output_route(class_id.as_str(), *nullable, execution_model)
+            }
+            ValueReturnStrategy::CallbackHandle => match execution_model {
                 TsExecutionModel::Sync => (Some("unknown".to_string()), TsOutputRoute::void()),
                 TsExecutionModel::Async => (None, TsOutputRoute::void()),
             },
-            ReturnShape {
-                transport: Some(Transport::Span(SpanContent::Scalar(origin))),
-                decode_ops: None,
-                ..
-            } => self.direct_vec_output_route(origin, execution_model),
-            ReturnShape {
-                transport: Some(Transport::Span(SpanContent::Composite(layout))),
-                decode_ops: None,
-                ..
-            } => {
-                let pascal = naming::to_upper_camel_case(layout.record_id.as_str());
-                let ts_type = format!("{pascal}[]");
-                match execution_model {
-                    TsExecutionModel::Sync => {
-                        let decode = emit::composite_slot_decode_expr(layout);
-                        (Some(ts_type), TsOutputRoute::void_slot(decode))
-                    }
-                    TsExecutionModel::Async => {
-                        let decode = emit::composite_buf_decode_expr(layout);
-                        (Some(ts_type), TsOutputRoute::packed(decode))
+            ValueReturnStrategy::DirectBuffer => match &returns.transport {
+                Some(Transport::Span(SpanContent::Scalar(origin))) => {
+                    self.direct_vec_output_route(origin, execution_model)
+                }
+                Some(Transport::Span(SpanContent::Composite(layout))) => {
+                    let pascal = naming::to_upper_camel_case(layout.record_id.as_str());
+                    let ts_type = format!("{pascal}[]");
+                    match execution_model {
+                        TsExecutionModel::Sync => {
+                            let decode = emit::composite_slot_decode_expr(layout);
+                            (Some(ts_type), TsOutputRoute::void_slot(decode))
+                        }
+                        TsExecutionModel::Async => {
+                            let decode = emit::composite_buf_decode_expr(layout);
+                            (Some(ts_type), TsOutputRoute::packed(decode))
+                        }
                     }
                 }
+                _ => (None, TsOutputRoute::void()),
+            },
+            ValueReturnStrategy::CompositeValue | ValueReturnStrategy::EncodedBuffer => {
+                match &returns.decode_ops {
+                    Some(decode_ops) => self.encoded_output_route(decode_ops, execution_model),
+                    None => (None, TsOutputRoute::void()),
+                }
             }
-            ReturnShape {
-                decode_ops: Some(decode_ops),
-                ..
-            } => self.encoded_output_route(decode_ops, execution_model),
-            _ => (None, TsOutputRoute::void()),
         }
     }
 
     fn lower_error(&self, transport: &ErrorTransport) -> (bool, String) {
-        match transport {
-            ErrorTransport::None => (false, String::new()),
-            ErrorTransport::StatusCode => (true, "FfiError".to_string()),
-            ErrorTransport::Encoded { decode_ops, .. } => {
+        match transport.return_strategy() {
+            ErrorReturnStrategy::None => (false, String::new()),
+            ErrorReturnStrategy::StatusCode => (true, "FfiError".to_string()),
+            ErrorReturnStrategy::Encoded => {
+                let ErrorTransport::Encoded { decode_ops, .. } = transport else {
+                    unreachable!("encoded error strategy requires encoded error transport");
+                };
                 let err_type = infer_ts_type_from_read_ops(decode_ops);
                 (true, err_type)
             }
