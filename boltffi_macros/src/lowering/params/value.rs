@@ -629,6 +629,7 @@ impl<'a> SyncValueParamLowerer<'a> {
             ParamTransform::Callback { .. }
             | ParamTransform::BoxedDynTrait(_)
             | ParamTransform::ArcDynTrait(_)
+            | ParamTransform::OptionBoxedDynTrait(_)
             | ParamTransform::OptionArcDynTrait(_)
             | ParamTransform::ImplTrait(_) => {
                 unreachable!("callback-shaped params must be lowered by callback lowerers")
@@ -697,6 +698,7 @@ impl<'a> AsyncValueParamLowerer<'a> {
             | ParamTransform::Callback { .. }
             | ParamTransform::BoxedDynTrait(_)
             | ParamTransform::ArcDynTrait(_)
+            | ParamTransform::OptionBoxedDynTrait(_)
             | ParamTransform::OptionArcDynTrait(_)
             | ParamTransform::ImplTrait(_) => {
                 unreachable!("unsupported async params must be rejected before lowering")

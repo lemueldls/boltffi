@@ -130,6 +130,14 @@ impl<'a> SyncParamLowerer<'a> {
                             TraitObjectParamKind::Arc,
                         )
                     }
+                    ParamTransform::OptionBoxedDynTrait(trait_path) => {
+                        self.callback_param_lowerer.lower_trait_object_param(
+                            &mut acc,
+                            &name,
+                            &trait_path,
+                            TraitObjectParamKind::OptionBoxed,
+                        )
+                    }
                     ParamTransform::OptionArcDynTrait(trait_path) => {
                         self.callback_param_lowerer.lower_trait_object_param(
                             &mut acc,
@@ -213,8 +221,9 @@ impl<'a> AsyncParamLowerer<'a> {
             }
             ParamTransform::BoxedDynTrait(_)
             | ParamTransform::ArcDynTrait(_)
+            | ParamTransform::OptionBoxedDynTrait(_)
             | ParamTransform::OptionArcDynTrait(_) => Some(
-                "boltffi: async exports do not support trait object callback parameters (`Box<dyn Trait>`, `Arc<dyn Trait>`, `Option<Arc<dyn Trait>>`) yet",
+                "boltffi: async exports do not support trait object callback parameters (`Box<dyn Trait>`, `Arc<dyn Trait>`, `Option<Box<dyn Trait>>`, `Option<Arc<dyn Trait>>`) yet",
             ),
             ParamTransform::StrRef
             | ParamTransform::OwnedString
@@ -253,6 +262,7 @@ impl<'a> AsyncParamLowerer<'a> {
                     ParamTransform::Callback { .. }
                     | ParamTransform::BoxedDynTrait(_)
                     | ParamTransform::ArcDynTrait(_)
+                    | ParamTransform::OptionBoxedDynTrait(_)
                     | ParamTransform::OptionArcDynTrait(_)
                     | ParamTransform::SliceMut(_) => {
                         unreachable!("unsupported async params must be rejected during validation");

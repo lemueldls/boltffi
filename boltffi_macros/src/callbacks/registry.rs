@@ -1,4 +1,5 @@
 use proc_macro2::Span;
+use boltffi_ffi_rules::naming;
 use std::cell::RefCell;
 use std::env;
 use std::fs;
@@ -14,6 +15,8 @@ pub struct CallbackTraitRegistry {
 pub struct CallbackTraitResolution {
     pub foreign_path: syn::Path,
     pub is_object_safe: bool,
+    pub supports_local_handle: bool,
+    pub local_handle_path: syn::Path,
 }
 
 #[derive(Clone)]
@@ -21,6 +24,7 @@ struct CallbackTraitEntry {
     module_path: Vec<String>,
     trait_name: String,
     is_object_safe: bool,
+    has_async_methods: bool,
 }
 
 thread_local! {
@@ -56,6 +60,8 @@ impl CallbackTraitRegistry {
             [entry] => Some(CallbackTraitResolution {
                 foreign_path: entry.foreign_path(),
                 is_object_safe: entry.is_object_safe,
+                supports_local_handle: entry.supports_local_handle(),
+                local_handle_path: entry.local_handle_path(),
             }),
             _ => None,
         }
@@ -112,6 +118,12 @@ impl<'a> CallbackTraitCollector<'a> {
             module_path: self.module_path.clone(),
             trait_name: item_trait.ident.to_string(),
             is_object_safe: is_object_safe(item_trait),
+            has_async_methods: item_trait.items.iter().any(|item| {
+                matches!(
+                    item,
+                    syn::TraitItem::Fn(method) if method.sig.asyncness.is_some()
+                )
+            }),
         };
         self.entries.push(entry);
         Ok(())
@@ -224,6 +236,13 @@ fn module_path_for_rs_file(src_root: &Path, file_path: &Path) -> syn::Result<Vec
 }
 
 impl CallbackTraitEntry {
+    fn callback_handle_helper_name(&self) -> String {
+        format!(
+            "__boltffi_local_{}_handle",
+            naming::to_snake_case(&self.trait_name)
+        )
+    }
+
     fn foreign_path(&self) -> syn::Path {
         let mut segments = Vec::with_capacity(self.module_path.len() + 2);
         segments.push("crate".to_string());
@@ -233,5 +252,20 @@ impl CallbackTraitEntry {
             leading_colon: None,
             segments: syn::punctuated::Punctuated::new(),
         })
+    }
+
+    fn local_handle_path(&self) -> syn::Path {
+        let mut segments = Vec::with_capacity(self.module_path.len() + 2);
+        segments.push("crate".to_string());
+        segments.extend(self.module_path.iter().cloned());
+        segments.push(self.callback_handle_helper_name());
+        syn::parse_str(&segments.join("::")).unwrap_or_else(|_| syn::Path {
+            leading_colon: None,
+            segments: syn::punctuated::Punctuated::new(),
+        })
+    }
+
+    fn supports_local_handle(&self) -> bool {
+        self.is_object_safe && !self.has_async_methods
     }
 }
