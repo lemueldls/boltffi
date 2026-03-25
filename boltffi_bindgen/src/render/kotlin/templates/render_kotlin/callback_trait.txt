@@ -49,7 +49,8 @@ object {{ callbacks_object }} {
     @JvmStatic
     fun {{ method.ffi_name }}(handle: Long{% for param in method.params %}, {{ param.name }}: {{ param.jni_type }}{% endfor %}){% match method.return_info %}{% when Some with (ret) %}: {{ ret.jni_type }}{% when None %}{% endmatch %} {
         val impl = {{ handle_map_name }}.get(handle) ?: error("{{ handle_map_name }}: invalid handle $handle")
-        {% match method.return_info %}{% when Some with (ret) %}return impl.{{ method.name }}({% for param in method.params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}){{ ret.to_jni }}{% when None %}impl.{{ method.name }}({% for param in method.params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}){% endmatch %}
+        {% match method.return_info %}{% when Some with (ret) %}{% match ret.error_type %}{% when Some with (err_ty) %}val result: BoltFFIResult<{{ ret.kotlin_type }}, {{ err_ty }}> = try { BoltFFIResult.Ok(impl.{{ method.name }}({% for param in method.params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %})) } catch (e: {{ err_ty }}) { BoltFFIResult.Err(e) }
+        {% match ret.to_jni_result %}{% when Some with (result_encode) %}return result{{ result_encode }}{% when None %}return result{{ ret.to_jni }}{% endmatch %}{% when None %}return impl.{{ method.name }}({% for param in method.params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}){{ ret.to_jni }}{% endmatch %}{% when None %}impl.{{ method.name }}({% for param in method.params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}){% endmatch %}
     }
 {%- endfor %}
 {%- for method in async_methods %}
@@ -70,6 +71,22 @@ object {{ callbacks_object }} {
 {%- endfor %}
 }
 
+{%- if supports_proxy_wrap %}
+
+private class {{ proxy_class_name }}(private val handle: Long) : {{ interface_name }} {
+    @Suppress("deprecation")
+    protected fun finalize() {
+        if (handle != 0L) {
+            Native.{{ proxy_release_name }}(handle)
+        }
+    }
+{%- for method in proxy_methods %}
+
+{{ method|indent(4, true) }}
+{%- endfor %}
+}
+{%- endif %}
+
 object {{ bridge_name }} {
     private val registered = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -81,4 +98,11 @@ object {{ bridge_name }} {
         register()
         return {{ handle_map_name }}.insert(impl)
     }
+
+{%- if supports_proxy_wrap %}
+
+    fun wrap(handle: Long): {{ interface_name }} {
+        return {{ handle_map_name }}.get(handle) ?: {{ proxy_class_name }}(handle)
+    }
+{%- endif %}
 }

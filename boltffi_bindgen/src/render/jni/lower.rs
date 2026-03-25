@@ -22,8 +22,9 @@ use crate::render::kotlin::{NamingConvention as KotlinNamingConvention, primitiv
 
 use super::plan::{
     JniArrayReleaseMode, JniAsyncCallbackInvoker, JniAsyncCallbackMethod, JniAsyncCompleteKind,
-    JniAsyncFunction, JniCallbackCParam, JniCallbackMethod, JniCallbackReturn, JniCallbackTrait,
-    JniClass, JniClosureTrampoline, JniClosureTrampolineReturn, JniFunction, JniFunctionReturn,
+    JniAsyncFunction, JniCallbackCParam, JniCallbackMethod, JniCallbackProxyAsyncMethod,
+    JniCallbackProxySyncMethod, JniCallbackReturn, JniCallbackTrait, JniClass,
+    JniClosureTrampoline, JniClosureTrampolineReturn, JniFunction, JniFunctionReturn,
     JniInvokerResult, JniModule, JniOptionInnerKind, JniOptionView, JniParam, JniParamKind,
     JniPrimitiveArrayElementsKind, JniResultVariant, JniResultView, JniStream, JniWireCtor,
     JniWireFunction, JniWireMethod, TrampolineReturnStrategy,
@@ -34,7 +35,7 @@ struct JniReturnMeta {
     is_direct: bool,
     jni_return_type: String,
     jni_c_return_type: String,
-    jni_result_cast: String,
+    jni_return_expr: String,
 }
 
 /// Controls how JNI string parameters cross the FFI boundary.
@@ -354,7 +355,7 @@ impl<'a> JniLowerer<'a> {
             .collect();
 
         let jni_params = self.format_jni_params(&params);
-        let return_meta = self.return_meta(&func.returns);
+        let return_meta = self.return_meta_for_shape(&func.returns, Some(&abi_call.returns));
         let return_composite_c_type = if matches!(func.returns, ReturnDef::Result { .. }) {
             None
         } else {
@@ -371,7 +372,7 @@ impl<'a> JniLowerer<'a> {
             return_composite_c_type,
             jni_return_type: return_meta.jni_return_type,
             jni_c_return_type: return_meta.jni_c_return_type,
-            jni_result_cast: return_meta.jni_result_cast,
+            jni_return_expr: return_meta.jni_return_expr,
         }
     }
 
@@ -415,7 +416,7 @@ impl<'a> JniLowerer<'a> {
                     return_composite_c_type,
                     jni_return_type: return_meta.jni_return_type,
                     jni_c_return_type: return_meta.jni_c_return_type,
-                    jni_result_cast: return_meta.jni_result_cast,
+                    jni_return_expr: return_meta.jni_return_expr,
                 }
             })
             .collect()
@@ -462,7 +463,7 @@ impl<'a> JniLowerer<'a> {
                 is_direct: false,
                 jni_return_type: "void".to_string(),
                 jni_c_return_type: String::new(),
-                jni_result_cast: String::new(),
+                jni_return_expr: String::new(),
             },
             Some(Transport::Scalar(origin)) => {
                 let prim = origin.primitive();
@@ -471,7 +472,7 @@ impl<'a> JniLowerer<'a> {
                     is_direct: true,
                     jni_return_type: self.primitive_return_jni_type(prim),
                     jni_c_return_type: self.primitive_c_type(prim),
-                    jni_result_cast: self.primitive_return_cast(prim),
+                    jni_return_expr: format!("{}_result", self.primitive_return_cast(prim)),
                 }
             }
             _ => JniReturnMeta {
@@ -479,7 +480,7 @@ impl<'a> JniLowerer<'a> {
                 is_direct: false,
                 jni_return_type: "jbyteArray".to_string(),
                 jni_c_return_type: String::new(),
-                jni_result_cast: String::new(),
+                jni_return_expr: String::new(),
             },
         }
     }
@@ -607,7 +608,7 @@ impl<'a> JniLowerer<'a> {
             .collect();
 
         let jni_params = self.format_jni_params(&params);
-        let return_meta = self.return_meta(&method.returns);
+        let return_meta = self.return_meta_for_shape(&method.returns, Some(&abi_call.returns));
         let return_composite_c_type = if matches!(method.returns, ReturnDef::Result { .. }) {
             None
         } else {
@@ -624,7 +625,7 @@ impl<'a> JniLowerer<'a> {
             return_composite_c_type,
             jni_return_type: return_meta.jni_return_type,
             jni_c_return_type: return_meta.jni_c_return_type,
-            jni_result_cast: return_meta.jni_result_cast,
+            jni_return_expr: return_meta.jni_return_expr,
             include_handle: !matches!(method.receiver, Receiver::Static),
         }
     }
@@ -678,7 +679,7 @@ impl<'a> JniLowerer<'a> {
 
         let jni_params = self.format_jni_params(&params);
 
-        let return_meta = self.return_meta(&func.returns);
+        let return_meta = self.return_meta_for_shape(&func.returns, Some(&abi_call.returns));
         let complete_kind = self.async_complete_kind(&return_meta);
 
         JniAsyncFunction {
@@ -718,7 +719,7 @@ impl<'a> JniLowerer<'a> {
 
         let jni_params = self.format_jni_params(&params);
 
-        let return_meta = self.return_meta(&method.returns);
+        let return_meta = self.return_meta_for_shape(&method.returns, Some(&abi_call.returns));
         let complete_kind = self.async_complete_kind(&return_meta);
 
         JniAsyncFunction {
@@ -988,8 +989,10 @@ impl<'a> JniLowerer<'a> {
     }
 
     fn composite_return_c_type(&self, returns: &ReturnShape) -> Option<String> {
-        match &returns.transport {
-            Some(Transport::Composite(layout)) => Some(format!("___{}", layout.record_id.as_str())),
+        match (returns.value_return_strategy(), &returns.transport) {
+            (ValueReturnStrategy::CompositeValue, Some(Transport::Composite(layout))) => {
+                Some(format!("___{}", layout.record_id.as_str()))
+            }
             _ => None,
         }
     }
@@ -1238,20 +1241,32 @@ impl<'a> JniLowerer<'a> {
     }
 
     fn return_meta(&self, returns: &ReturnDef) -> JniReturnMeta {
+        self.return_meta_for_shape(returns, None)
+    }
+
+    fn return_meta_for_shape(
+        &self,
+        returns: &ReturnDef,
+        ret_shape: Option<&ReturnShape>,
+    ) -> JniReturnMeta {
+        if let Some(return_meta) = ret_shape.and_then(Self::callback_handle_return_meta) {
+            return return_meta;
+        }
+
         match returns {
             ReturnDef::Void => JniReturnMeta {
                 is_unit: true,
                 is_direct: false,
                 jni_return_type: "void".to_string(),
                 jni_c_return_type: String::new(),
-                jni_result_cast: String::new(),
+                jni_return_expr: String::new(),
             },
             ReturnDef::Result { .. } => JniReturnMeta {
                 is_unit: false,
                 is_direct: false,
                 jni_return_type: "jbyteArray".to_string(),
                 jni_c_return_type: String::new(),
-                jni_result_cast: String::new(),
+                jni_return_expr: String::new(),
             },
             ReturnDef::Value(ty) => match ty {
                 TypeExpr::Void => JniReturnMeta {
@@ -1259,14 +1274,14 @@ impl<'a> JniLowerer<'a> {
                     is_direct: false,
                     jni_return_type: "void".to_string(),
                     jni_c_return_type: String::new(),
-                    jni_result_cast: String::new(),
+                    jni_return_expr: String::new(),
                 },
                 TypeExpr::Primitive(p) => JniReturnMeta {
                     is_unit: false,
                     is_direct: true,
                     jni_return_type: self.primitive_return_jni_type(*p),
                     jni_c_return_type: self.primitive_c_type(*p),
-                    jni_result_cast: self.primitive_return_cast(*p),
+                    jni_return_expr: format!("{}_result", self.primitive_return_cast(*p)),
                 },
                 TypeExpr::Enum(id)
                     if self
@@ -1289,7 +1304,10 @@ impl<'a> JniLowerer<'a> {
                         is_direct: true,
                         jni_return_type: self.primitive_return_jni_type(tag_type),
                         jni_c_return_type: self.primitive_c_type(tag_type),
-                        jni_result_cast: self.primitive_return_cast(tag_type),
+                        jni_return_expr: format!(
+                            "{}_result",
+                            self.primitive_return_cast(tag_type)
+                        ),
                     }
                 }
                 TypeExpr::String
@@ -1304,17 +1322,31 @@ impl<'a> JniLowerer<'a> {
                     is_direct: false,
                     jni_return_type: "jbyteArray".to_string(),
                     jni_c_return_type: String::new(),
-                    jni_result_cast: String::new(),
+                    jni_return_expr: String::new(),
                 },
                 _ => JniReturnMeta {
                     is_unit: false,
                     is_direct: true,
                     jni_return_type: "jlong".to_string(),
                     jni_c_return_type: "int64_t".to_string(),
-                    jni_result_cast: "".to_string(),
+                    jni_return_expr: "_result".to_string(),
                 },
             },
         }
+    }
+
+    fn callback_handle_return_meta(ret_shape: &ReturnShape) -> Option<JniReturnMeta> {
+        matches!(
+            ret_shape.value_return_strategy(),
+            ValueReturnStrategy::CallbackHandle
+        )
+        .then_some(JniReturnMeta {
+            is_unit: false,
+            is_direct: true,
+            jni_return_type: "jlong".to_string(),
+            jni_c_return_type: "BoltFFICallbackHandle".to_string(),
+            jni_return_expr: "boltffi_jvm_callback_handle_new_owned(env, _result)".to_string(),
+        })
     }
 
     fn async_complete_kind(&self, return_meta: &JniReturnMeta) -> JniAsyncCompleteKind {
@@ -1324,6 +1356,7 @@ impl<'a> JniLowerer<'a> {
             JniAsyncCompleteKind::Direct {
                 jni_return: return_meta.jni_return_type.clone(),
                 c_type: return_meta.jni_c_return_type.clone(),
+                return_expr: return_meta.jni_return_expr.clone(),
             }
         } else {
             JniAsyncCompleteKind::WireEncoded
@@ -1558,6 +1591,8 @@ impl<'a> JniLowerer<'a> {
     ) -> JniCallbackTrait {
         let trait_name = self.jvm_callback_interface_name(callback);
         let callbacks_class = self.jvm_callback_bridge_name(callback);
+        let supports_callback_proxy_sync_wrap = self.supports_callback_proxy_sync_wrap();
+        let supports_callback_proxy_async_wrap = self.supports_callback_proxy_async_wrap();
         let abi_methods: HashMap<_, _> = abi_callback
             .methods
             .iter()
@@ -1575,6 +1610,26 @@ impl<'a> JniLowerer<'a> {
             })
             .collect();
 
+        let proxy_sync_methods = if supports_callback_proxy_sync_wrap {
+            callback
+                .methods
+                .iter()
+                .filter(|method| !method.is_async)
+                .filter(|method| self.callback_method_supported(callback, method))
+                .filter_map(|method| {
+                    let abi_method = abi_methods.get(&method.id)?;
+                    Some(self.lower_callback_proxy_sync_method(
+                        callback,
+                        method,
+                        abi_method,
+                        jni_prefix,
+                    ))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let async_methods = callback
             .methods
             .iter()
@@ -1586,13 +1641,144 @@ impl<'a> JniLowerer<'a> {
             })
             .collect();
 
+        let proxy_async_methods = if supports_callback_proxy_async_wrap {
+            callback
+                .methods
+                .iter()
+                .filter(|method| method.is_async)
+                .filter(|method| self.callback_method_supported(callback, method))
+                .filter_map(|method| {
+                    let abi_method = abi_methods.get(&method.id)?;
+                    Some(self.lower_callback_proxy_async_method(
+                        callback,
+                        method,
+                        abi_method,
+                        jni_prefix,
+                    ))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let trait_name_for_native = self.jvm_callback_interface_name(callback);
+        let proxy_clone_name = format!("boltffiCallback{}Clone", trait_name_for_native);
+        let proxy_release_name = format!("boltffiCallback{}Release", trait_name_for_native);
+
         JniCallbackTrait {
             trait_name,
             vtable_type: abi_callback.vtable_type.as_str().to_string(),
             register_fn: abi_callback.register_fn.as_str().to_string(),
+            create_fn: naming::callback_create_fn(callback.id.as_str()).into_string(),
             callbacks_class: format!("{}/{}", package_path, callbacks_class),
+            proxy_clone_jni_name: format!(
+                "Java_{}_Native_{}",
+                jni_prefix,
+                proxy_clone_name.replace('_', "_1")
+            ),
+            proxy_release_jni_name: format!(
+                "Java_{}_Native_{}",
+                jni_prefix,
+                proxy_release_name.replace('_', "_1")
+            ),
+            proxy_clone_name,
+            proxy_release_name,
             sync_methods,
             async_methods,
+            proxy_sync_methods,
+            proxy_async_methods,
+        }
+    }
+
+    fn supports_callback_proxy_sync_wrap(&self) -> bool {
+        matches!(
+            self.jvm_binding_style,
+            JvmBindingStyle::Java | JvmBindingStyle::Kotlin
+        )
+    }
+
+    fn supports_callback_proxy_async_wrap(&self) -> bool {
+        matches!(self.jvm_binding_style, JvmBindingStyle::Java)
+    }
+
+    fn lower_callback_proxy_sync_method(
+        &self,
+        callback: &CallbackTraitDef,
+        method: &CallbackMethodDef,
+        abi_method: &AbiCallbackMethod,
+        jni_prefix: &str,
+    ) -> JniCallbackProxySyncMethod {
+        let abi_inputs = self.callback_input_abi_params(&method.params, abi_method);
+        let params = method
+            .params
+            .iter()
+            .zip(abi_inputs.iter())
+            .map(|(param, abi_param)| self.lower_param(param, abi_param))
+            .collect::<Vec<_>>();
+        let native_name = format!(
+            "boltffiCallback{}{}",
+            JavaNamingConvention::class_name(callback.id.as_str()),
+            JavaNamingConvention::class_name(method.id.as_str())
+        );
+        let return_meta = self.return_meta_for_shape(&method.returns, Some(&abi_method.returns));
+
+        JniCallbackProxySyncMethod {
+            vtable_field: abi_method.vtable_field.as_str().to_string(),
+            native_name: native_name.clone(),
+            jni_name: format!("Java_{}_Native_{}", jni_prefix, native_name.replace('_', "_1")),
+            jni_params: self.format_jni_params(&params),
+            params,
+            return_is_unit: return_meta.is_unit,
+            return_is_direct: return_meta.is_direct,
+            return_composite_c_type: None,
+            jni_return_type: return_meta.jni_return_type,
+            jni_c_return_type: return_meta.jni_c_return_type,
+            jni_return_expr: return_meta.jni_return_expr,
+        }
+    }
+
+    fn lower_callback_proxy_async_method(
+        &self,
+        callback: &CallbackTraitDef,
+        method: &CallbackMethodDef,
+        abi_method: &AbiCallbackMethod,
+        jni_prefix: &str,
+    ) -> JniCallbackProxyAsyncMethod {
+        let abi_inputs = self.callback_input_abi_params(&method.params, abi_method);
+        let params = method
+            .params
+            .iter()
+            .zip(abi_inputs.iter())
+            .map(|(param, abi_param)| self.lower_param(param, abi_param))
+            .collect::<Vec<_>>();
+        let native_name = format!(
+            "boltffiCallback{}{}",
+            JavaNamingConvention::class_name(callback.id.as_str()),
+            JavaNamingConvention::class_name(method.id.as_str())
+        );
+        let method_name = JavaNamingConvention::class_name(method.id.as_str());
+        let callback_trait_name = self.jvm_callback_interface_name(callback);
+
+        JniCallbackProxyAsyncMethod {
+            vtable_field: abi_method.vtable_field.as_str().to_string(),
+            native_name: native_name.clone(),
+            jni_name: format!("Java_{}_Native_{}", jni_prefix, native_name.replace('_', "_1")),
+            jni_params: format!("{}{}", self.format_jni_params(&params), ", jlong callbackData"),
+            params,
+            return_c_type: self.async_callback_return_c_type(&abi_method.returns),
+            success_method_name: format!("complete{}", method_name),
+            success_method_id: format!(
+                "g_{}_{}_success_method",
+                callback_trait_name,
+                abi_method.vtable_field.as_str()
+            ),
+            success_signature: self.callback_proxy_success_signature(&abi_method.returns),
+            failure_method_name: format!("fail{}", method_name),
+            failure_method_id: format!(
+                "g_{}_{}_failure_method",
+                callback_trait_name,
+                abi_method.vtable_field.as_str()
+            ),
         }
     }
 
@@ -1810,6 +1996,26 @@ impl<'a> JniLowerer<'a> {
         format!("({})V", params_sig)
     }
 
+    fn callback_proxy_success_signature(&self, ret_shape: &ReturnShape) -> String {
+        let return_signature = match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => "V".to_string(),
+            ValueReturnStrategy::Scalar(_) => {
+                let Some(Transport::Scalar(origin)) = &ret_shape.transport else {
+                    unreachable!("scalar return strategy requires scalar transport");
+                };
+                self.primitive_signature(origin.primitive())
+            }
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+                "J".to_string()
+            }
+            ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
+                "[B".to_string()
+            }
+        };
+
+        format!("(J{})V", return_signature)
+    }
+
     fn callback_input_abi_params<'b>(
         &'b self,
         params: &'b [ParamDef],
@@ -1860,16 +2066,22 @@ impl<'a> JniLowerer<'a> {
                     out_len_name: None,
                 })
             }
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
-                Some(JniCallbackReturn {
-                    jni_type: "jlong".to_string(),
-                    jni_call_type: "Long".to_string(),
-                    c_type: "uint8_t*".to_string(),
-                    is_wire_encoded: false,
-                    out_ptr_name: Some(out_ptr_name),
-                    out_len_name: None,
-                })
-            }
+            ValueReturnStrategy::ObjectHandle => Some(JniCallbackReturn {
+                jni_type: "jlong".to_string(),
+                jni_call_type: "Long".to_string(),
+                c_type: "uint8_t*".to_string(),
+                is_wire_encoded: false,
+                out_ptr_name: Some(out_ptr_name),
+                out_len_name: None,
+            }),
+            ValueReturnStrategy::CallbackHandle => Some(JniCallbackReturn {
+                jni_type: "jlong".to_string(),
+                jni_call_type: "Long".to_string(),
+                c_type: "BoltFFICallbackHandle".to_string(),
+                is_wire_encoded: false,
+                out_ptr_name: Some(out_ptr_name),
+                out_len_name: None,
+            }),
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 Some(JniCallbackReturn {
                     jni_type: "jbyteArray".to_string(),
@@ -1892,9 +2104,8 @@ impl<'a> JniLowerer<'a> {
                 };
                 Some(self.c_return_type_for_abi(&AbiType::from(origin.primitive())))
             }
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
-                Some("void*".to_string())
-            }
+            ValueReturnStrategy::ObjectHandle => Some("void*".to_string()),
+            ValueReturnStrategy::CallbackHandle => Some("BoltFFICallbackHandle".to_string()),
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 Some("wire".to_string())
             }
@@ -1913,8 +2124,15 @@ impl<'a> JniLowerer<'a> {
                     .invoker_suffix
                     .to_string()
             }
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
-                "Handle".to_string()
+            ValueReturnStrategy::ObjectHandle => "Handle".to_string(),
+            ValueReturnStrategy::CallbackHandle => {
+                let Some(Transport::Callback { callback_id, .. }) = &ret_shape.transport else {
+                    unreachable!("callback handle return must use callback transport");
+                };
+                format!(
+                    "CallbackHandle{}",
+                    JavaNamingConvention::class_name(callback_id.as_str())
+                )
             }
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 "Wire".to_string()
@@ -1928,7 +2146,7 @@ impl<'a> JniLowerer<'a> {
             AbiType::I8 | AbiType::U8 => "B".to_string(),
             AbiType::I16 | AbiType::U16 => "S".to_string(),
             AbiType::I32 | AbiType::U32 => "I".to_string(),
-            AbiType::I64 | AbiType::U64 => "J".to_string(),
+            AbiType::I64 | AbiType::U64 | AbiType::ISize | AbiType::USize => "J".to_string(),
             AbiType::F32 => "F".to_string(),
             AbiType::F64 => "D".to_string(),
             _ => "Ljava/nio/ByteBuffer;".to_string(),
@@ -2137,42 +2355,64 @@ impl<'a> JniLowerer<'a> {
             "Wire" => Some(JniInvokerResult {
                 c_type: "wire".to_string(),
                 jni_type: "jbyteArray".to_string(),
+                create_fn: None,
             }),
             "Bool" => Some(JniInvokerResult {
                 c_type: "bool".to_string(),
                 jni_type: "jboolean".to_string(),
+                create_fn: None,
             }),
             "I8" => Some(JniInvokerResult {
                 c_type: "int8_t".to_string(),
                 jni_type: "jbyte".to_string(),
+                create_fn: None,
             }),
             "I16" => Some(JniInvokerResult {
                 c_type: "int16_t".to_string(),
                 jni_type: "jshort".to_string(),
+                create_fn: None,
             }),
             "I32" => Some(JniInvokerResult {
                 c_type: "int32_t".to_string(),
                 jni_type: "jint".to_string(),
+                create_fn: None,
             }),
             "I64" => Some(JniInvokerResult {
                 c_type: "int64_t".to_string(),
                 jni_type: "jlong".to_string(),
+                create_fn: None,
             }),
             "Handle" => Some(JniInvokerResult {
                 c_type: "void*".to_string(),
                 jni_type: "jlong".to_string(),
+                create_fn: None,
             }),
             "F32" => Some(JniInvokerResult {
                 c_type: "float".to_string(),
                 jni_type: "jfloat".to_string(),
+                create_fn: None,
             }),
             "F64" => Some(JniInvokerResult {
                 c_type: "double".to_string(),
                 jni_type: "jdouble".to_string(),
+                create_fn: None,
             }),
+            callback_suffix if callback_suffix.starts_with("CallbackHandle") => {
+                let callback_name = callback_suffix.trim_start_matches("CallbackHandle");
+                Some(JniInvokerResult {
+                    c_type: "BoltFFICallbackHandle".to_string(),
+                    jni_type: "jlong".to_string(),
+                    create_fn: Some(format!(
+                        "{}_create_{}_handle",
+                        naming::ffi_prefix(),
+                        naming::to_snake_case(callback_name)
+                    )),
+                })
+            }
             _ => Some(JniInvokerResult {
                 c_type: "void*".to_string(),
                 jni_type: "jobject".to_string(),
+                create_fn: None,
             }),
         }
     }
@@ -2254,6 +2494,7 @@ impl<'a> JniLowerer<'a> {
         let callbacks_class = self.jvm_callback_bridge_name(callback);
         let callbacks_class_jni_path =
             format!("{}/{}", package_path.replace('.', "/"), callbacks_class);
+        let handle_create_fn = naming::callback_create_fn(callback.id.as_str()).into_string();
         let abi_callback = self
             .abi
             .callbacks
@@ -2294,6 +2535,16 @@ impl<'a> JniLowerer<'a> {
             .map(|param| param.jni_arg.clone())
             .collect::<Vec<_>>()
             .join(", ");
+        let proxy_abi_inputs = self.callback_input_abi_params(&method.params, abi_method);
+        let proxy_params = method
+            .params
+            .iter()
+            .zip(proxy_abi_inputs.iter())
+            .map(|(param, abi_param)| self.lower_param(param, abi_param))
+            .collect::<Vec<_>>();
+        let proxy_native_name = format!("boltffi{}", callbacks_class);
+        let proxy_return_meta =
+            self.return_meta_for_shape(&method.returns, Some(&abi_method.returns));
         let return_info = match &method.returns {
             ReturnDef::Void => None,
             ReturnDef::Value(_) | ReturnDef::Result { .. } => {
@@ -2304,7 +2555,39 @@ impl<'a> JniLowerer<'a> {
         JniClosureTrampoline {
             trampoline_name: format!("trampoline_{}", signature_id),
             signature_id,
+            vtable_type: abi_callback.vtable_type.as_str().to_string(),
+            handle_create_fn,
             callbacks_class_jni_path,
+            supports_proxy_wrap: false,
+            proxy_clone_name: format!("boltffi{}Clone", callbacks_class),
+            proxy_clone_jni_name: format!(
+                "Java_{}_Native_{}",
+                self.jni_prefix(),
+                format!("boltffi{}Clone", callbacks_class).replace('_', "_1")
+            ),
+            proxy_release_name: format!("boltffi{}Release", callbacks_class),
+            proxy_release_jni_name: format!(
+                "Java_{}_Native_{}",
+                self.jni_prefix(),
+                format!("boltffi{}Release", callbacks_class).replace('_', "_1")
+            ),
+            proxy_sync_method: JniCallbackProxySyncMethod {
+                vtable_field: abi_method.vtable_field.as_str().to_string(),
+                native_name: proxy_native_name.clone(),
+                jni_name: format!(
+                    "Java_{}_Native_{}",
+                    self.jni_prefix(),
+                    proxy_native_name.replace('_', "_1")
+                ),
+                jni_params: self.format_jni_params(&proxy_params),
+                params: proxy_params,
+                return_is_unit: proxy_return_meta.is_unit,
+                return_is_direct: proxy_return_meta.is_direct,
+                return_composite_c_type: None,
+                jni_return_type: proxy_return_meta.jni_return_type,
+                jni_c_return_type: proxy_return_meta.jni_c_return_type,
+                jni_return_expr: proxy_return_meta.jni_return_expr,
+            },
             c_params,
             setup_lines,
             cleanup_lines,
@@ -2603,6 +2886,33 @@ mod tests {
     }
 
     #[test]
+    fn composite_return_c_type_uses_direct_record_layout_only() {
+        let contract = contract_with_blittable_point();
+        let lowerer = lowerer_from_contract(&contract);
+        let ret_shape = closure_return_shape_from_contract(
+            contract_with_blittable_point(),
+            ReturnDef::Value(TypeExpr::Record("Point".into())),
+        );
+
+        assert_eq!(
+            lowerer.composite_return_c_type(&ret_shape),
+            Some("___Point".to_string())
+        );
+    }
+
+    #[test]
+    fn composite_return_c_type_ignores_wire_encoded_record_returns() {
+        let contract = contract_with_non_blittable_record();
+        let lowerer = lowerer_from_contract(&contract);
+        let ret_shape = closure_return_shape_from_contract(
+            contract_with_non_blittable_record(),
+            ReturnDef::Value(TypeExpr::Record("Message".into())),
+        );
+
+        assert_eq!(lowerer.composite_return_c_type(&ret_shape), None);
+    }
+
+    #[test]
     fn closure_return_bytes_is_wire_encoded() {
         let lowerer = test_lowerer();
         let ret = lowerer.closure_return_info(&closure_return_shape_from_contract(
@@ -2781,6 +3091,61 @@ mod tests {
         }
     }
 
+    fn contract_with_point_transformer_callback(kind: CallbackKind, id: &str) -> FfiContract {
+        let mut contract = contract_with_blittable_point();
+        let method_id = match kind {
+            CallbackKind::Trait => "transform",
+            CallbackKind::Closure => "call",
+        };
+        contract.catalog.insert_callback(CallbackTraitDef {
+            id: CallbackId::new(id),
+            methods: vec![CallbackMethodDef {
+                id: MethodId::new(method_id),
+                params: vec![ParamDef {
+                    name: ParamName::new("point"),
+                    type_expr: TypeExpr::Record(RecordId::new("Point")),
+                    passing: ParamPassing::Value,
+                    doc: None,
+                }],
+                returns: ReturnDef::Value(TypeExpr::Record(RecordId::new("Point"))),
+                is_async: false,
+                doc: None,
+            }],
+            kind,
+            doc: None,
+        });
+        contract
+    }
+
+    fn contract_with_async_fetcher_callback() -> FfiContract {
+        let mut contract = FfiContract {
+            package: PackageInfo {
+                name: "test".to_string(),
+                version: None,
+            },
+            catalog: TypeCatalog::default(),
+            functions: vec![],
+        };
+        contract.catalog.insert_callback(CallbackTraitDef {
+            id: CallbackId::new("AsyncFetcher"),
+            methods: vec![CallbackMethodDef {
+                id: MethodId::new("fetch_value"),
+                params: vec![ParamDef {
+                    name: ParamName::new("key"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::I32),
+                    passing: ParamPassing::Value,
+                    doc: None,
+                }],
+                returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+                is_async: true,
+                doc: None,
+            }],
+            kind: CallbackKind::Trait,
+            doc: None,
+        });
+        contract
+    }
+
     fn lowerer_from_contract(contract: &FfiContract) -> JniLowerer<'_> {
         let abi = IrLowerer::new(contract).to_abi_contract();
         let abi_leaked: &'static AbiContract = Box::leak(Box::new(abi));
@@ -2889,6 +3254,73 @@ mod tests {
             trampoline.callbacks_class_jni_path,
             "com/test/ClosureI32_I32ToI32Callbacks"
         );
+    }
+
+    #[test]
+    fn callback_proxy_record_return_uses_wire_buffer_path() {
+        let contract = contract_with_point_transformer_callback(CallbackKind::Trait, "PointTransformer");
+        let lowerer = lowerer_from_contract_with_binding_style(&contract, JvmBindingStyle::Java);
+        let module = lowerer.lower();
+        let callback = module
+            .callback_traits
+            .iter()
+            .find(|callback| callback.trait_name == "PointTransformer")
+            .expect("expected point transformer callback");
+        let proxy_method = callback
+            .proxy_sync_methods
+            .iter()
+            .find(|method| method.vtable_field == "transform")
+            .expect("expected proxy transform method");
+
+        assert!(!proxy_method.return_is_direct);
+        assert!(proxy_method.return_composite_c_type.is_none());
+        assert_eq!(proxy_method.jni_return_type, "jbyteArray");
+    }
+
+    #[test]
+    fn closure_proxy_record_return_uses_wire_buffer_path() {
+        let contract =
+            contract_with_point_transformer_callback(CallbackKind::Closure, "__Closure_PointToPoint");
+        let lowerer = lowerer_from_contract_with_binding_style(&contract, JvmBindingStyle::Java);
+        let callback = contract
+            .catalog
+            .resolve_callback(&CallbackId::new("__Closure_PointToPoint"))
+            .expect("expected point closure");
+        let trampoline = lowerer.lower_closure_trampoline(callback, "com/test");
+
+        assert!(!trampoline.proxy_sync_method.return_is_direct);
+        assert!(trampoline.proxy_sync_method.return_composite_c_type.is_none());
+        assert_eq!(trampoline.proxy_sync_method.jni_return_type, "jbyteArray");
+    }
+
+    #[test]
+    fn kotlin_binding_style_only_generates_sync_callback_proxy_methods() {
+        let sync_contract =
+            contract_with_point_transformer_callback(CallbackKind::Trait, "PointTransformer");
+        let sync_lowerer =
+            lowerer_from_contract_with_binding_style(&sync_contract, JvmBindingStyle::Kotlin);
+        let sync_module = sync_lowerer.lower();
+        let sync_callback = sync_module
+            .callback_traits
+            .iter()
+            .find(|callback| callback.trait_name == "PointTransformer")
+            .expect("expected point transformer callback");
+
+        assert!(!sync_callback.proxy_sync_methods.is_empty());
+        assert!(sync_callback.proxy_async_methods.is_empty());
+
+        let async_contract = contract_with_async_fetcher_callback();
+        let async_lowerer =
+            lowerer_from_contract_with_binding_style(&async_contract, JvmBindingStyle::Kotlin);
+        let async_module = async_lowerer.lower();
+        let async_callback = async_module
+            .callback_traits
+            .iter()
+            .find(|callback| callback.trait_name == "AsyncFetcher")
+            .expect("expected async fetcher callback");
+
+        assert!(async_callback.proxy_sync_methods.is_empty());
+        assert!(async_callback.proxy_async_methods.is_empty());
     }
 
     #[test]
@@ -3007,5 +3439,26 @@ mod tests {
         let meta = lowerer.return_meta(&ReturnDef::Value(TypeExpr::Enum("Shape".into())));
         assert!(!meta.is_direct);
         assert_eq!(meta.jni_return_type, "jbyteArray");
+    }
+
+    #[test]
+    fn return_meta_callback_handle_boxes_jvm_handle() {
+        let lowerer = test_lowerer();
+        let ret_shape = closure_return_shape_from_contract(
+            empty_contract(),
+            ReturnDef::Value(TypeExpr::Callback("Listener".into())),
+        );
+        let meta = lowerer.return_meta_for_shape(
+            &ReturnDef::Value(TypeExpr::Callback("Listener".into())),
+            Some(&ret_shape),
+        );
+
+        assert!(meta.is_direct);
+        assert_eq!(meta.jni_return_type, "jlong");
+        assert_eq!(meta.jni_c_return_type, "BoltFFICallbackHandle");
+        assert_eq!(
+            meta.jni_return_expr,
+            "boltffi_jvm_callback_handle_new_owned(env, _result)"
+        );
     }
 }

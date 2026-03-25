@@ -40,7 +40,7 @@ struct AbiCallbackParamPlan {
 
 #[derive(Debug, Clone)]
 enum AbiCallbackParamStrategy {
-    Scalar(PrimitiveType),
+    Scalar(ScalarOrigin),
     Direct(CompositeLayout),
     Encoded { codec: CodecPlan },
 }
@@ -1476,11 +1476,11 @@ impl<'c> Lowerer<'c> {
         let len_name = ParamName::new(format!("{}_len", param.name.as_str()));
 
         match param.strategy {
-            AbiCallbackParamStrategy::Scalar(p) => vec![AbiParam {
+            AbiCallbackParamStrategy::Scalar(origin) => vec![AbiParam {
                 name: param.name,
-                abi_type: AbiType::from(p),
+                abi_type: AbiType::from(origin.primitive()),
                 role: ParamRole::Input {
-                    transport: Transport::Scalar(ScalarOrigin::Primitive(p)),
+                    transport: Transport::Scalar(origin),
                     mutability: Mutability::Shared,
                     len_param: None,
                     decode_ops: None,
@@ -1938,8 +1938,8 @@ impl<'c> Lowerer<'c> {
 
 impl<'c> Lowerer<'c> {
     fn lower_callback_param(&self, param: &ParamDef) -> AbiCallbackParamPlan {
-        let strategy = match &param.type_expr {
-            TypeExpr::Primitive(p) => AbiCallbackParamStrategy::Scalar(*p),
+        let strategy = match self.classify_type(&param.type_expr) {
+            Transport::Scalar(origin) => AbiCallbackParamStrategy::Scalar(origin),
             _ => AbiCallbackParamStrategy::Encoded {
                 codec: self.build_codec(&param.type_expr),
             },
@@ -4184,5 +4184,50 @@ mod tests {
             strategy,
             Transport::Span(SpanContent::Encoded(CodecPlan::Vec { .. }))
         ));
+    }
+
+    #[test]
+    fn callback_param_c_style_enum_uses_scalar_transport() {
+        let mut contract = test_contract();
+        contract.catalog.insert_enum(c_style_enum_with_method());
+        contract.catalog.insert_callback(CallbackTraitDef {
+            id: CallbackId::new("DirectionMapper"),
+            methods: vec![CallbackMethodDef {
+                id: MethodId::new("map_direction"),
+                params: vec![ParamDef {
+                    name: ParamName::new("direction"),
+                    type_expr: TypeExpr::Enum(EnumId::new("Direction")),
+                    passing: ParamPassing::Value,
+                    doc: None,
+                }],
+                returns: ReturnDef::Value(TypeExpr::Enum(EnumId::new("Direction"))),
+                is_async: false,
+                doc: None,
+            }],
+            kind: CallbackKind::Trait,
+            doc: None,
+        });
+
+        let lowerer = lowerer_for_contract(&contract);
+        let abi = lowerer.to_abi_contract();
+        let callback = abi
+            .callbacks
+            .iter()
+            .find(|callback| callback.callback_id.as_str() == "DirectionMapper")
+            .expect("callback should be lowered");
+        let param = callback.methods[0]
+            .params
+            .iter()
+            .find(|param| param.name.as_str() == "direction")
+            .expect("callback param should be present");
+
+        assert!(matches!(
+            &param.role,
+            ParamRole::Input {
+                transport: Transport::Scalar(ScalarOrigin::CStyleEnum { .. }),
+                ..
+            }
+        ));
+        assert_eq!(param.abi_type, AbiType::I32);
     }
 }

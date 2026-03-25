@@ -29,7 +29,8 @@ JNIEXPORT {{ jni_return_type }} JNICALL {{ jni_name }}(JNIEnv *env, jclass cls{{
 
 {%- endfor %}
 {%- if return_is_direct %}
-    {{ jni_c_return_type }} _result = 0;
+    {{ jni_c_return_type }} _result;
+    memset(&_result, 0, sizeof(_result));
 {%- elif return_composite_c_type.is_some() %}
     {{ return_composite_c_type.as_ref().unwrap() }} _composite_result = {0};
 {%- elif !return_is_unit %}
@@ -63,7 +64,7 @@ boltffi_input_cleanup:
     if (_boltffi_input_error) return NULL;
 {%- endif %}
 {%- if return_is_direct %}
-    return {{ jni_result_cast }}_result;
+    return {{ jni_return_expr }};
 {%- elif return_composite_c_type.is_some() %}
     jsize _comp_size = (jsize)sizeof(_composite_result);
     jbyteArray _arr = (*env)->NewByteArray(env, _comp_size);

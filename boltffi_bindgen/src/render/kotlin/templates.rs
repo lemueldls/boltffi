@@ -64,6 +64,7 @@ pub struct NativeTemplate<'a> {
     pub functions: &'a [super::plan::KotlinNativeFunction],
     pub wire_functions: &'a [super::plan::KotlinNativeWireFunction],
     pub classes: &'a [super::plan::KotlinNativeClass],
+    pub callbacks: &'a [super::plan::KotlinCallbackTrait],
     pub async_callback_invokers: &'a [super::plan::KotlinAsyncCallbackInvoker],
 }
 
@@ -207,6 +208,7 @@ pub struct WireMethodTemplate<'a> {
     pub decode_expr: &'a str,
     pub is_blittable_return: bool,
     pub include_handle: bool,
+    pub override_method: bool,
     pub doc: &'a Option<String>,
 }
 
@@ -242,6 +244,10 @@ pub struct CallbackTraitTemplate<'a> {
     pub handle_map_name: &'a str,
     pub callbacks_object: &'a str,
     pub bridge_name: &'a str,
+    pub proxy_class_name: &'a str,
+    pub supports_proxy_wrap: bool,
+    pub proxy_release_name: &'a str,
+    pub proxy_methods: &'a [String],
     pub doc: &'a Option<String>,
     pub is_closure: bool,
     pub sync_methods: &'a [super::plan::KotlinCallbackMethod],
@@ -439,6 +445,10 @@ impl KotlinEmitter {
                 handle_map_name: &callback.handle_map_name,
                 callbacks_object: &callback.callbacks_object,
                 bridge_name: &callback.bridge_name,
+                proxy_class_name: &callback.proxy_class_name,
+                supports_proxy_wrap: callback.supports_proxy_wrap,
+                proxy_release_name: &callback.proxy_release_name,
+                proxy_methods: &callback.proxy_methods,
                 doc: &callback.doc,
                 is_closure: callback.is_closure,
                 sync_methods: &callback.sync_methods,
@@ -455,6 +465,7 @@ impl KotlinEmitter {
             functions: &module.native.functions,
             wire_functions: &module.native.wire_functions,
             classes: &module.native.classes,
+            callbacks: &module.callbacks,
             async_callback_invokers: &module.native.async_callback_invokers,
         }
         .render()
@@ -1082,6 +1093,10 @@ mod tests {
             handle_map_name: "DataHandlerMap",
             callbacks_object: "DataHandlerCallbacks",
             bridge_name: "DataHandlerBridge",
+            proxy_class_name: "DataHandlerProxy",
+            supports_proxy_wrap: false,
+            proxy_release_name: "boltffiCallbackDataHandlerRelease",
+            proxy_methods: &[],
             doc: &None,
             is_closure: false,
             sync_methods: &[KotlinCallbackMethod {
@@ -1108,6 +1123,10 @@ mod tests {
             handle_map_name: "ValidatorMap",
             callbacks_object: "ValidatorCallbacks",
             bridge_name: "ValidatorBridge",
+            proxy_class_name: "ValidatorProxy",
+            supports_proxy_wrap: false,
+            proxy_release_name: "boltffiCallbackValidatorRelease",
+            proxy_methods: &[],
             doc: &Some("Validates input strings.".to_string()),
             is_closure: false,
             sync_methods: &[KotlinCallbackMethod {
@@ -1142,6 +1161,10 @@ mod tests {
             handle_map_name: "StatusMapperHandleMap",
             callbacks_object: "StatusMapperCallbacks",
             bridge_name: "StatusMapperBridge",
+            proxy_class_name: "StatusMapperProxy",
+            supports_proxy_wrap: false,
+            proxy_release_name: "boltffiCallbackStatusMapperRelease",
+            proxy_methods: &[],
             doc: &None,
             is_closure: false,
             sync_methods: &[KotlinCallbackMethod {
@@ -1177,6 +1200,10 @@ mod tests {
             handle_map_name: "AsyncHandlerMap",
             callbacks_object: "AsyncHandlerCallbacks",
             bridge_name: "AsyncHandlerBridge",
+            proxy_class_name: "AsyncHandlerProxy",
+            supports_proxy_wrap: false,
+            proxy_release_name: "boltffiCallbackAsyncHandlerRelease",
+            proxy_methods: &[],
             doc: &None,
             is_closure: false,
             sync_methods: &[],
