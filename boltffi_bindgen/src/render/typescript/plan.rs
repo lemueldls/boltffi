@@ -35,6 +35,7 @@ pub struct TsAsyncFunction {
     pub params: Vec<TsParam>,
     pub return_type: Option<String>,
     pub return_route: TsOutputRoute,
+    pub return_callback: Option<TsCallbackHandleReturn>,
     pub throws: bool,
     pub err_type: String,
     pub doc: Option<String>,
@@ -110,6 +111,7 @@ pub struct TsClassMethod {
     pub params: Vec<TsParam>,
     pub return_type: Option<String>,
     pub return_handle: Option<TsHandleReturn>,
+    pub return_callback: Option<TsCallbackHandleReturn>,
     pub mode: TsClassMethodMode,
     pub doc: Option<String>,
 }
@@ -161,6 +163,13 @@ pub struct TsHandleReturn {
 }
 
 #[derive(Debug, Clone)]
+pub struct TsCallbackHandleReturn {
+    pub interface_name: String,
+    pub wrap_fn: String,
+    pub nullable: bool,
+}
+
+#[derive(Debug, Clone)]
 pub enum TsClassMethodMode {
     Sync(TsClassSyncMethod),
     Async(TsClassAsyncMethod),
@@ -186,6 +195,9 @@ pub struct TsCallback {
     pub interface_name: String,
     pub trait_name_snake: String,
     pub create_handle_fn: String,
+    pub local_free_fn: String,
+    pub wrap_handle_fn: String,
+    pub proxy_class_name: String,
     pub methods: Vec<TsCallbackMethod>,
     pub async_methods: Vec<TsAsyncCallbackMethod>,
     pub closure_fn_type: Option<String>,
@@ -197,10 +209,35 @@ pub struct TsCallbackMethod {
     pub ts_name: String,
     pub import_name: String,
     pub params: Vec<TsCallbackParam>,
+    pub proxy_export_name: String,
+    pub proxy_params: Vec<TsParam>,
     pub return_type: Option<String>,
     pub direct_import_return_type: Option<String>,
     pub encoded_return: Option<TsEncodedCallbackReturn>,
+    pub proxy_return_route: TsOutputRoute,
     pub doc: Option<String>,
+}
+
+impl TsCallbackMethod {
+    pub fn proxy_wrapper_code(&self) -> String {
+        self.proxy_params
+            .iter()
+            .filter_map(TsParam::wrapper_code)
+            .collect::<Vec<_>>()
+            .join("\n    ")
+    }
+
+    pub fn proxy_cleanup_code(&self) -> String {
+        self.proxy_params
+            .iter()
+            .filter_map(TsParam::cleanup_code)
+            .collect::<Vec<_>>()
+            .join("\n      ")
+    }
+
+    pub fn proxy_call_args(&self) -> String {
+        flatten_ffi_args(&self.proxy_params).join(", ")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -348,6 +385,7 @@ pub struct TsFunction {
     pub params: Vec<TsParam>,
     pub return_type: Option<String>,
     pub return_route: TsOutputRoute,
+    pub return_callback: Option<TsCallbackHandleReturn>,
     pub throws: bool,
     pub err_type: String,
     pub doc: Option<String>,
@@ -388,10 +426,20 @@ impl TsParam {
                     self.name
                 ))
             }
-            TsInputRoute::Callback { interface_name } => Some(format!(
-                "const {}_handle = register{}({});",
-                self.name, interface_name, self.name
-            )),
+            TsInputRoute::Callback {
+                interface_name,
+                nullable,
+            } => Some(if *nullable {
+                format!(
+                    "const {}_handle = {} === null ? 0 : register{}({});",
+                    self.name, self.name, interface_name, self.name
+                )
+            } else {
+                format!(
+                    "const {}_handle = register{}({});",
+                    self.name, interface_name, self.name
+                )
+            }),
             TsInputRoute::StructValue { codec_name } => {
                 let writer_name = format!("{}_writer", self.name);
                 Some(format!(
@@ -494,6 +542,7 @@ pub enum TsInputRoute {
     },
     Callback {
         interface_name: String,
+        nullable: bool,
     },
     StructValue {
         codec_name: String,

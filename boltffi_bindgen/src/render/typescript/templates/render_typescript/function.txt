@@ -6,7 +6,17 @@
 {%- if return_route.is_void() %}
   (_exports.{{ ffi_name }} as Function)({{ call_args }});
 {%- elif return_route.is_direct() %}
+{%- if let Some(callback_return) = return_callback %}
+  const result = (_exports.{{ ffi_name }} as Function)({{ call_args }});
+{%- if callback_return.nullable %}
+  if (result === 0) {
+    return null;
+  }
+{%- endif %}
+  return {{ callback_return.wrap_fn }}(result);
+{%- else %}
   return (_exports.{{ ffi_name }} as Function)({{ call_args }}){{ return_route.ts_cast() }};
+{%- endif %}
 {%- elif return_route.is_struct_return_slot() %}
   const __outPtr = _module.exports.boltffi_wasm_alloc({{ return_route.return_slot_size().unwrap() }});
   try {
@@ -31,7 +41,17 @@
 {%- if return_route.is_void() %}
     (_exports.{{ ffi_name }} as Function)({{ call_args }});
 {%- elif return_route.is_direct() %}
+{%- if let Some(callback_return) = return_callback %}
+    const result = (_exports.{{ ffi_name }} as Function)({{ call_args }});
+{%- if callback_return.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ callback_return.wrap_fn }}(result);
+{%- else %}
     return (_exports.{{ ffi_name }} as Function)({{ call_args }}){{ return_route.ts_cast() }};
+{%- endif %}
 {%- elif return_route.is_struct_return_slot() %}
     const __outPtr = _module.exports.boltffi_wasm_alloc({{ return_route.return_slot_size().unwrap() }});
     try {
