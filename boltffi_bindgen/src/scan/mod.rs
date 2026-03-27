@@ -3011,6 +3011,28 @@ mod tests {
     }
 
     #[test]
+    fn scan_demo_crate_preserves_callback_return_type() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let demo_crate_path = repo_root.join("examples").join("demo");
+        let module = scan_crate(&demo_crate_path, "demo").unwrap();
+
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "make_incrementing_callback")
+            .expect("expected make_incrementing_callback to be exported");
+
+        assert!(matches!(
+            function.returns,
+            crate::model::ReturnType::Value(crate::model::Type::BoxedTrait(ref name))
+                if name == "ValueCallback"
+        ));
+    }
+
+    #[test]
     fn type_registry_fill_replaces_pending() {
         let mut reg = TypeRegistry::default();
         reg.register("Point".into(), pending(PendingKind::Record));

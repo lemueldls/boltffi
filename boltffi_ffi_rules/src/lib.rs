@@ -490,6 +490,11 @@ pub mod callback {
         Primitive(Primitive),
         String,
         Bytes,
+        Vec(Box<TypeId>),
+        Slice(Box<TypeId>),
+        MutSlice(Box<TypeId>),
+        Option(Box<TypeId>),
+        Result { ok: Box<TypeId>, err: Box<TypeId> },
         Named(std::string::String),
     }
 
@@ -511,6 +516,13 @@ pub mod callback {
                 Self::Primitive(primitive) => primitive.type_id().into(),
                 Self::String => "String".into(),
                 Self::Bytes => "Bytes".into(),
+                Self::Vec(inner) => format!("Vec{}", inner.as_signature_part()),
+                Self::Slice(inner) => format!("Slice{}", inner.as_signature_part()),
+                Self::MutSlice(inner) => format!("MutSlice{}", inner.as_signature_part()),
+                Self::Option(inner) => format!("Opt{}", inner.as_signature_part()),
+                Self::Result { ok, err } => {
+                    format!("Result{}Err{}", ok.as_signature_part(), err.as_signature_part())
+                }
                 Self::Named(name) => name.clone(),
             }
         }
@@ -618,6 +630,18 @@ pub mod callback {
             assert_eq!(p(Primitive::I32).as_signature_part(), "I32");
             assert_eq!(TypeId::String.as_signature_part(), "String");
             assert_eq!(TypeId::Named("Point".into()).as_signature_part(), "Point");
+            assert_eq!(
+                TypeId::Option(Box::new(TypeId::Named("Point".into()))).as_signature_part(),
+                "OptPoint"
+            );
+            assert_eq!(
+                TypeId::Result {
+                    ok: Box::new(p(Primitive::I32)),
+                    err: Box::new(TypeId::Named("MathError".into())),
+                }
+                .as_signature_part(),
+                "ResultI32ErrMathError"
+            );
         }
 
         #[test]
@@ -675,6 +699,34 @@ pub mod callback {
             assert_eq!(
                 closure_callback_id(&params, &returns),
                 "__Closure_I32_StringToBool"
+            );
+        }
+
+        #[test]
+        fn closure_option_point_round_trip() {
+            let params = vec![TypeId::Option(Box::new(TypeId::Named("Point".into())))];
+            let returns = TypeId::Option(Box::new(TypeId::Named("Point".into())));
+            assert_eq!(closure_signature_id(&params, &returns), "OptPointToOptPoint");
+            assert_eq!(
+                closure_callback_id_snake(&params, &returns),
+                "___closure__opt_point_to_opt_point"
+            );
+        }
+
+        #[test]
+        fn closure_result_signature_includes_error_type() {
+            let params = vec![p(Primitive::I32)];
+            let returns = TypeId::Result {
+                ok: Box::new(p(Primitive::I32)),
+                err: Box::new(TypeId::Named("MathError".into())),
+            };
+            assert_eq!(
+                closure_signature_id(&params, &returns),
+                "I32ToResultI32ErrMathError"
+            );
+            assert_eq!(
+                closure_callback_id_snake(&params, &returns),
+                "___closure__i32_to_result_i32_err_math_error"
             );
         }
 

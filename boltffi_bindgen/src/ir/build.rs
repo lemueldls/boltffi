@@ -391,11 +391,9 @@ impl<'m> ContractBuilder<'m> {
             })
             .collect();
 
-        let returns = if sig.is_void_return() {
-            ReturnDef::Void
-        } else {
-            ReturnDef::Value(self.convert_type(&sig.returns))
-        };
+        let returns = self.convert_return_type(&model::ReturnType::from_output(
+            sig.returns.as_ref().clone(),
+        ));
 
         CallbackTraitDef {
             id: CallbackId::new(sig_id),
@@ -1014,6 +1012,47 @@ mod tests {
         assert_eq!(reset.id.as_str(), "reset");
         assert!(reset.is_async);
         assert!(matches!(reset.returns, ReturnDef::Void));
+    }
+
+    #[test]
+    fn closure_result_return_becomes_fallible_callback_return() {
+        let mut module = empty_module();
+        module
+            .enums
+            .push(Enumeration::new("MathError").as_error());
+        module.functions.push(
+            model::Function::new("apply_result_closure")
+                .with_param(Parameter::new(
+                    "f",
+                    Type::Closure(model::ClosureSignature::new(
+                        vec![Type::Primitive(Primitive::I32)],
+                        Type::result(
+                            Type::Primitive(Primitive::I32),
+                            Type::Enum("MathError".into()),
+                        ),
+                    )),
+                ))
+                .with_param(Parameter::new("value", Type::Primitive(Primitive::I32)))
+                .with_return(ReturnType::fallible(
+                    Type::Primitive(Primitive::I32),
+                    Type::Enum("MathError".into()),
+                )),
+        );
+
+        let contract = super::build_contract(&mut module);
+        let closure_callback = contract
+            .catalog
+            .all_callbacks()
+            .find(|callback| matches!(callback.kind, CallbackKind::Closure))
+            .expect("closure callback");
+
+        assert!(matches!(
+            closure_callback.methods[0].returns,
+            ReturnDef::Result {
+                ok: TypeExpr::Primitive(PrimitiveType::I32),
+                err: TypeExpr::Enum(_),
+            }
+        ));
     }
 
     #[test]
