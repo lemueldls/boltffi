@@ -1,6 +1,9 @@
 
     public static {{ ctor.return_type }} {{ ctor.name }}({% for param in ctor.params %}{{ param.java_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %}) {
-{%- if ctor.wire_writers.is_empty() %}
+{%- for binding in ctor.input_bindings.direct_composites %}
+        {{ binding.declaration() }};
+{%- endfor %}
+{%- if ctor.input_bindings.wire_writers.is_empty() %}
 {%- if ctor.return_plan.is_direct() %}
         return Native.{{ ctor.ffi_name }}({% for param in ctor.native_params %}{{ param.expr }}{% if !loop.last %}, {% endif %}{% endfor %});
 {%- elif ctor.return_plan.is_c_style_enum() %}
@@ -29,11 +32,11 @@
 {%- endif %}
 {%- else %}
         try (
-{%- for writer in ctor.wire_writers %}
+{%- for writer in ctor.input_bindings.wire_writers %}
             WireWriter {{ writer.binding_name }} = new WireWriter({{ writer.size_expr }}){% if !loop.last %};{% endif %}
 {%- endfor %}
         ) {
-{%- for writer in ctor.wire_writers %}
+{%- for writer in ctor.input_bindings.wire_writers %}
             {{ writer.encode_expr }};
 {%- endfor %}
 {%- if ctor.return_plan.is_direct() %}

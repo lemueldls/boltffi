@@ -125,6 +125,12 @@ public final class {{ record.class_name }} {
         });
     }
 
+    ByteBuffer encodeBlittableInput() {
+        ByteBuffer buf = ByteBuffer.allocateDirect(STRUCT_SIZE).order(ByteOrder.LITTLE_ENDIAN);
+        writeBlittableToBuffer(buf, 0, this);
+        return buf;
+    }
+
     static ByteBuffer encodeBlittableVecInput(List<{{ record.class_name }}> items) {
         int byteCount = items.size() * STRUCT_SIZE;
         ByteBuffer buf = ByteBuffer.allocateDirect(byteCount).order(ByteOrder.LITTLE_ENDIAN);
