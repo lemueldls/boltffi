@@ -2,6 +2,7 @@ use crate::ir::ops::{
     OffsetExpr, ReadOp, ReadSeq, ValueExpr, WriteOp, WriteSeq, remap_root_in_seq,
 };
 use crate::render::swift::emit;
+use boltffi_ffi_rules::callable::ExecutionKind;
 use boltffi_ffi_rules::transport::{ScalarReturnStrategy, ValueReturnStrategy};
 
 #[derive(Debug, Clone)]
@@ -851,7 +852,7 @@ pub struct SwiftCallbackMethod {
     pub ffi_name: String,
     pub params: Vec<SwiftCallbackParam>,
     pub returns: SwiftReturn,
-    pub is_async: bool,
+    pub execution_kind: ExecutionKind,
     pub has_out_param: bool,
     pub doc: Option<String>,
 }
@@ -867,6 +868,10 @@ pub struct SwiftCallbackParam {
 }
 
 impl SwiftCallbackMethod {
+    pub fn is_async(&self) -> bool {
+        self.execution_kind == ExecutionKind::Async
+    }
+
     pub fn has_return(&self) -> bool {
         !self.returns.is_void()
     }
