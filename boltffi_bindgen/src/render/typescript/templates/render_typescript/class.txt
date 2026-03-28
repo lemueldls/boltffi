@@ -94,6 +94,14 @@ export class {{ cls.class_name }} {
     }
 {%- endif %}
     return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_return) = method.return_callback %}
+    const result = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+{%- if callback_return.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ callback_return.wrap_fn }}(result);
 {%- else %}
     return (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}){{ sync_method.return_route.ts_cast() }};
 {%- endif %}
@@ -176,6 +184,14 @@ export class {{ cls.class_name }} {
       }
 {%- endif %}
       return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_return) = method.return_callback %}
+      const result = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+{%- if callback_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ callback_return.wrap_fn }}(result);
 {%- else %}
       return (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}){{ sync_method.return_route.ts_cast() }};
 {%- endif %}

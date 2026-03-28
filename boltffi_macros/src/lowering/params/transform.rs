@@ -36,6 +36,7 @@ pub(super) enum ParamTransform {
     SliceMut(syn::Type),
     BoxedDynTrait(syn::Path),
     ArcDynTrait(syn::Path),
+    OptionBoxedDynTrait(syn::Path),
     OptionArcDynTrait(syn::Path),
     ImplTrait(syn::Path),
     VecPrimitive(syn::Type),
@@ -204,6 +205,18 @@ impl<'a> ParamTransformClassifier<'a> {
         }
 
         if let Some(inner_ty) = extract_option_param_inner(ty) {
+            if let Some(trait_path) = extract_dyn_trait_in_container(&inner_ty, "Box") {
+                return ClassifiedParamTransform {
+                    contract: ParamContract::new(
+                        ParamValueStrategy::CallbackHandle {
+                            nullable: true,
+                            style: CallbackParamStyle::BoxedDyn,
+                        },
+                        ParamPassingStrategy::ByValue,
+                    ),
+                    transform: ParamTransform::OptionBoxedDynTrait(trait_path),
+                };
+            }
             if let Some(trait_path) = extract_dyn_trait_in_container(&inner_ty, "Arc") {
                 return ClassifiedParamTransform {
                     contract: ParamContract::new(

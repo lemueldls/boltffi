@@ -59,7 +59,7 @@ pub struct JniWireFunctionTemplate<'a> {
     pub return_composite_c_type: &'a Option<String>,
     pub jni_return_type: &'a str,
     pub jni_c_return_type: &'a str,
-    pub jni_result_cast: &'a str,
+    pub jni_return_expr: &'a str,
 }
 
 impl<'a> JniWireFunctionTemplate<'a> {
@@ -74,7 +74,7 @@ impl<'a> JniWireFunctionTemplate<'a> {
             return_composite_c_type: &func.return_composite_c_type,
             jni_return_type: func.jni_return_type.as_str(),
             jni_c_return_type: func.jni_c_return_type.as_str(),
-            jni_result_cast: func.jni_result_cast.as_str(),
+            jni_return_expr: func.jni_return_expr.as_str(),
         }
     }
 }
@@ -100,7 +100,7 @@ pub struct JniWireMethodTemplate<'a> {
     pub return_composite_c_type: &'a Option<String>,
     pub jni_return_type: &'a str,
     pub jni_c_return_type: &'a str,
-    pub jni_result_cast: &'a str,
+    pub jni_return_expr: &'a str,
     pub include_handle: bool,
 }
 
@@ -116,7 +116,7 @@ impl<'a> JniWireMethodTemplate<'a> {
             return_composite_c_type: &method.return_composite_c_type,
             jni_return_type: method.jni_return_type.as_str(),
             jni_c_return_type: method.jni_c_return_type.as_str(),
-            jni_result_cast: method.jni_result_cast.as_str(),
+            jni_return_expr: method.jni_return_expr.as_str(),
             include_handle: method.include_handle,
         }
     }
@@ -265,6 +265,19 @@ mod tests {
             .with_function(closure_function)
     }
 
+    fn build_status_callback_module() -> Module {
+        let status_mapper = CallbackTrait::new("StatusMapper").with_method(
+            TraitMethod::new("map_status")
+                .with_param(TraitMethodParam::new(
+                    "status",
+                    Type::Primitive(Primitive::I32),
+                ))
+                .with_return(ReturnType::value(Type::Primitive(Primitive::I32))),
+        );
+
+        Module::new("test").with_callback_trait(status_mapper)
+    }
+
     #[test]
     fn jni_ir_generates_valid_glue() {
         let module = build_test_module();
@@ -287,5 +300,37 @@ mod tests {
         assert!(ir_code.contains("boltffi_free_buf"));
         assert!(ir_code.contains("jbyteArray"));
         assert!(!ir_code.contains("NewDirectByteBuffer(env, (void*)_buf.ptr"));
+    }
+
+    #[test]
+    fn callback_status_out_param_does_not_collide_with_user_status_param() {
+        let module = build_status_callback_module();
+        let package = "com.example";
+        let class_name = "BenchBoltFFI";
+
+        let mut ir_module = module.clone();
+        let contract = ir::build_contract(&mut ir_module);
+        let abi_contract = ir::Lowerer::new(&contract).to_abi_contract();
+        let jni_module = JniLowerer::new(
+            &contract,
+            &abi_contract,
+            package.to_string(),
+            class_name.to_string(),
+        )
+        .lower();
+        let glue_code = JniEmitter::emit(&jni_module);
+
+        assert!(
+            glue_code.contains("StatusMapper_vtable_map_status(uint64_t handle, int32_t status"),
+            "callback glue should preserve the user param `status`"
+        );
+        assert!(
+            glue_code.contains("FfiStatus* _out_status"),
+            "callback glue should rename the status out param to avoid colliding with user param `status`"
+        );
+        assert!(
+            !glue_code.contains("FfiStatus* status)"),
+            "callback glue should not reuse `status` as the out status param name"
+        );
     }
 }

@@ -104,6 +104,7 @@ pub struct FunctionTemplate<'a> {
     pub params: &'a [TsParam],
     pub return_type_str: &'a str,
     pub return_route: &'a TsOutputRoute,
+    pub return_callback: &'a Option<TsCallbackHandleReturn>,
     pub ffi_name: &'a str,
     pub call_args: &'a str,
     pub call_args_with_out: &'a str,
@@ -139,6 +140,7 @@ pub struct AsyncFunctionTemplate<'a> {
     pub wrapper_code: &'a str,
     pub cleanup_code: &'a str,
     pub return_route: &'a TsOutputRoute,
+    pub return_callback: &'a Option<TsCallbackHandleReturn>,
     pub doc: &'a Option<String>,
 }
 
@@ -247,6 +249,7 @@ impl TypeScriptEmitter {
                     params: &function.params,
                     return_type_str,
                     return_route: &function.return_route,
+                    return_callback: &function.return_callback,
                     ffi_name: &function.ffi_name,
                     call_args: &call_args,
                     call_args_with_out: &call_args_with_out,
@@ -298,6 +301,7 @@ impl TypeScriptEmitter {
                     wrapper_code: &wrapper_code,
                     cleanup_code: &cleanup_code,
                     return_route: &async_function.return_route,
+                    return_callback: &async_function.return_callback,
                     doc: &async_function.doc,
                 }
                 .render()
@@ -456,6 +460,7 @@ impl TypeScriptEmitter {
                     params: &function.params,
                     return_type_str,
                     return_route: &function.return_route,
+                    return_callback: &function.return_callback,
                     ffi_name: &function.ffi_name,
                     call_args: &call_args,
                     call_args_with_out: &call_args_with_out,
@@ -507,6 +512,7 @@ impl TypeScriptEmitter {
                     wrapper_code: &wrapper_code,
                     cleanup_code: &cleanup_code,
                     return_route: &async_function.return_route,
+                    return_callback: &async_function.return_callback,
                     doc: &async_function.doc,
                 }
                 .render()
@@ -776,6 +782,7 @@ mod tests {
             params: &[],
             return_type_str: "void",
             return_route: &TsOutputRoute::void(),
+            return_callback: &None,
             ffi_name: "boltffi_reset",
             call_args: "",
             call_args_with_out: "outPtr",
@@ -806,6 +813,7 @@ mod tests {
             params: &params,
             return_type_str: "number",
             return_route: &TsOutputRoute::direct(String::new()),
+            return_callback: &None,
             ffi_name: "boltffi_add",
             call_args: "a, b",
             call_args_with_out: "outPtr, a, b",
@@ -826,6 +834,7 @@ mod tests {
             return_route: &TsOutputRoute::packed(
                 "reader.readArray(() => decodeUser(reader))".to_string(),
             ),
+            return_callback: &None,
             ffi_name: "boltffi_get_users",
             call_args: "",
             call_args_with_out: "",
@@ -841,9 +850,13 @@ mod tests {
             interface_name: "ValueHandler".to_string(),
             trait_name_snake: "value_handler".to_string(),
             create_handle_fn: "boltffi_create_value_handler_handle".to_string(),
+            local_free_fn: "__boltffi_local_value_handler_free".to_string(),
+            wrap_handle_fn: "wrapValueHandler".to_string(),
+            proxy_class_name: "ValueHandlerProxy".to_string(),
             methods: vec![TsCallbackMethod {
                 ts_name: "onValue".to_string(),
                 import_name: "__boltffi_callback_value_handler_on_value".to_string(),
+                proxy_export_name: "__boltffi_local_value_handler_on_value".to_string(),
                 params: vec![TsCallbackParam {
                     name: "value".to_string(),
                     ts_type: "number".to_string(),
@@ -852,9 +865,15 @@ mod tests {
                         call_expr: "value".to_string(),
                     },
                 }],
+                proxy_params: vec![TsParam {
+                    name: "value".to_string(),
+                    ts_type: "number".to_string(),
+                    input_route: TsInputRoute::Direct,
+                }],
                 return_type: Some("number".to_string()),
                 direct_import_return_type: Some("number".to_string()),
                 encoded_return: None,
+                proxy_return_route: TsOutputRoute::direct(String::new()),
                 doc: None,
             }],
             async_methods: vec![],
@@ -868,6 +887,9 @@ mod tests {
             interface_name: "AsyncFetcher".to_string(),
             trait_name_snake: "async_fetcher".to_string(),
             create_handle_fn: "boltffi_create_async_fetcher_handle".to_string(),
+            local_free_fn: "__boltffi_local_async_fetcher_free".to_string(),
+            wrap_handle_fn: "wrapAsyncFetcher".to_string(),
+            proxy_class_name: "AsyncFetcherProxy".to_string(),
             methods: vec![],
             async_methods: vec![TsAsyncCallbackMethod {
                 ts_name: "fetch".to_string(),
@@ -904,6 +926,10 @@ mod tests {
         .unwrap();
 
         assert!(rendered.contains("const _value_handler_ref_counts = new Map<number, number>();"));
+        assert!(
+            rendered.contains("let _value_handler_next_id = _callback_handle_js_namespace_start;")
+        );
+        assert!(rendered.contains("const handle_key = _callback_handle_key(handle);"));
         assert!(rendered.contains("_value_handler_ref_counts.set(id, 1);"));
         assert!(rendered.contains("return _value_handler_retain(handle);"));
         assert!(rendered.contains("_value_handler_release(handle);"));
@@ -919,20 +945,19 @@ mod tests {
         .render()
         .unwrap();
 
+        assert!(rendered.contains(
+            "Cannot clone unknown callback handle ${handle_key} in ValueHandler registry"
+        ));
+        assert!(rendered.contains(
+            "Cannot free unknown callback handle ${handle_key} in ValueHandler registry"
+        ));
         assert!(
-            rendered.contains(
-                "Cannot clone unknown callback handle ${handle} in ValueHandler registry"
-            )
+            rendered.contains("Callback handle ${handle_key} not found in ValueHandler registry")
         );
-        assert!(
-            rendered
-                .contains("Cannot free unknown callback handle ${handle} in ValueHandler registry")
-        );
-        assert!(rendered.contains("Callback handle ${handle} not found in ValueHandler registry"));
         assert!(rendered.contains("if (currentCount === 1) {"));
-        assert!(rendered.contains("_value_handler_ref_counts.delete(handle);"));
-        assert!(rendered.contains("_value_handler_registry.delete(handle);"));
-        assert!(rendered.contains("return handle;"));
+        assert!(rendered.contains("_value_handler_ref_counts.delete(handle_key);"));
+        assert!(rendered.contains("_value_handler_registry.delete(handle_key);"));
+        assert!(rendered.contains("return handle_key;"));
     }
 
     #[test]
@@ -975,6 +1000,7 @@ mod tests {
                     }],
                     return_type: Some("number".to_string()),
                     return_handle: None,
+                    return_callback: None,
                     mode: TsClassMethodMode::Sync(TsClassSyncMethod {
                         return_route: TsOutputRoute::direct(String::new()),
                     }),
@@ -987,6 +1013,7 @@ mod tests {
                     params: vec![],
                     return_type: Some("number".to_string()),
                     return_handle: None,
+                    return_callback: None,
                     mode: TsClassMethodMode::Async(TsClassAsyncMethod {
                         poll_sync_ffi_name: "boltffi_counter_next_value_poll_sync".to_string(),
                         complete_ffi_name: "boltffi_counter_next_value_complete".to_string(),
@@ -1044,6 +1071,7 @@ mod tests {
                 params: vec![],
                 return_type: Some("number".to_string()),
                 return_handle: None,
+                return_callback: None,
                 mode: TsClassMethodMode::Async(TsClassAsyncMethod {
                     poll_sync_ffi_name: "boltffi_counter_next_value_poll_sync".to_string(),
                     complete_ffi_name: "boltffi_counter_next_value_complete".to_string(),
@@ -1084,6 +1112,7 @@ mod tests {
                 }],
                 return_type: Some("QueryResult".to_string()),
                 return_handle: None,
+                return_callback: None,
                 mode: TsClassMethodMode::Async(TsClassAsyncMethod {
                     poll_sync_ffi_name: "boltffi_database_query_poll_sync".to_string(),
                     complete_ffi_name: "boltffi_database_query_complete".to_string(),
@@ -1178,6 +1207,7 @@ mod tests {
                 ],
                 return_type: Some("number".to_string()),
                 return_handle: None,
+                return_callback: None,
                 mode: TsClassMethodMode::Sync(TsClassSyncMethod {
                     return_route: TsOutputRoute::direct(String::new()),
                 }),
@@ -1213,6 +1243,7 @@ mod tests {
                 }],
                 return_type: None,
                 return_handle: None,
+                return_callback: None,
                 mode: TsClassMethodMode::Sync(TsClassSyncMethod {
                     return_route: TsOutputRoute::void(),
                 }),
@@ -1240,6 +1271,7 @@ mod tests {
                     class_name: "Child".to_string(),
                     nullable: false,
                 }),
+                return_callback: None,
                 mode: TsClassMethodMode::Sync(TsClassSyncMethod {
                     return_route: TsOutputRoute::direct(String::new()),
                 }),
@@ -1271,6 +1303,7 @@ mod tests {
                     class_name: "Entry".to_string(),
                     nullable: true,
                 }),
+                return_callback: None,
                 mode: TsClassMethodMode::Sync(TsClassSyncMethod {
                     return_route: TsOutputRoute::direct(String::new()),
                 }),
@@ -1301,6 +1334,7 @@ mod tests {
                 }],
                 return_type: None,
                 return_handle: None,
+                return_callback: None,
                 mode: TsClassMethodMode::Sync(TsClassSyncMethod {
                     return_route: TsOutputRoute::void(),
                 }),
@@ -1329,6 +1363,7 @@ mod tests {
                 }],
                 return_type: Some("QueryResult".to_string()),
                 return_handle: None,
+                return_callback: None,
                 mode: TsClassMethodMode::Async(TsClassAsyncMethod {
                     poll_sync_ffi_name: "boltffi_database_query_poll_sync".to_string(),
                     complete_ffi_name: "boltffi_database_query_complete".to_string(),

@@ -14,43 +14,65 @@ export interface {{ callback.interface_name }} {
 
 const _{{ callback.trait_name_snake }}_registry = new Map<number, {{ callback.interface_name }}>();
 const _{{ callback.trait_name_snake }}_ref_counts = new Map<number, number>();
-let _{{ callback.trait_name_snake }}_next_id = 1;
+const _{{ callback.trait_name_snake }}_local_handles = new Set<number>();
+const _{{ callback.trait_name_snake }}_native_handle = Symbol("{{ callback.interface_name }}NativeHandle");
+let _{{ callback.trait_name_snake }}_next_id = _callback_handle_js_namespace_start;
+const _{{ callback.trait_name_snake }}_finalizer: FinalizationRegistry<number> | null =
+  typeof FinalizationRegistry === "undefined"
+    ? null
+    : new FinalizationRegistry<number>((handle) => {
+        (_exports.{{ callback.local_free_fn }} as Function)(handle);
+      });
 
 const _{{ callback.trait_name_snake }}_lookup = (handle: number): {{ callback.interface_name }} => {
-  const impl = _{{ callback.trait_name_snake }}_registry.get(handle);
+  const handle_key = _callback_handle_key(handle);
+  const impl = _{{ callback.trait_name_snake }}_registry.get(handle_key);
   if (!impl) {
-    throw new Error(`Callback handle ${handle} not found in {{ callback.interface_name }} registry`);
+    throw new Error(`Callback handle ${handle_key} not found in {{ callback.interface_name }} registry`);
   }
   return impl;
 };
 
 const _{{ callback.trait_name_snake }}_retain = (handle: number): number => {
-  const currentCount = _{{ callback.trait_name_snake }}_ref_counts.get(handle);
+  const handle_key = _callback_handle_key(handle);
+  const currentCount = _{{ callback.trait_name_snake }}_ref_counts.get(handle_key);
   if (currentCount === undefined) {
-    throw new Error(`Cannot clone unknown callback handle ${handle} in {{ callback.interface_name }} registry`);
+    throw new Error(`Cannot clone unknown callback handle ${handle_key} in {{ callback.interface_name }} registry`);
   }
-  _{{ callback.trait_name_snake }}_ref_counts.set(handle, currentCount + 1);
-  return handle;
+  _{{ callback.trait_name_snake }}_ref_counts.set(handle_key, currentCount + 1);
+  return handle_key;
 };
 
 const _{{ callback.trait_name_snake }}_release = (handle: number): void => {
-  const currentCount = _{{ callback.trait_name_snake }}_ref_counts.get(handle);
+  const handle_key = _callback_handle_key(handle);
+  const currentCount = _{{ callback.trait_name_snake }}_ref_counts.get(handle_key);
   if (currentCount === undefined) {
-    throw new Error(`Cannot free unknown callback handle ${handle} in {{ callback.interface_name }} registry`);
+    throw new Error(`Cannot free unknown callback handle ${handle_key} in {{ callback.interface_name }} registry`);
   }
   if (currentCount === 1) {
-    _{{ callback.trait_name_snake }}_ref_counts.delete(handle);
-    _{{ callback.trait_name_snake }}_registry.delete(handle);
+    const impl = _{{ callback.trait_name_snake }}_registry.get(handle_key);
+    _{{ callback.trait_name_snake }}_ref_counts.delete(handle_key);
+    _{{ callback.trait_name_snake }}_registry.delete(handle_key);
+    if (_{{ callback.trait_name_snake }}_local_handles.delete(handle_key)) {
+      if (impl && typeof impl === "object") {
+        _{{ callback.trait_name_snake }}_finalizer?.unregister(impl as object);
+      }
+      (_exports.{{ callback.local_free_fn }} as Function)(handle_key);
+    }
     return;
   }
-  _{{ callback.trait_name_snake }}_ref_counts.set(handle, currentCount - 1);
+  _{{ callback.trait_name_snake }}_ref_counts.set(handle_key, currentCount - 1);
 };
 
 export function register{{ callback.interface_name }}(impl: {{ callback.interface_name }}): number {
+  const existingHandle = (impl as Record<PropertyKey, unknown>)[_{{ callback.trait_name_snake }}_native_handle];
+  if (typeof existingHandle === "number") {
+    return _{{ callback.trait_name_snake }}_retain(existingHandle);
+  }
   const id = _{{ callback.trait_name_snake }}_next_id++;
   _{{ callback.trait_name_snake }}_registry.set(id, impl);
   _{{ callback.trait_name_snake }}_ref_counts.set(id, 1);
-  return (_exports.{{ callback.create_handle_fn }} as Function)(id);
+  return _callback_handle_key((_exports.{{ callback.create_handle_fn }} as Function)(id) as number);
 }
 
 export function unregister{{ callback.interface_name }}(handle: number): void {
@@ -64,6 +86,87 @@ _callbackImports["__boltffi_callback_{{ callback.trait_name_snake }}_free"] = (h
 _callbackImports["__boltffi_callback_{{ callback.trait_name_snake }}_clone"] = (handle: number): number => {
   return _{{ callback.trait_name_snake }}_retain(handle);
 };
+
+{%- if callback.closure_fn_type.is_none() %}
+class {{ callback.proxy_class_name }} implements {{ callback.interface_name }} {
+  private readonly _handle: number;
+
+  constructor(handle: number) {
+    const handle_key = _callback_handle_key(handle);
+    this._handle = handle_key;
+    (this as Record<PropertyKey, unknown>)[_{{ callback.trait_name_snake }}_native_handle] = handle_key;
+  }
+{%- for method in callback.methods %}
+
+  {{ method.ts_name }}({% for param in method.proxy_params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% match method.return_type %}{% when Some with (return_type) %}: {{ return_type }}{% when None %}{% endmatch %} {
+{%- if !method.proxy_wrapper_code().is_empty() %}
+    {{ method.proxy_wrapper_code() }}
+{%- endif %}
+{%- if method.proxy_cleanup_code().is_empty() %}
+{%- if method.proxy_return_route.is_void() %}
+    (_exports.{{ method.proxy_export_name }} as Function)(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %});
+{%- elif method.proxy_return_route.is_direct() %}
+    return (_exports.{{ method.proxy_export_name }} as Function)(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}){{ method.proxy_return_route.ts_cast() }};
+{%- elif method.proxy_return_route.is_packed() %}
+    const packed = (_exports.{{ method.proxy_export_name }} as Function)(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}) as bigint;
+    const reader = _module.takePackedBuffer(packed);
+    return {{ method.proxy_return_route.decode_expr() }};
+{%- elif method.proxy_return_route.is_struct_return_slot() %}
+    const __outPtr = _module.exports.boltffi_wasm_alloc({{ method.proxy_return_route.return_slot_size().unwrap() }});
+    try {
+      (_exports.{{ method.proxy_export_name }} as Function)(__outPtr, this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %});
+      return {{ method.proxy_return_route.decode_expr() }};
+    } finally {
+      _module.exports.boltffi_wasm_free(__outPtr, {{ method.proxy_return_route.return_slot_size().unwrap() }});
+    }
+{%- else %}
+    const packed = (_exports.{{ method.proxy_export_name }} as Function)(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}) as bigint;
+    return {{ method.proxy_return_route.decode_expr() }};
+{%- endif %}
+{%- else %}
+    try {
+{%- if method.proxy_return_route.is_void() %}
+      (_exports.{{ method.proxy_export_name }} as Function)(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %});
+{%- elif method.proxy_return_route.is_direct() %}
+      return (_exports.{{ method.proxy_export_name }} as Function)(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}){{ method.proxy_return_route.ts_cast() }};
+{%- elif method.proxy_return_route.is_packed() %}
+      const packed = (_exports.{{ method.proxy_export_name }} as Function)(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}) as bigint;
+      const reader = _module.takePackedBuffer(packed);
+      return {{ method.proxy_return_route.decode_expr() }};
+{%- elif method.proxy_return_route.is_struct_return_slot() %}
+      const __outPtr = _module.exports.boltffi_wasm_alloc({{ method.proxy_return_route.return_slot_size().unwrap() }});
+      try {
+        (_exports.{{ method.proxy_export_name }} as Function)(__outPtr, this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %});
+        return {{ method.proxy_return_route.decode_expr() }};
+      } finally {
+        _module.exports.boltffi_wasm_free(__outPtr, {{ method.proxy_return_route.return_slot_size().unwrap() }});
+      }
+{%- else %}
+      const packed = (_exports.{{ method.proxy_export_name }} as Function)(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}) as bigint;
+      return {{ method.proxy_return_route.decode_expr() }};
+{%- endif %}
+    } finally {
+      {{ method.proxy_cleanup_code() }}
+    }
+{%- endif %}
+  }
+{%- endfor %}
+}
+
+export function {{ callback.wrap_handle_fn }}(handle: number): {{ callback.interface_name }} {
+  const handle_key = _callback_handle_key(handle);
+  const existingImpl = _{{ callback.trait_name_snake }}_registry.get(handle_key);
+  if (existingImpl) {
+    return existingImpl;
+  }
+  const wrapped = new {{ callback.proxy_class_name }}(handle_key);
+  _{{ callback.trait_name_snake }}_registry.set(handle_key, wrapped);
+  _{{ callback.trait_name_snake }}_ref_counts.set(handle_key, 1);
+  _{{ callback.trait_name_snake }}_local_handles.add(handle_key);
+  _{{ callback.trait_name_snake }}_finalizer?.register(wrapped, handle_key, wrapped);
+  return wrapped;
+}
+{%- endif %}
 
 {%- for method in callback.methods %}
 {% match method.encoded_return %}

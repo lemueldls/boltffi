@@ -5,6 +5,7 @@ use quote::quote;
 use syn::ItemFn;
 
 use crate::callbacks::registry as callback_registry;
+use crate::exports::callback_return::resolve_sync_callback_return;
 use crate::lowering::params::{FfiParams, transform_params, transform_params_async};
 use crate::lowering::returns::lower::{encoded_return_body, encoded_return_buffer_expression};
 use crate::lowering::returns::model::{
@@ -251,7 +252,94 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
     let export_name = format!("{}_{}", naming::ffi_prefix(), fn_name);
     let export_ident = syn::Ident::new(&export_name, fn_name.span());
 
+    let sync_callback_return = match resolve_sync_callback_return(fn_output, &callback_registry) {
+        Ok(resolved_return) => resolved_return,
+        Err(error) => return error.to_compile_error(),
+    };
     let return_abi = return_lowering.lower_output(fn_output);
+
+    if let Some(callback_return) = sync_callback_return {
+        let native_on_wire_record_error =
+            callback_return.native_invalid_arg_early_return_statement();
+        let wasm_on_wire_record_error = callback_return.wasm_invalid_arg_early_return_statement();
+        let FfiParams {
+            ffi_params: native_ffi_params,
+            conversions: native_conversions,
+            call_args: native_call_args,
+        } = transform_params(
+            fn_inputs,
+            &return_lowering,
+            &callback_registry,
+            &native_on_wire_record_error,
+        );
+        let FfiParams {
+            ffi_params: wasm_ffi_params,
+            conversions: wasm_conversions,
+            call_args: wasm_call_args,
+        } = transform_params(
+            fn_inputs,
+            &return_lowering,
+            &callback_registry,
+            &wasm_on_wire_record_error,
+        );
+        let native_body = callback_return.lower_native_result_expression(quote! {
+            {
+                #(#native_conversions)*
+                #fn_name(#(#native_call_args),*)
+            }
+        });
+        let wasm_body = callback_return.lower_wasm_result_expression(quote! {
+            {
+                #(#wasm_conversions)*
+                #fn_name(#(#wasm_call_args),*)
+            }
+        });
+        let native_return_type = callback_return.native_ffi_return_type();
+        let wasm_return_type = callback_return.wasm_ffi_return_type();
+
+        return if native_ffi_params.is_empty() {
+            quote! {
+                #input
+
+                #[cfg(target_arch = "wasm32")]
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                #[unsafe(no_mangle)]
+                #fn_vis extern "C" fn #export_ident() -> #wasm_return_type {
+                    #wasm_body
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                #[unsafe(no_mangle)]
+                #fn_vis extern "C" fn #export_ident() -> #native_return_type {
+                    #native_body
+                }
+            }
+        } else {
+            quote! {
+                #input
+
+                #[cfg(target_arch = "wasm32")]
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                #[unsafe(no_mangle)]
+                #fn_vis unsafe extern "C" fn #export_ident(
+                    #(#wasm_ffi_params),*
+                ) -> #wasm_return_type {
+                    #wasm_body
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                #[unsafe(no_mangle)]
+                #fn_vis unsafe extern "C" fn #export_ident(
+                    #(#native_ffi_params),*
+                ) -> #native_return_type {
+                    #native_body
+                }
+            }
+        };
+    }
+
     let on_wire_record_error = return_abi.invalid_arg_early_return_statement();
     let FfiParams {
         ffi_params,

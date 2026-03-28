@@ -9,7 +9,7 @@ pub(super) struct AbiCallbackParamPlan {
 
 #[derive(Debug, Clone)]
 pub(super) enum AbiCallbackParamStrategy {
-    Scalar(PrimitiveType),
+    Scalar(ScalarOrigin),
     Direct(CompositeLayout),
     Encoded { codec: CodecPlan },
 }
@@ -496,8 +496,8 @@ impl<'c> Lowerer<'c> {
     }
 
     pub(super) fn lower_callback_param(&self, param: &ParamDef) -> AbiCallbackParamPlan {
-        let strategy = match &param.type_expr {
-            TypeExpr::Primitive(primitive) => AbiCallbackParamStrategy::Scalar(*primitive),
+        let strategy = match self.classify_type(&param.type_expr) {
+            Transport::Scalar(origin) => AbiCallbackParamStrategy::Scalar(origin),
             _ => AbiCallbackParamStrategy::Encoded {
                 codec: self.build_codec(&param.type_expr),
             },

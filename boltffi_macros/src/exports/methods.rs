@@ -6,6 +6,7 @@ use quote::{quote, quote_spanned};
 use syn::{FnArg, ReturnType, Type};
 
 use crate::callbacks::registry as callback_registry;
+use crate::exports::callback_return::resolve_sync_callback_return;
 use crate::lowering::params::{FfiParams, transform_method_params, transform_method_params_async};
 use crate::lowering::returns::lower::{encoded_return_body, encoded_return_buffer_expression};
 use crate::lowering::returns::model::{
@@ -616,7 +617,93 @@ fn generate_method_export(
         );
     }
 
+    let sync_callback_return =
+        match resolve_sync_callback_return(&method.sig.output, callback_registry) {
+            Ok(resolved_return) => resolved_return,
+            Err(error) => return Some(error.to_compile_error()),
+        };
     let return_abi = return_lowering.lower_output(&method.sig.output);
+    if let Some(callback_return) = sync_callback_return {
+        let other_inputs = method.sig.inputs.iter().skip(1).cloned();
+        let native_on_wire_record_error =
+            callback_return.native_invalid_arg_early_return_statement();
+        let wasm_on_wire_record_error = callback_return.wasm_invalid_arg_early_return_statement();
+        let FfiParams {
+            ffi_params: native_ffi_params,
+            conversions: native_conversions,
+            call_args: native_call_args,
+        } = transform_method_params(
+            other_inputs.clone(),
+            return_lowering,
+            callback_registry,
+            &native_on_wire_record_error,
+        );
+        let FfiParams {
+            ffi_params: wasm_ffi_params,
+            conversions: wasm_conversions,
+            call_args: wasm_call_args,
+        } = transform_method_params(
+            other_inputs,
+            return_lowering,
+            callback_registry,
+            &wasm_on_wire_record_error,
+        );
+        let native_body = callback_return.lower_native_result_expression(quote! {
+            {
+                #(#native_conversions)*
+                (*handle).#method_name(#(#native_call_args),*)
+            }
+        });
+        let wasm_body = callback_return.lower_wasm_result_expression(quote! {
+            {
+                #(#wasm_conversions)*
+                (*handle).#method_name(#(#wasm_call_args),*)
+            }
+        });
+        let native_return_type = callback_return.native_ffi_return_type();
+        let wasm_return_type = callback_return.wasm_ffi_return_type();
+
+        return Some(if native_ffi_params.is_empty() {
+            quote! {
+                #[cfg(target_arch = "wasm32")]
+                #[unsafe(no_mangle)]
+                pub unsafe extern "C" fn #export_name(
+                    handle: *mut #type_name
+                ) -> #wasm_return_type {
+                    #wasm_body
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                #[unsafe(no_mangle)]
+                pub unsafe extern "C" fn #export_name(
+                    handle: *mut #type_name
+                ) -> #native_return_type {
+                    #native_body
+                }
+            }
+        } else {
+            quote! {
+                #[cfg(target_arch = "wasm32")]
+                #[unsafe(no_mangle)]
+                pub unsafe extern "C" fn #export_name(
+                    handle: *mut #type_name,
+                    #(#wasm_ffi_params),*
+                ) -> #wasm_return_type {
+                    #wasm_body
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                #[unsafe(no_mangle)]
+                pub unsafe extern "C" fn #export_name(
+                    handle: *mut #type_name,
+                    #(#native_ffi_params),*
+                ) -> #native_return_type {
+                    #native_body
+                }
+            }
+        });
+    }
+
     let on_wire_record_error = return_abi.invalid_arg_early_return_statement();
     let other_inputs = method.sig.inputs.iter().skip(1).cloned();
     let FfiParams {
@@ -631,7 +718,6 @@ fn generate_method_export(
     );
 
     let has_conversions = !conversions.is_empty();
-
     let call_expr = quote! { (*handle).#method_name(#(#call_args),*) };
 
     let (body, return_type, is_wire_encoded) = if return_abi.is_unit() {
@@ -810,7 +896,87 @@ fn generate_static_method_export(
         method_name.span(),
     );
 
+    let sync_callback_return =
+        match resolve_sync_callback_return(&method.sig.output, callback_registry) {
+            Ok(resolved_return) => resolved_return,
+            Err(error) => return Some(error.to_compile_error()),
+        };
     let return_abi = return_lowering.lower_output(&method.sig.output);
+    if let Some(callback_return) = sync_callback_return {
+        let all_inputs = method.sig.inputs.iter().cloned();
+        let native_on_wire_record_error =
+            callback_return.native_invalid_arg_early_return_statement();
+        let wasm_on_wire_record_error = callback_return.wasm_invalid_arg_early_return_statement();
+        let FfiParams {
+            ffi_params: native_ffi_params,
+            conversions: native_conversions,
+            call_args: native_call_args,
+        } = transform_method_params(
+            all_inputs.clone(),
+            return_lowering,
+            callback_registry,
+            &native_on_wire_record_error,
+        );
+        let FfiParams {
+            ffi_params: wasm_ffi_params,
+            conversions: wasm_conversions,
+            call_args: wasm_call_args,
+        } = transform_method_params(
+            all_inputs,
+            return_lowering,
+            callback_registry,
+            &wasm_on_wire_record_error,
+        );
+        let native_body = callback_return.lower_native_result_expression(quote! {
+            {
+                #(#native_conversions)*
+                #type_name::#method_name(#(#native_call_args),*)
+            }
+        });
+        let wasm_body = callback_return.lower_wasm_result_expression(quote! {
+            {
+                #(#wasm_conversions)*
+                #type_name::#method_name(#(#wasm_call_args),*)
+            }
+        });
+        let native_return_type = callback_return.native_ffi_return_type();
+        let wasm_return_type = callback_return.wasm_ffi_return_type();
+
+        return Some(if native_ffi_params.is_empty() {
+            quote! {
+                #[cfg(target_arch = "wasm32")]
+                #[unsafe(no_mangle)]
+                pub extern "C" fn #export_name() -> #wasm_return_type {
+                    #wasm_body
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                #[unsafe(no_mangle)]
+                pub extern "C" fn #export_name() -> #native_return_type {
+                    #native_body
+                }
+            }
+        } else {
+            quote! {
+                #[cfg(target_arch = "wasm32")]
+                #[unsafe(no_mangle)]
+                pub unsafe extern "C" fn #export_name(
+                    #(#wasm_ffi_params),*
+                ) -> #wasm_return_type {
+                    #wasm_body
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                #[unsafe(no_mangle)]
+                pub unsafe extern "C" fn #export_name(
+                    #(#native_ffi_params),*
+                ) -> #native_return_type {
+                    #native_body
+                }
+            }
+        });
+    }
+
     let on_wire_record_error = return_abi.invalid_arg_early_return_statement();
     let all_inputs = method.sig.inputs.iter().cloned();
     let FfiParams {

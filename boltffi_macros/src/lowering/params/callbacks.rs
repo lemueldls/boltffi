@@ -3,13 +3,14 @@ use quote::quote;
 use syn::Ident;
 
 use boltffi_ffi_rules::callback as callback_naming;
+use boltffi_ffi_rules::primitive::Primitive;
 use boltffi_ffi_rules::transport::{ReturnInvocationContext, ReturnPlatform, ValueReturnMethod};
 
 use super::ParamLoweringState;
 use super::transform::is_primitive_vec_inner;
 use crate::callbacks::aliases::foreign_trait_path;
 use crate::callbacks::registry::CallbackTraitRegistry;
-use crate::lowering::returns::model::{ResolvedReturn, ReturnLoweringContext};
+use crate::lowering::returns::model::{ResolvedReturn, ReturnLoweringContext, ValueReturnStrategy};
 use crate::registries::custom_types::{
     contains_custom_types, from_wire_expr_owned, to_wire_expr_owned, wire_type_for,
 };
@@ -22,12 +23,19 @@ struct CallbackBindingBuilder<'a> {
 pub(super) enum TraitObjectParamKind {
     Boxed,
     Arc,
+    OptionBoxed,
     OptionArc,
 }
 
 struct ImplTraitResolution {
     foreign_type: proc_macro2::TokenStream,
     error: Option<proc_macro2::TokenStream>,
+}
+
+struct CallbackArgLowering {
+    ffi_arg_types: Vec<proc_macro2::TokenStream>,
+    prelude: proc_macro2::TokenStream,
+    call_args: Vec<proc_macro2::TokenStream>,
 }
 
 impl<'a> CallbackBindingBuilder<'a> {
@@ -65,6 +73,48 @@ impl<'a> CallbackBindingBuilder<'a> {
         }
     }
 
+    fn lower_callback_arg(
+        &self,
+        arg_type: &syn::Type,
+        arg_name: &Ident,
+        index: usize,
+        callback_name: &Ident,
+    ) -> CallbackArgLowering {
+        if matches!(
+            self.return_lowering
+                .lower_type(arg_type)
+                .value_return_strategy(),
+            ValueReturnStrategy::Scalar(_)
+        ) {
+            return CallbackArgLowering {
+                ffi_arg_types: vec![quote! { <#arg_type as ::boltffi::__private::Passable>::Out }],
+                prelude: quote! {},
+                call_args: vec![
+                    quote! { <#arg_type as ::boltffi::__private::Passable>::pack(#arg_name) },
+                ],
+            };
+        }
+
+        let arg_type_string = quote!(#arg_type).to_string().replace(' ', "");
+        if is_primitive_vec_inner(&arg_type_string) {
+            return CallbackArgLowering {
+                ffi_arg_types: vec![quote! { #arg_type }],
+                prelude: quote! {},
+                call_args: vec![quote! { #arg_name }],
+            };
+        }
+
+        let wire_name = Ident::new(&format!("__wire{}", index), callback_name.span());
+        let prelude =
+            self.callback_arg_wire_value(arg_type, arg_name, &wire_name, index, callback_name);
+
+        CallbackArgLowering {
+            ffi_arg_types: vec![quote! { *const u8 }, quote! { usize }],
+            prelude,
+            call_args: vec![quote! { #wire_name.as_ptr() }, quote! { #wire_name.len() }],
+        }
+    }
+
     fn generate_wasm_closure_codegen(
         &self,
         name: &Ident,
@@ -74,17 +124,11 @@ impl<'a> CallbackBindingBuilder<'a> {
     ) -> proc_macro2::TokenStream {
         let type_ids: Vec<callback_naming::TypeId> = arg_types
             .iter()
-            .map(|arg_type| {
-                let arg_type_string = quote!(#arg_type).to_string().replace(' ', "");
-                callback_naming::TypeId::from_rust_type_str(&arg_type_string)
-            })
+            .map(callback_type_id_from_syn_type)
             .collect();
 
         let return_type_id = returns
-            .map(|return_type| {
-                let return_type_string = quote!(#return_type).to_string().replace(' ', "");
-                callback_naming::TypeId::from_rust_type_str(&return_type_string)
-            })
+            .map(callback_type_id_from_syn_type)
             .unwrap_or(callback_naming::TypeId::Void);
 
         let callback_id_snake =
@@ -101,28 +145,18 @@ impl<'a> CallbackBindingBuilder<'a> {
             .enumerate()
             .map(|(index, arg_type)| {
                 let arg_name = Ident::new(&format!("__arg{}", index), name.span());
-                let arg_type_string = quote!(#arg_type).to_string().replace(' ', "");
-
-                if is_primitive_vec_inner(&arg_type_string) {
-                    (arg_name.clone(), quote! {}, quote! { #arg_name })
-                } else {
-                    let wire_name = Ident::new(&format!("__wire{}", index), name.span());
-                    let wire_value =
-                        self.callback_arg_wire_value(arg_type, &arg_name, &wire_name, index, name);
-                    (
-                        arg_name,
-                        wire_value,
-                        quote! { #wire_name.as_ptr(), #wire_name.len() },
-                    )
-                }
+                let lowering = self.lower_callback_arg(arg_type, &arg_name, index, name);
+                (arg_name, lowering.prelude, lowering.call_args)
             })
             .fold(
                 (Vec::new(), Vec::new(), Vec::new()),
                 |(mut arg_names, mut wire_values, mut call_args),
-                 (arg_name, wire_value, call_arg)| {
+                 (arg_name, wire_value, lowered_call_args)| {
                     arg_names.push(arg_name);
                     wire_values.push(wire_value);
-                    call_args.push(call_arg);
+                    lowered_call_args
+                        .into_iter()
+                        .for_each(|call_arg| call_args.push(call_arg));
                     (arg_names, wire_values, call_args)
                 },
             );
@@ -324,24 +358,18 @@ impl<'a> SyncCallbackParamLowerer<'a> {
                 ),
                  (index, arg_type)| {
                     let arg_name = Ident::new(&format!("__arg{}", index), name.span());
-                    let arg_type_string = quote!(#arg_type).to_string().replace(' ', "");
-
-                    if is_primitive_vec_inner(&arg_type_string) {
-                        ffi_callback_args.push(quote! { #arg_type });
-                        callback_call_args.push(quote! { #arg_name });
-                    } else {
-                        let wire_name = Ident::new(&format!("__wire{}", index), name.span());
-                        ffi_callback_args.push(quote! { *const u8 });
-                        ffi_callback_args.push(quote! { usize });
-                        wire_values.push(
-                            self.builder.callback_arg_wire_value(
-                                arg_type, &arg_name, &wire_name, index, name,
-                            ),
-                        );
-                        callback_call_args.push(quote! { #wire_name.as_ptr() });
-                        callback_call_args.push(quote! { #wire_name.len() });
-                    }
-
+                    let lowering = self
+                        .builder
+                        .lower_callback_arg(arg_type, &arg_name, index, name);
+                    lowering
+                        .ffi_arg_types
+                        .into_iter()
+                        .for_each(|ffi_arg_type| ffi_callback_args.push(ffi_arg_type));
+                    wire_values.push(lowering.prelude);
+                    lowering
+                        .call_args
+                        .into_iter()
+                        .for_each(|call_arg| callback_call_args.push(call_arg));
                     arg_names.push(arg_name);
                     (
                         ffi_callback_args,
@@ -529,6 +557,17 @@ impl<'a> SyncCallbackParamLowerer<'a> {
                     <dyn #trait_path as ::boltffi::__private::FromCallbackHandle>::arc_from_callback_handle(#name)
                 };
             },
+            TraitObjectParamKind::OptionBoxed => quote! {
+                #[cfg(target_arch = "wasm32")]
+                let #name = ::boltffi::__private::CallbackHandle::from_wasm_handle(#name);
+                let #name: Option<Box<dyn #trait_path>> = if #name.is_null() {
+                    None
+                } else {
+                    Some(unsafe {
+                        <dyn #trait_path as ::boltffi::__private::FromCallbackHandle>::box_from_callback_handle(#name)
+                    })
+                };
+            },
             TraitObjectParamKind::OptionArc => quote! {
                 #[cfg(target_arch = "wasm32")]
                 let #name = ::boltffi::__private::CallbackHandle::from_wasm_handle(#name);
@@ -548,6 +587,93 @@ impl<'a> SyncCallbackParamLowerer<'a> {
 
 fn is_passable_return(resolved_return: &ResolvedReturn) -> bool {
     resolved_return.is_passable_value()
+}
+
+fn callback_type_id_from_syn_type(rust_type: &syn::Type) -> callback_naming::TypeId {
+    match rust_type {
+        syn::Type::Tuple(tuple) if tuple.elems.is_empty() => callback_naming::TypeId::Void,
+        syn::Type::Reference(reference) => match reference.elem.as_ref() {
+            syn::Type::Path(type_path)
+                if path_last_segment_name(&type_path.path).as_deref() == Some("str") =>
+            {
+                callback_naming::TypeId::String
+            }
+            syn::Type::Slice(slice) => callback_naming::TypeId::Slice(Box::new(
+                callback_type_id_from_syn_type(&slice.elem),
+            )),
+            other => callback_type_id_from_syn_type(other),
+        },
+        syn::Type::Slice(slice) => {
+            callback_naming::TypeId::Slice(Box::new(callback_type_id_from_syn_type(&slice.elem)))
+        }
+        syn::Type::Path(type_path) => callback_type_id_from_path(&type_path.path),
+        _ => {
+            let type_name = quote!(#rust_type).to_string().replace(' ', "");
+            callback_naming::TypeId::Named(type_name)
+        }
+    }
+}
+
+fn callback_type_id_from_path(type_path: &syn::Path) -> callback_naming::TypeId {
+    let Some(last_segment) = type_path.segments.last() else {
+        return callback_naming::TypeId::Named(String::new());
+    };
+
+    let type_name = last_segment.ident.to_string();
+    if let Ok(primitive) = type_name.parse::<Primitive>() {
+        return callback_naming::TypeId::Primitive(primitive);
+    }
+
+    match type_name.as_str() {
+        "String" => callback_naming::TypeId::String,
+        "Vec" => single_generic_type_id(last_segment)
+            .map(|inner| callback_naming::TypeId::Vec(Box::new(inner)))
+            .unwrap_or_else(|| callback_naming::TypeId::Named(type_name)),
+        "Option" => single_generic_type_id(last_segment)
+            .map(|inner| callback_naming::TypeId::Option(Box::new(inner)))
+            .unwrap_or_else(|| callback_naming::TypeId::Named(type_name)),
+        "Result" => {
+            result_type_id(last_segment).unwrap_or(callback_naming::TypeId::Named(type_name))
+        }
+        _ => callback_naming::TypeId::Named(type_name),
+    }
+}
+
+fn single_generic_type_id(segment: &syn::PathSegment) -> Option<callback_naming::TypeId> {
+    generic_type_arguments(segment)
+        .and_then(|mut arguments| (arguments.len() == 1).then(|| arguments.remove(0)))
+        .map(|rust_type| callback_type_id_from_syn_type(&rust_type))
+}
+
+fn result_type_id(segment: &syn::PathSegment) -> Option<callback_naming::TypeId> {
+    let mut arguments = generic_type_arguments(segment)?;
+    (arguments.len() == 2).then(|| callback_naming::TypeId::Result {
+        ok: Box::new(callback_type_id_from_syn_type(&arguments.remove(0))),
+        err: Box::new(callback_type_id_from_syn_type(&arguments.remove(0))),
+    })
+}
+
+fn generic_type_arguments(segment: &syn::PathSegment) -> Option<Vec<syn::Type>> {
+    match &segment.arguments {
+        syn::PathArguments::AngleBracketed(arguments) => Some(
+            arguments
+                .args
+                .iter()
+                .filter_map(|argument| match argument {
+                    syn::GenericArgument::Type(rust_type) => Some(rust_type.clone()),
+                    _ => None,
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+fn path_last_segment_name(type_path: &syn::Path) -> Option<String> {
+    type_path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
 }
 
 pub(super) struct AsyncCallbackParamLowerer<'a> {

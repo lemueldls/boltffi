@@ -452,7 +452,7 @@ impl<'a> TypeScriptLowerer<'a> {
             })
             .collect();
 
-        let (return_type, return_handle, mode) = match &abi_call.mode {
+        let (return_type, return_handle, return_callback, mode) = match &abi_call.mode {
             CallMode::Sync => {
                 let (return_type, return_route) =
                     self.select_output_route(&abi_call.returns, TsExecutionModel::Sync);
@@ -463,9 +463,11 @@ impl<'a> TypeScriptLowerer<'a> {
                     }),
                     _ => None,
                 };
+                let return_callback = self.callback_return(&abi_call.returns);
                 (
                     return_type,
                     return_handle,
+                    return_callback,
                     TsClassMethodMode::Sync(TsClassSyncMethod { return_route }),
                 )
             }
@@ -480,9 +482,11 @@ impl<'a> TypeScriptLowerer<'a> {
                     }),
                     _ => None,
                 };
+                let return_callback = self.callback_return(&async_call.result);
                 (
                     return_type,
                     return_handle,
+                    return_callback,
                     TsClassMethodMode::Async(TsClassAsyncMethod {
                         poll_sync_ffi_name: format!("{entry_ffi_name}_poll_sync"),
                         complete_ffi_name: format!("{entry_ffi_name}_complete"),
@@ -502,6 +506,7 @@ impl<'a> TypeScriptLowerer<'a> {
             params,
             return_type,
             return_handle,
+            return_callback,
             mode,
             doc: method_def.doc.clone(),
         }
@@ -512,6 +517,9 @@ impl<'a> TypeScriptLowerer<'a> {
         let interface_name = naming::to_upper_camel_case(def.id.as_str());
         let trait_name_snake = naming::to_snake_case(def.id.as_str());
         let create_handle_fn = cb_naming::callback_create_handle_global().to_string();
+        let local_free_fn = format!("__boltffi_local_{}_free", trait_name_snake);
+        let wrap_handle_fn = format!("wrap{}", interface_name);
+        let proxy_class_name = format!("{}Proxy", interface_name);
 
         let methods = def
             .methods
@@ -525,6 +533,11 @@ impl<'a> TypeScriptLowerer<'a> {
                 let ts_name = camel_case(method_def.id.as_str());
                 let import_name = format!(
                     "__boltffi_callback_{}_{}",
+                    trait_name_snake,
+                    naming::to_snake_case(method_def.id.as_str())
+                );
+                let proxy_export_name = format!(
+                    "__boltffi_local_{}_{}",
                     trait_name_snake,
                     naming::to_snake_case(method_def.id.as_str())
                 );
@@ -566,6 +579,18 @@ impl<'a> TypeScriptLowerer<'a> {
                             ts_type,
                             kind,
                         }
+                    })
+                    .collect();
+                let proxy_params = method_def
+                    .params
+                    .iter()
+                    .map(|parameter_def| {
+                        let abi_param = abi_method
+                            .params
+                            .iter()
+                            .find(|candidate| candidate.name == parameter_def.name)
+                            .expect("callback method abi param");
+                        self.lower_param(Some(parameter_def), abi_param)
                     })
                     .collect();
 
@@ -616,14 +641,19 @@ impl<'a> TypeScriptLowerer<'a> {
                     }
                     _ => (None, None, None),
                 };
+                let (_, proxy_return_route) =
+                    self.select_output_route(&abi_method.returns, TsExecutionModel::Sync);
 
                 Some(TsCallbackMethod {
                     ts_name,
                     import_name,
                     params,
+                    proxy_export_name,
+                    proxy_params,
                     return_type,
                     direct_import_return_type,
                     encoded_return,
+                    proxy_return_route,
                     doc: method_def.doc.clone(),
                 })
             })
@@ -794,6 +824,9 @@ impl<'a> TypeScriptLowerer<'a> {
             interface_name,
             trait_name_snake,
             create_handle_fn,
+            local_free_fn,
+            wrap_handle_fn,
+            proxy_class_name,
             methods,
             async_methods,
             closure_fn_type,
@@ -828,6 +861,7 @@ impl<'a> TypeScriptLowerer<'a> {
         let (return_type, return_route) =
             self.select_output_route(&abi_call.returns, TsExecutionModel::Sync);
         let (throws, err_type) = self.lower_error(&abi_call.error);
+        let return_callback = self.callback_return(&abi_call.returns);
 
         Some(TsFunction {
             name: emit::escape_ts_keyword(&func_name),
@@ -835,6 +869,7 @@ impl<'a> TypeScriptLowerer<'a> {
             params,
             return_type,
             return_route,
+            return_callback,
             throws,
             err_type,
             doc: def.doc.clone(),
@@ -870,6 +905,7 @@ impl<'a> TypeScriptLowerer<'a> {
         let (return_type, return_route) =
             self.select_output_route(&async_call.result, TsExecutionModel::AsyncFunction);
         let (throws, err_type) = self.lower_error(&async_call.error);
+        let return_callback = self.callback_return(&async_call.result);
 
         Some(TsAsyncFunction {
             name: emit::escape_ts_keyword(&func_name),
@@ -882,6 +918,7 @@ impl<'a> TypeScriptLowerer<'a> {
             params,
             return_type,
             return_route,
+            return_callback,
             throws,
             err_type,
             doc: def.doc.clone(),
@@ -984,14 +1021,26 @@ impl<'a> TypeScriptLowerer<'a> {
                 }
             }
             ParamRole::Input {
-                transport: Transport::Callback { callback_id, .. },
+                transport:
+                    Transport::Callback {
+                        callback_id,
+                        nullable,
+                        ..
+                    },
                 ..
             } => {
                 let interface_name = naming::to_upper_camel_case(callback_id.as_str());
                 TsParam {
                     name: emit::escape_ts_keyword(&name),
-                    ts_type: interface_name.clone(),
-                    input_route: TsInputRoute::Callback { interface_name },
+                    ts_type: if *nullable {
+                        format!("{interface_name} | null")
+                    } else {
+                        interface_name.clone()
+                    },
+                    input_route: TsInputRoute::Callback {
+                        interface_name,
+                        nullable: *nullable,
+                    },
                 }
             }
             ParamRole::Input {
@@ -1058,7 +1107,14 @@ impl<'a> TypeScriptLowerer<'a> {
                 self.handle_output_route(class_id.as_str(), *nullable, execution_model)
             }
             ValueReturnStrategy::CallbackHandle => match execution_model {
-                TsExecutionModel::Sync => (Some("unknown".to_string()), TsOutputRoute::void()),
+                TsExecutionModel::Sync => (
+                    Some(
+                        self.callback_return(returns)
+                            .map(|callback_return| callback_return.interface_name)
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    ),
+                    TsOutputRoute::direct(String::new()),
+                ),
                 TsExecutionModel::AsyncFunction | TsExecutionModel::AsyncMethod => {
                     (None, TsOutputRoute::void())
                 }
@@ -1123,6 +1179,24 @@ impl<'a> TypeScriptLowerer<'a> {
                 (true, err_type)
             }
         }
+    }
+
+    fn callback_return(&self, returns: &ReturnShape) -> Option<TsCallbackHandleReturn> {
+        let Transport::Callback {
+            callback_id,
+            nullable,
+            ..
+        } = returns.transport.as_ref()?
+        else {
+            return None;
+        };
+
+        let interface_name = naming::to_upper_camel_case(callback_id.as_str());
+        Some(TsCallbackHandleReturn {
+            interface_name: interface_name.clone(),
+            wrap_fn: format!("wrap{}", interface_name),
+            nullable: *nullable,
+        })
     }
 
     fn scalar_output_route(
@@ -1344,6 +1418,7 @@ impl<'a> TypeScriptLowerer<'a> {
                         Some(abi_type_to_wasm(&AbiType::from(origin.primitive())))
                     }
                     Some(Transport::Handle { .. }) => Some("number".to_string()),
+                    Some(Transport::Callback { .. }) => Some("number".to_string()),
                     _ => None,
                 }
             } else if return_route.is_f64_optional() {
@@ -1777,10 +1852,13 @@ mod tests {
     use crate::ir::Lowerer as IrLowerer;
     use crate::ir::contract::{FfiContract, PackageInfo};
     use crate::ir::definitions::{
-        CStyleVariant, ClassDef, ConstructorDef, EnumDef, EnumRepr, FunctionDef, MethodDef,
-        ParamDef, ParamPassing, Receiver, ReturnDef,
+        CStyleVariant, CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef,
+        EnumDef, EnumRepr, FunctionDef, MethodDef, ParamDef, ParamPassing, Receiver, ReturnDef,
     };
-    use crate::ir::ids::{ClassId, EnumId, FunctionId, MethodId, ParamName, VariantName};
+    use crate::ir::ids::{
+        CallbackId, ClassId, EnumId, FunctionId, MethodId, ParamName, VariantName,
+    };
+    use std::path::PathBuf;
 
     fn empty_contract() -> FfiContract {
         FfiContract {
@@ -1900,6 +1978,15 @@ mod tests {
         }
     }
 
+    fn callback_trait(name: &str, methods: Vec<CallbackMethodDef>) -> CallbackTraitDef {
+        CallbackTraitDef {
+            id: CallbackId::new(name),
+            methods,
+            kind: CallbackKind::Trait,
+            doc: None,
+        }
+    }
+
     #[test]
     fn wasm_import_string_return_uses_packed_bigint() {
         let mut contract = empty_contract();
@@ -1952,6 +2039,145 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["left", "right"]
         );
+    }
+
+    #[test]
+    fn callback_return_uses_direct_handle_wrap_route() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_callback(callback_trait(
+            "ValueCallback",
+            vec![CallbackMethodDef {
+                id: MethodId::new("on_value"),
+                params: vec![primitive_param("value", PrimitiveType::I32)],
+                returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+                is_async: false,
+                doc: None,
+            }],
+        ));
+        contract.functions.push(function(
+            "make_incrementing_callback",
+            vec![primitive_param("delta", PrimitiveType::I32)],
+            ReturnDef::Value(TypeExpr::Callback(CallbackId::new("ValueCallback"))),
+            false,
+        ));
+
+        let module = lower_contract(&contract);
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "makeIncrementingCallback")
+            .expect("callback-return function should be lowered");
+        let import = module
+            .wasm_imports
+            .iter()
+            .find(|import| import.ffi_name == "boltffi_make_incrementing_callback")
+            .expect("wasm import for callback-return function");
+
+        assert_eq!(function.return_type.as_deref(), Some("ValueCallback"));
+        assert!(function.return_route.is_direct());
+        let callback_return = function
+            .return_callback
+            .as_ref()
+            .expect("callback-return metadata");
+        assert_eq!(callback_return.wrap_fn, "wrapValueCallback");
+        assert_eq!(import.return_wasm_type.as_deref(), Some("number"));
+    }
+
+    #[test]
+    fn optional_callback_param_uses_nullable_handle_route() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_callback(callback_trait(
+            "ValueCallback",
+            vec![CallbackMethodDef {
+                id: MethodId::new("on_value"),
+                params: vec![primitive_param("value", PrimitiveType::I32)],
+                returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+                is_async: false,
+                doc: None,
+            }],
+        ));
+        contract.functions.push(function(
+            "invoke_optional_value_callback",
+            vec![
+                ParamDef {
+                    name: ParamName::new("callback"),
+                    type_expr: TypeExpr::Option(Box::new(TypeExpr::Callback(CallbackId::new(
+                        "ValueCallback",
+                    )))),
+                    passing: ParamPassing::Value,
+                    doc: None,
+                },
+                primitive_param("input", PrimitiveType::I32),
+            ],
+            ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+            false,
+        ));
+
+        let module = lower_contract(&contract);
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "invokeOptionalValueCallback")
+            .expect("optional callback function should be lowered");
+        let callback_param = function
+            .params
+            .iter()
+            .find(|param| param.name == "callback")
+            .expect("callback param should exist");
+
+        assert_eq!(callback_param.ts_type, "ValueCallback | null");
+        assert_eq!(
+            callback_param.wrapper_code().as_deref(),
+            Some(
+                "const callback_handle = callback === null ? 0 : registerValueCallback(callback);"
+            )
+        );
+        assert_eq!(callback_param.ffi_args(), vec!["callback_handle"]);
+    }
+
+    #[test]
+    fn demo_callback_return_lowers_to_wrapped_function() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let demo_crate_path = repo_root.join("examples").join("demo");
+        let mut module = crate::scan::scan_crate_with_options(
+            &demo_crate_path,
+            "demo",
+            Some(32),
+            crate::scan::ScanFeatures::default(),
+        )
+        .unwrap();
+        let contract = crate::ir::build_contract(&mut module);
+        let lowered_module = lower_contract(&contract);
+        let function = lowered_module
+            .functions
+            .iter()
+            .find(|function| function.name == "makeIncrementingCallback")
+            .expect("demo callback-return function");
+
+        assert_eq!(function.return_type.as_deref(), Some("ValueCallback"));
+        assert!(function.return_route.is_direct());
+        assert_eq!(
+            function
+                .return_callback
+                .as_ref()
+                .map(|callback_return| callback_return.wrap_fn.as_str()),
+            Some("wrapValueCallback")
+        );
+
+        let rendered =
+            crate::render::typescript::templates::TypeScriptEmitter::emit(&lowered_module);
+        assert!(
+            rendered.contains(
+                "export function makeIncrementingCallback(delta: number): ValueCallback {"
+            )
+        );
+        assert!(rendered.contains(
+            "const result = (_exports.boltffi_make_incrementing_callback as Function)(delta);"
+        ));
+        assert!(rendered.contains("return wrapValueCallback(result);"));
     }
 
     #[test]

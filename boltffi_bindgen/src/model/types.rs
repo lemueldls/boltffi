@@ -332,7 +332,7 @@ impl Type {
             Self::Option(inner) => format!("Opt{}", inner.type_id()),
             Self::Slice(inner) => format!("Slice{}", inner.type_id()),
             Self::MutSlice(inner) => format!("MutSlice{}", inner.type_id()),
-            Self::Result { ok, .. } => format!("Result{}", ok.type_id()),
+            Self::Result { ok, err } => format!("Result{}Err{}", ok.type_id(), err.type_id()),
             Self::Custom { name, .. } => heck::AsUpperCamelCase(name).to_string(),
             Self::Record(name) => heck::AsUpperCamelCase(name).to_string(),
             Self::Enum(name) => heck::AsUpperCamelCase(name).to_string(),

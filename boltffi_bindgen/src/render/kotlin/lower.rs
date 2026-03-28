@@ -1378,6 +1378,7 @@ impl<'a> KotlinLowerer<'a> {
                 decode_expr: &decode_expr,
                 is_blittable_return,
                 include_handle,
+                override_method: false,
                 doc: &method.doc,
             }
             .render()
@@ -1454,6 +1455,7 @@ impl<'a> KotlinLowerer<'a> {
             decode_expr: &decode_expr,
             is_blittable_return,
             include_handle: false,
+            override_method: false,
             doc: &method.doc,
         }
         .render()
@@ -1735,6 +1737,8 @@ impl<'a> KotlinLowerer<'a> {
         let handle_map_name = format!("{}HandleMap", interface_name);
         let callbacks_object = format!("{}Callbacks", interface_name);
         let bridge_name = format!("{}Bridge", interface_name);
+        let proxy_class_name = format!("{}Proxy", interface_name);
+        let supports_proxy_wrap = callback.methods.iter().all(|method| !method.is_async);
         let sync_methods = callback
             .methods
             .iter()
@@ -1747,11 +1751,36 @@ impl<'a> KotlinLowerer<'a> {
             .filter(|method| method.is_async)
             .map(|method| self.lower_async_callback_method(callback, method))
             .collect();
+        let proxy_methods = if supports_proxy_wrap {
+            callback
+                .methods
+                .iter()
+                .filter(|method| !method.is_async)
+                .map(|method| self.render_callback_proxy_method(callback, method))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let proxy_native_methods = if supports_proxy_wrap {
+            callback
+                .methods
+                .iter()
+                .filter(|method| !method.is_async)
+                .map(|method| self.lower_callback_proxy_native_method(callback, method))
+                .collect()
+        } else {
+            Vec::new()
+        };
         KotlinCallbackTrait {
             interface_name,
             handle_map_name,
             callbacks_object,
             bridge_name,
+            proxy_class_name,
+            supports_proxy_wrap,
+            proxy_release_name: self.callback_proxy_release_name(callback),
+            proxy_methods,
+            proxy_native_methods,
             doc: callback.doc.clone(),
             is_closure: matches!(callback.kind, CallbackKind::Closure),
             sync_methods,
@@ -1823,6 +1852,153 @@ impl<'a> KotlinLowerer<'a> {
         }
     }
 
+    fn render_callback_proxy_method(
+        &self,
+        callback: &CallbackTraitDef,
+        method: &CallbackMethodDef,
+    ) -> String {
+        let abi_method = self.abi_callback_method(&callback.id, &method.id);
+        let proxy_call = self.callback_proxy_call(callback, method, abi_method);
+        let wire_writers = self.wire_writers_for_params(&proxy_call);
+        let wire_writer_closes = wire_writers
+            .iter()
+            .filter_map(KotlinWireWriter::cleanup_code)
+            .collect::<Vec<_>>();
+        let native_args = self.native_args_for_params(&proxy_call, &method.params, &wire_writers);
+        let signature_params = method
+            .params
+            .iter()
+            .map(|param| KotlinSignatureParam {
+                name: NamingConvention::param_name(param.name.as_str()),
+                kotlin_type: self.kotlin_type(&param.type_expr),
+            })
+            .collect::<Vec<_>>();
+        let return_type = self.kotlin_return_type_from_def(&method.returns, &abi_method.returns);
+        let return_meta = self.kotlin_return_meta(&abi_method.returns);
+        let decode_expr = self.decode_expr_for_call_return(&abi_method.returns, &method.returns);
+        let err_type = self.error_type_name(&method.returns);
+
+        WireMethodTemplate {
+            method_name: &NamingConvention::method_name(method.id.as_str()),
+            signature_params: &signature_params,
+            return_type: return_type.as_deref(),
+            wire_writers: &wire_writers,
+            wire_writer_closes: &wire_writer_closes,
+            native_args: &native_args,
+            throws: self.is_throwing_return(&method.returns),
+            err_type: &err_type,
+            ffi_name: &self.callback_proxy_native_name(callback, method),
+            return_is_unit: return_meta.is_unit,
+            return_is_direct: return_meta.is_direct,
+            return_cast: &return_meta.cast,
+            decode_expr: &decode_expr,
+            is_blittable_return: self.is_blittable_return(&abi_method.returns, &method.returns),
+            include_handle: true,
+            override_method: true,
+            doc: &method.doc,
+        }
+        .render()
+        .unwrap()
+    }
+
+    fn lower_callback_proxy_native_method(
+        &self,
+        callback: &CallbackTraitDef,
+        method: &CallbackMethodDef,
+    ) -> KotlinNativeSyncMethod {
+        let abi_method = self.abi_callback_method(&callback.id, &method.id);
+        let proxy_call = self.callback_proxy_call(callback, method, abi_method);
+        KotlinNativeSyncMethod {
+            ffi_name: self.callback_proxy_native_name(callback, method),
+            include_handle: true,
+            params: self
+                .visible_native_params(&proxy_call)
+                .into_iter()
+                .map(|param| KotlinNativeParam {
+                    name: param.name.as_str().to_string(),
+                    jni_type: self.jni_type_for_param(param),
+                })
+                .collect(),
+            return_jni_type: self.return_jni_type_for_callback_shape(&abi_method.returns),
+        }
+    }
+
+    fn callback_proxy_call(
+        &self,
+        callback: &CallbackTraitDef,
+        method: &CallbackMethodDef,
+        abi_method: &AbiCallbackMethod,
+    ) -> AbiCall {
+        let method_param_names = method
+            .params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<HashSet<_>>();
+        AbiCall {
+            id: CallId::Function(crate::ir::ids::FunctionId::new(format!(
+                "__callback_proxy_{}_{}",
+                callback.id.as_str(),
+                method.id.as_str()
+            ))),
+            symbol: naming::Name::<naming::GlobalSymbol>::new(
+                self.callback_proxy_native_name(callback, method),
+            ),
+            mode: CallMode::Sync,
+            params: abi_method
+                .params
+                .iter()
+                .filter(|param| match &param.role {
+                    ParamRole::Input { .. } => method_param_names.contains(&param.name),
+                    ParamRole::SyntheticLen { for_param } => method_param_names.contains(for_param),
+                    ParamRole::CallbackContext { .. }
+                    | ParamRole::OutLen { .. }
+                    | ParamRole::OutDirect
+                    | ParamRole::StatusOut => false,
+                })
+                .cloned()
+                .collect(),
+            returns: abi_method.returns.clone(),
+            error: abi_method.error.clone(),
+        }
+    }
+
+    fn callback_proxy_native_name(
+        &self,
+        callback: &CallbackTraitDef,
+        method: &CallbackMethodDef,
+    ) -> String {
+        format!(
+            "boltffiCallback{}{}",
+            NamingConvention::class_name(callback.id.as_str()),
+            NamingConvention::class_name(method.id.as_str())
+        )
+    }
+
+    fn callback_proxy_release_name(&self, callback: &CallbackTraitDef) -> String {
+        format!(
+            "boltffiCallback{}Release",
+            NamingConvention::class_name(callback.id.as_str())
+        )
+    }
+
+    fn return_jni_type_for_callback_shape(&self, ret_shape: &ReturnShape) -> String {
+        match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => "Unit".to_string(),
+            ValueReturnStrategy::Scalar(_) => {
+                let Some(Transport::Scalar(origin)) = &ret_shape.transport else {
+                    unreachable!("scalar callback return requires scalar transport");
+                };
+                self.jni_type_for_abi(&AbiType::from(origin.primitive()))
+            }
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+                "Long".to_string()
+            }
+            ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
+                "ByteArray".to_string()
+            }
+        }
+    }
+
     fn lower_callback_param(&self, def: &ParamDef, param: &AbiParam) -> KotlinCallbackParam {
         let name = NamingConvention::param_name(param.name.as_str());
         let kotlin_type = self.kotlin_type(&def.type_expr);
@@ -1834,7 +2010,7 @@ impl<'a> KotlinLowerer<'a> {
                 name: name.clone(),
                 kotlin_type,
                 jni_type: self.jni_type_for_abi(&param.abi_type),
-                conversion: self.callback_direct_conversion(&def.type_expr, &name),
+                conversion: self.callback_direct_conversion(def, param, &name),
             },
             ParamRole::Input {
                 transport: Transport::Span(SpanContent::Encoded(_)),
@@ -2054,16 +2230,28 @@ impl<'a> KotlinLowerer<'a> {
         }
     }
 
-    fn callback_direct_conversion(&self, ty: &TypeExpr, name: &str) -> String {
-        match ty {
-            TypeExpr::Primitive(p) => match p {
-                PrimitiveType::U8 => format!("{}.toUByte()", name),
-                PrimitiveType::U16 => format!("{}.toUShort()", name),
-                PrimitiveType::U32 => format!("{}.toUInt()", name),
-                PrimitiveType::U64 | PrimitiveType::USize => format!("{}.toULong()", name),
+    fn callback_direct_conversion(&self, def: &ParamDef, param: &AbiParam, name: &str) -> String {
+        match (&def.type_expr, &param.role) {
+            (
+                TypeExpr::Enum(enum_id),
+                ParamRole::Input {
+                    transport: Transport::Scalar(ScalarOrigin::CStyleEnum { .. }),
+                    ..
+                },
+            ) => {
+                let enum_name = NamingConvention::class_name(enum_id.as_str());
+                format!("{}.fromValue({})", enum_name, name)
+            }
+            (ty, _) => match ty {
+                TypeExpr::Primitive(p) => match p {
+                    PrimitiveType::U8 => format!("{}.toUByte()", name),
+                    PrimitiveType::U16 => format!("{}.toUShort()", name),
+                    PrimitiveType::U32 => format!("{}.toUInt()", name),
+                    PrimitiveType::U64 | PrimitiveType::USize => format!("{}.toULong()", name),
+                    _ => name.to_string(),
+                },
                 _ => name.to_string(),
             },
-            _ => name.to_string(),
         }
     }
 
@@ -2909,9 +3097,9 @@ impl<'a> KotlinLowerer<'a> {
             NamingConvention::class_name(callback_id.as_str())
         );
         if nullable {
-            format!(".takeIf {{ it != 0L }}?.let {{ {}.create(it) }}", bridge)
+            format!(".takeIf {{ it != 0L }}?.let {{ {}.wrap(it) }}", bridge)
         } else {
-            format!(".let {{ {}.create(it) }}", bridge)
+            format!(".let {{ {}.wrap(it) }}", bridge)
         }
     }
 
@@ -3266,11 +3454,11 @@ impl<'a> KotlinLowerer<'a> {
         );
         if nullable {
             format!(
-                "{}.takeIf {{ it != 0L }}?.let {{ {}.create(it) }}",
+                "{}.takeIf {{ it != 0L }}?.let {{ {}.wrap(it) }}",
                 value_expr, bridge
             )
         } else {
-            format!("{}.create({})", bridge, value_expr)
+            format!("{}.wrap({})", bridge, value_expr)
         }
     }
 

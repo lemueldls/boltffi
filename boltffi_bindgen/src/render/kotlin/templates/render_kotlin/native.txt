@@ -72,4 +72,12 @@ private object Native {
 {%- for invoker in async_callback_invokers %}
     @JvmStatic external fun {{ invoker.name }}(callbackPtr: Long, callbackData: Long{% if invoker.has_result() %}, result: {{ invoker.jni_type() }}{% endif %})
 {%- endfor %}
+{%- for callback in callbacks %}
+{%- if callback.supports_proxy_wrap %}
+    @JvmStatic external fun {{ callback.proxy_release_name }}(handle: Long)
+{%- for method in callback.proxy_native_methods %}
+    @JvmStatic external fun {{ method.ffi_name }}(handle: Long{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.name }}: {{ param.jni_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ method.return_jni_type }}
+{%- endfor %}
+{%- endif %}
+{%- endfor %}
 }

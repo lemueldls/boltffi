@@ -71,7 +71,11 @@ pub struct JniAsyncFunction {
 pub enum JniAsyncCompleteKind {
     Void,
     WireEncoded,
-    Direct { jni_return: String, c_type: String },
+    Direct {
+        jni_return: String,
+        c_type: String,
+        return_expr: String,
+    },
 }
 
 impl JniAsyncCompleteKind {
@@ -94,6 +98,13 @@ impl JniAsyncCompleteKind {
     pub fn c_type(&self) -> &str {
         match self {
             Self::Direct { c_type, .. } => c_type,
+            _ => "",
+        }
+    }
+
+    pub fn return_expr(&self) -> &str {
+        match self {
+            Self::Direct { return_expr, .. } => return_expr,
             _ => "",
         }
     }
@@ -136,9 +147,16 @@ pub struct JniCallbackTrait {
     pub trait_name: String,
     pub vtable_type: String,
     pub register_fn: String,
+    pub create_fn: String,
     pub callbacks_class: String,
+    pub proxy_clone_name: String,
+    pub proxy_clone_jni_name: String,
+    pub proxy_release_name: String,
+    pub proxy_release_jni_name: String,
     pub sync_methods: Vec<JniCallbackMethod>,
     pub async_methods: Vec<JniAsyncCallbackMethod>,
+    pub proxy_sync_methods: Vec<JniCallbackProxySyncMethod>,
+    pub proxy_async_methods: Vec<JniCallbackProxyAsyncMethod>,
 }
 
 #[derive(Clone)]
@@ -192,6 +210,10 @@ pub struct JniCallbackReturn {
 }
 
 impl JniCallbackMethod {
+    pub fn status_param_name(&self) -> &str {
+        "_out_status"
+    }
+
     pub fn has_return(&self) -> bool {
         self.return_info.is_some()
     }
@@ -409,7 +431,15 @@ impl JniParam {
 pub struct JniClosureTrampoline {
     pub trampoline_name: String,
     pub signature_id: String,
+    pub vtable_type: String,
+    pub handle_create_fn: String,
     pub callbacks_class_jni_path: String,
+    pub supports_proxy_wrap: bool,
+    pub proxy_clone_name: String,
+    pub proxy_clone_jni_name: String,
+    pub proxy_release_name: String,
+    pub proxy_release_jni_name: String,
+    pub proxy_sync_method: JniCallbackProxySyncMethod,
     pub c_params: String,
     pub setup_lines: Vec<String>,
     pub cleanup_lines: Vec<String>,
@@ -528,6 +558,7 @@ pub struct JniAsyncCallbackInvoker {
 pub struct JniInvokerResult {
     pub c_type: String,
     pub jni_type: String,
+    pub create_fn: Option<String>,
 }
 
 impl JniAsyncCallbackInvoker {
@@ -554,6 +585,19 @@ impl JniAsyncCallbackInvoker {
             .as_ref()
             .map(|r| r.jni_type.as_str())
             .unwrap_or("")
+    }
+
+    pub fn result_create_fn(&self) -> &str {
+        self.result_type
+            .as_ref()
+            .and_then(|result_type| result_type.create_fn.as_deref())
+            .unwrap_or("")
+    }
+
+    pub fn is_callback_handle(&self) -> bool {
+        self.result_type
+            .as_ref()
+            .is_some_and(|result_type| result_type.create_fn.is_some())
     }
 }
 
@@ -841,7 +885,7 @@ pub struct JniWireFunction {
     pub return_composite_c_type: Option<String>,
     pub jni_return_type: String,
     pub jni_c_return_type: String,
-    pub jni_result_cast: String,
+    pub jni_return_expr: String,
 }
 
 #[derive(Clone)]
@@ -855,8 +899,52 @@ pub struct JniWireMethod {
     pub return_composite_c_type: Option<String>,
     pub jni_return_type: String,
     pub jni_c_return_type: String,
-    pub jni_result_cast: String,
+    pub jni_return_expr: String,
     pub include_handle: bool,
+}
+
+#[derive(Clone)]
+pub struct JniCallbackProxySyncMethod {
+    pub vtable_field: String,
+    pub native_name: String,
+    pub jni_name: String,
+    pub jni_params: String,
+    pub params: Vec<JniParam>,
+    pub return_is_unit: bool,
+    pub return_is_direct: bool,
+    pub return_composite_c_type: Option<String>,
+    pub jni_return_type: String,
+    pub jni_c_return_type: String,
+    pub jni_return_expr: String,
+}
+
+#[derive(Clone)]
+pub struct JniCallbackProxyAsyncMethod {
+    pub vtable_field: String,
+    pub native_name: String,
+    pub jni_name: String,
+    pub jni_params: String,
+    pub params: Vec<JniParam>,
+    pub return_c_type: Option<String>,
+    pub success_method_name: String,
+    pub success_method_id: String,
+    pub success_signature: String,
+    pub failure_method_name: String,
+    pub failure_method_id: String,
+}
+
+impl JniCallbackProxyAsyncMethod {
+    pub fn has_return(&self) -> bool {
+        self.return_c_type.is_some()
+    }
+
+    pub fn is_wire(&self) -> bool {
+        self.return_c_type.as_deref() == Some("wire")
+    }
+
+    pub fn return_c_type(&self) -> &str {
+        self.return_c_type.as_deref().unwrap_or("")
+    }
 }
 
 #[derive(Clone)]

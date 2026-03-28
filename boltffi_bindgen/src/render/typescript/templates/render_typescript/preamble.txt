@@ -2,6 +2,8 @@ import { WireReader, WireWriter, BoltFFIModule, instantiateBoltFFI, wireStringSi
 import type { Duration, WireCodec, BoltFFIImports, BoltFFIExports } from "@boltffi/runtime";
 
 const EXPECTED_ABI_VERSION = {{ abi_version }};
+const _callback_handle_js_namespace_start = 0x80000000;
+const _callback_handle_key = (handle: number): number => handle >>> 0;
 
 let _module: BoltFFIModule;
 let _exports: BoltFFIExports;

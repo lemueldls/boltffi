@@ -34,7 +34,15 @@ impl CallbackHandle {
 
     #[inline]
     pub fn is_null(&self) -> bool {
-        self.handle == 0 || self.vtable.is_null()
+        #[cfg(target_arch = "wasm32")]
+        {
+            return self.handle == 0;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.handle == 0 || self.vtable.is_null()
+        }
     }
 
     #[inline]
@@ -108,3 +116,23 @@ unsafe impl Send for WasmCallbackOwner {}
 
 #[cfg(target_arch = "wasm32")]
 unsafe impl Sync for WasmCallbackOwner {}
+
+#[cfg(test)]
+mod tests {
+    use super::CallbackHandle;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_handle_with_null_vtable_is_null() {
+        let handle = CallbackHandle::new(7, std::ptr::null());
+        assert!(handle.is_null());
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn wasm_handle_is_null_only_when_handle_is_zero() {
+        let handle = CallbackHandle::from_wasm_handle(7);
+        assert!(!handle.is_null());
+        assert!(CallbackHandle::from_wasm_handle(0).is_null());
+    }
+}

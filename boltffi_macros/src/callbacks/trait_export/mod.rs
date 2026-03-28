@@ -3,10 +3,12 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::Type;
 
+mod local_handle;
 mod lowered_return;
 mod native;
 mod wasm;
 
+use self::local_handle::LocalHandleExpander;
 use self::native::NativeCallbackMethodExpander;
 use self::wasm::{WasmCallbackMethodExpander, WasmMethodExpansion};
 
@@ -327,34 +329,31 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         quote! {}
     };
 
+    let local_handle_impl = if is_object_safe && !has_async_methods {
+        LocalHandleExpander::new(
+            &item_trait,
+            trait_name,
+            &trait_name_snake,
+            &vtable_name,
+            &custom_types,
+            &return_lowering,
+        )
+        .expand()?
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         #expanded
         #concrete_impl
         #dyn_impl
         #foreign_type_impl
+        #local_handle_impl
     })
 }
 
 fn to_snake_case_ident(name: &str) -> syn::Ident {
     syn::Ident::new(&naming::to_snake_case(name), proc_macro2::Span::call_site())
-}
-
-fn is_ffi_primitive(type_str: &str) -> bool {
-    matches!(
-        type_str,
-        "i8" | "i16"
-            | "i32"
-            | "i64"
-            | "u8"
-            | "u16"
-            | "u32"
-            | "u64"
-            | "f32"
-            | "f64"
-            | "bool"
-            | "usize"
-            | "isize"
-    )
 }
 
 fn direct_callback_return_ffi_type(ty: &syn::Type) -> proc_macro2::TokenStream {

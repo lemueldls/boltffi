@@ -3,10 +3,8 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use super::lowered_return::LoweredCallbackReturn;
-use super::{
-    direct_callback_return_ffi_type, is_ffi_primitive, parse_result_type, to_snake_case_ident,
-};
-use crate::lowering::returns::model::ReturnLoweringContext;
+use super::{direct_callback_return_ffi_type, parse_result_type, to_snake_case_ident};
+use crate::lowering::returns::model::{ReturnLoweringContext, ValueReturnStrategy};
 use crate::registries::custom_types;
 
 pub(super) struct NativeCallbackMethodExpander<'a> {
@@ -190,7 +188,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
                 .clone()
                 .map(|expr| {
                     quote! {
-                        if status.is_err() {
+                        if callback_status.is_err() {
                             let error_msg: String = ::boltffi::__private::wire::decode(&bytes)
                                 .unwrap_or_else(|_| "unknown callback error".into());
                             return std::task::Poll::Ready(#expr);
@@ -227,7 +225,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
                     std::future::poll_fn(move |cx| {
                         let mut guard = ctx.state.lock().expect("async callback mutex poisoned");
                         if let Some(bytes) = guard.result_bytes.take() {
-                            let status = guard.status;
+                            let callback_status = guard.status;
                             #poll_error_branch
                             let result: #return_type = ::boltffi::__private::wire::decode(&bytes)
                                 .expect("wire decode async callback return");
@@ -243,7 +241,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
             let poll_error_branch = error_expr
                 .map(|expr| {
                     quote! {
-                        if status.is_err() {
+                        if callback_status.is_err() {
                             let error_msg = "callback returned error status".to_string();
                             return std::task::Poll::Ready(#expr);
                         }
@@ -280,7 +278,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
                     std::future::poll_fn(move |cx| {
                         let mut guard = ctx.state.lock().expect("async callback mutex poisoned");
                         if let Some(result) = guard.result.take() {
-                            let status = guard.status;
+                            let callback_status = guard.status;
                             #poll_error_branch
                             std::task::Poll::Ready(result)
                         } else {
@@ -387,17 +385,20 @@ impl<'a> NativeCallbackMethodExpander<'a> {
                 }),
             });
 
-            extern "C" fn callback(data: u64, status: ::boltffi::__private::FfiStatus) {
-                let ctx = unsafe { Arc::from_raw(data as *const AsyncContext) };
-                let waker = ctx
-                    .state
-                    .lock()
-                    .ok()
-                    .and_then(|mut guard| {
-                        guard.completed = true;
-                        guard.status = status;
-                        guard.waker.take()
-                    });
+                    extern "C" fn callback(
+                        data: u64,
+                        callback_status: ::boltffi::__private::FfiStatus
+                    ) {
+                        let ctx = unsafe { Arc::from_raw(data as *const AsyncContext) };
+                        let waker = ctx
+                            .state
+                            .lock()
+                            .ok()
+                            .and_then(|mut guard| {
+                                guard.completed = true;
+                                guard.status = callback_status;
+                                guard.waker.take()
+                            });
                 if let Some(waker) = waker {
                     waker.wake();
                 }
@@ -452,17 +453,17 @@ impl<'a> NativeCallbackMethodExpander<'a> {
                 }
                 let mut out_ptr: *mut u8 = ::core::ptr::null_mut();
                 let mut out_len: usize = 0;
-                let mut status = ::boltffi::__private::FfiStatus::default();
+                let mut callback_status = ::boltffi::__private::FfiStatus::default();
                 unsafe {
                     ((*self.vtable).#method_name_snake)(
                         self.handle,
                         #(#call_args,)*
                         &mut out_ptr,
                         &mut out_len,
-                        &mut status
+                        &mut callback_status
                     );
                 }
-                if status.is_err() {
+                if callback_status.is_err() {
                     if !out_ptr.is_null() {
                         unsafe { free(out_ptr.cast()) };
                     }
@@ -486,16 +487,16 @@ impl<'a> NativeCallbackMethodExpander<'a> {
             quote! {
                 #(#prelude_stmts)*
                 let mut out: #ffi_return_type = Default::default();
-                let mut status = ::boltffi::__private::FfiStatus::default();
+                let mut callback_status = ::boltffi::__private::FfiStatus::default();
                 unsafe {
                     ((*self.vtable).#method_name_snake)(
                         self.handle,
                         #(#call_args,)*
                         &mut out as *mut _,
-                        &mut status
+                        &mut callback_status
                     );
                 }
-                if status.is_err() {
+                if callback_status.is_err() {
                     #error_expr
                 }
                 unsafe { <#return_type as ::boltffi::__private::Passable>::unpack(out) }
@@ -511,12 +512,12 @@ impl<'a> NativeCallbackMethodExpander<'a> {
     ) -> TokenStream {
         quote! {
             #(#prelude_stmts)*
-            let mut status = ::boltffi::__private::FfiStatus::default();
+            let mut callback_status = ::boltffi::__private::FfiStatus::default();
             unsafe {
                 ((*self.vtable).#method_name_snake)(
                     self.handle,
                     #(#call_args,)*
-                    &mut status
+                    &mut callback_status
                 );
             }
         }
@@ -555,13 +556,17 @@ impl<'a> NativeCallbackMethodExpander<'a> {
         param_type: &syn::Type,
     ) -> NativeCallbackParamLowering {
         let rust_param = quote! { #param_name: #param_type };
-        let type_str = quote!(#param_type).to_string().replace(' ', "");
-
-        if is_ffi_primitive(&type_str) {
+        let direct_ffi_type = direct_callback_return_ffi_type(param_type);
+        if matches!(
+            self.return_lowering
+                .lower_type(param_type)
+                .value_return_strategy(),
+            ValueReturnStrategy::Scalar(_)
+        ) {
             return NativeCallbackParamLowering {
-                ffi_param: quote! { #param_name: #param_type },
+                ffi_param: quote! { #param_name: #direct_ffi_type },
                 rust_param,
-                call_arg: quote! { #param_name },
+                call_arg: quote! { <#param_type as ::boltffi::__private::Passable>::pack(#param_name) },
                 prelude: None,
             };
         }

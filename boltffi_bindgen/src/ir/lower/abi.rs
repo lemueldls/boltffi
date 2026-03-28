@@ -950,15 +950,15 @@ impl<'c> Lowerer<'c> {
         let len_name = ParamName::new(format!("{}_len", param.name.as_str()));
 
         match param.strategy {
-            AbiCallbackParamStrategy::Scalar(p) => vec![AbiParam {
+            AbiCallbackParamStrategy::Scalar(origin) => vec![AbiParam {
                 name: param.name,
-                abi_type: AbiType::from(p),
+                abi_type: AbiType::from(origin.primitive()),
                 role: ParamRole::Input {
                     contract: ParamContract::new(
                         ParamValueStrategy::Scalar(ScalarParamStrategy::PrimitiveValue),
                         ParamPassingStrategy::ByValue,
                     ),
-                    transport: Transport::Scalar(ScalarOrigin::Primitive(p)),
+                    transport: Transport::Scalar(origin),
                     mutability: Mutability::Shared,
                     len_param: None,
                     decode_ops: None,
