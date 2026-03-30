@@ -392,4 +392,54 @@ public final class {{ class.class_name }} implements AutoCloseable {
 {%- endif %}
     }
 {%- endif %}{% endfor %}
+{%- for stream in class.streams %}
+{%- match stream.mode %}
+{%- when crate::render::java::plan::JavaStreamMode::Async %}
+
+    public StreamSubscription<{{ stream.item_type }}> {{ stream.name }}(java.util.function.Consumer<{{ stream.item_type }}> callback) {
+        long subscription = Native.{{ stream.subscribe }}(handle);
+        if (subscription == 0L) return StreamSubscription.callback(() -> {});
+        BoltFFIStreamContext context = new BoltFFIStreamContext(
+            subscription, 16L,
+            Native::{{ stream.pop_batch }},
+            Native::{{ stream.poll }},
+            Native::{{ stream.unsubscribe }},
+            Native::{{ stream.free }},
+            _bytes -> { for ({{ stream.item_type }} item : {{ stream.pop_batch_items_expr }}) callback.accept(item); },
+            () -> {}
+        );
+        context.start();
+        return StreamSubscription.callback(context::requestTermination);
+    }
+{%- when crate::render::java::plan::JavaStreamMode::Batch %}
+
+    public StreamSubscription<{{ stream.item_type }}> {{ stream.name }}() {
+        return StreamSubscription.batch(
+            Native.{{ stream.subscribe }}(handle),
+            Native::{{ stream.pop_batch }},
+            Native::{{ stream.wait }},
+            Native::{{ stream.unsubscribe }},
+            Native::{{ stream.free }},
+            _bytes -> {{ stream.pop_batch_items_expr }}
+        );
+    }
+{%- when crate::render::java::plan::JavaStreamMode::Callback %}
+
+    public StreamSubscription<{{ stream.item_type }}> {{ stream.name }}(java.util.function.Consumer<{{ stream.item_type }}> callback) {
+        long subscription = Native.{{ stream.subscribe }}(handle);
+        if (subscription == 0L) return StreamSubscription.callback(() -> {});
+        BoltFFIStreamContext context = new BoltFFIStreamContext(
+            subscription, 16L,
+            Native::{{ stream.pop_batch }},
+            Native::{{ stream.poll }},
+            Native::{{ stream.unsubscribe }},
+            Native::{{ stream.free }},
+            _bytes -> { for ({{ stream.item_type }} item : {{ stream.pop_batch_items_expr }}) callback.accept(item); },
+            () -> {}
+        );
+        context.start();
+        return StreamSubscription.callback(context::requestTermination);
+    }
+{%- endmatch %}
+{%- endfor %}
 }
