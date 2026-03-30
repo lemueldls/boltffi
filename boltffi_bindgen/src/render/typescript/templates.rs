@@ -74,11 +74,27 @@ impl<'a> RecordTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "render_typescript/value_type_companion.txt", escape = "none")]
+pub struct ValueTypeCompanionTemplate<'a> {
+    pub name: &'a str,
+    pub constructors: &'a [TsValueTypeConstructor],
+    pub methods: &'a [TsValueTypeMethod],
+}
+
+#[derive(Template)]
 #[template(path = "render_typescript/enum_c_style.txt", escape = "none")]
 pub struct EnumCStyleTemplate<'a> {
     pub name: &'a str,
     pub variants: &'a [TsVariant],
     pub doc: &'a Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "render_typescript/enum_namespace.txt", escape = "none")]
+pub struct EnumNamespaceTemplate<'a> {
+    pub name: &'a str,
+    pub constructors: &'a [TsValueTypeConstructor],
+    pub methods: &'a [TsValueTypeMethod],
 }
 
 #[derive(Template)]
@@ -173,6 +189,18 @@ impl TypeScriptEmitter {
 
         for record in &module.records {
             output.push_str(&RecordTemplate::from_record(record).render().unwrap());
+            if record.has_companion() {
+                output.push_str("\n\n");
+                output.push_str(
+                    &ValueTypeCompanionTemplate {
+                        name: &record.name,
+                        constructors: &record.constructors,
+                        methods: &record.methods,
+                    }
+                    .render()
+                    .unwrap(),
+                );
+            }
             output.push_str("\n\n");
         }
 
@@ -187,6 +215,18 @@ impl TypeScriptEmitter {
                     .render()
                     .unwrap(),
                 );
+                if enumeration.has_companion() {
+                    output.push_str("\n\n");
+                    output.push_str(
+                        &EnumNamespaceTemplate {
+                            name: &enumeration.name,
+                            constructors: &enumeration.constructors,
+                            methods: &enumeration.methods,
+                        }
+                        .render()
+                        .unwrap(),
+                    );
+                }
             } else {
                 output.push_str(
                     &EnumDataTemplate {
@@ -197,6 +237,18 @@ impl TypeScriptEmitter {
                     .render()
                     .unwrap(),
                 );
+                if enumeration.has_companion() {
+                    output.push_str("\n\n");
+                    output.push_str(
+                        &ValueTypeCompanionTemplate {
+                            name: &enumeration.name,
+                            constructors: &enumeration.constructors,
+                            methods: &enumeration.methods,
+                        }
+                        .render()
+                        .unwrap(),
+                    );
+                }
             }
             output.push_str("\n\n");
         }
@@ -357,6 +409,18 @@ impl TypeScriptEmitter {
 
         for record in &module.records {
             output.push_str(&RecordTemplate::from_record(record).render().unwrap());
+            if record.has_companion() {
+                output.push_str("\n\n");
+                output.push_str(
+                    &ValueTypeCompanionTemplate {
+                        name: &record.name,
+                        constructors: &record.constructors,
+                        methods: &record.methods,
+                    }
+                    .render()
+                    .unwrap(),
+                );
+            }
             output.push_str("\n\n");
         }
 
@@ -371,6 +435,18 @@ impl TypeScriptEmitter {
                     .render()
                     .unwrap(),
                 );
+                if enumeration.has_companion() {
+                    output.push_str("\n\n");
+                    output.push_str(
+                        &EnumNamespaceTemplate {
+                            name: &enumeration.name,
+                            constructors: &enumeration.constructors,
+                            methods: &enumeration.methods,
+                        }
+                        .render()
+                        .unwrap(),
+                    );
+                }
             } else {
                 output.push_str(
                     &EnumDataTemplate {
@@ -381,6 +457,18 @@ impl TypeScriptEmitter {
                     .render()
                     .unwrap(),
                 );
+                if enumeration.has_companion() {
+                    output.push_str("\n\n");
+                    output.push_str(
+                        &ValueTypeCompanionTemplate {
+                            name: &enumeration.name,
+                            constructors: &enumeration.constructors,
+                            methods: &enumeration.methods,
+                        }
+                        .render()
+                        .unwrap(),
+                    );
+                }
             }
             output.push_str("\n\n");
         }
@@ -629,6 +717,8 @@ mod tests {
                     doc: None,
                 },
             ],
+            constructors: vec![],
+            methods: vec![],
             is_blittable: true,
             wire_size: Some(16),
             tail_padding: 0,
@@ -659,6 +749,8 @@ mod tests {
                     doc: Some("The user's display name".to_string()),
                 },
             ],
+            constructors: vec![],
+            methods: vec![],
             is_blittable: false,
             wire_size: None,
             tail_padding: 0,

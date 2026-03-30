@@ -281,27 +281,23 @@ fn generate_record_instance_export(
     let return_abi = return_lowering.lower_output(&method_descriptor.resolved_output);
     let on_error = return_abi.invalid_arg_early_return_statement();
 
-    let other_inputs = method.sig.inputs.iter().skip(1).cloned();
+    let self_ident = syn::Ident::new("self_value", method_name.span());
+    let self_input: syn::FnArg = syn::parse_quote!(#self_ident: #type_name);
+    let all_inputs = std::iter::once(self_input).chain(method.sig.inputs.iter().skip(1).cloned());
     let FfiParams {
-        ffi_params: param_ffi,
-        conversions: param_conversions,
+        ffi_params: all_ffi_params,
+        conversions: mut all_conversions,
         call_args,
-    } = transform_method_params(other_inputs, return_lowering, callback_registry, &on_error);
+    } = transform_method_params(all_inputs, return_lowering, callback_registry, &on_error);
 
-    let self_param = quote! { self_value: <#type_name as ::boltffi::__private::Passable>::In };
-    let self_unpack = if is_mut {
-        quote! { let mut self_value: #type_name = unsafe { <#type_name as ::boltffi::__private::Passable>::unpack(self_value) }; }
-    } else {
-        quote! { let self_value: #type_name = unsafe { <#type_name as ::boltffi::__private::Passable>::unpack(self_value) }; }
-    };
+    if is_mut {
+        all_conversions.push(quote! {
+            let mut #self_ident = #self_ident;
+        });
+    }
 
-    let mut all_ffi_params = vec![self_param];
-    all_ffi_params.extend(param_ffi);
-
-    let mut all_conversions = vec![self_unpack];
-    all_conversions.extend(param_conversions);
-
-    let call_expr = quote! { self_value.#method_name(#(#call_args),*) };
+    let method_call_args = call_args.into_iter().skip(1).collect::<Vec<_>>();
+    let call_expr = quote! { #self_ident.#method_name(#(#method_call_args),*) };
 
     if is_mut {
         return generate_mut_instance_export(

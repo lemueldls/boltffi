@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::path::{Component, Path};
 
-use boltffi_bindgen::render::typescript::{TypeScriptEmitter, TypeScriptLowerer};
+use boltffi_bindgen::render::typescript::{
+    TypeScriptEmitter, TypeScriptLowerError, TypeScriptLowerer,
+};
 use boltffi_bindgen::{
     CHeaderLowerer, FactoryStyle, KotlinOptions, ScanFeatures,
     TypeConversion as BindgenTypeConversion, TypeMapping as BindgenTypeMapping, TypeMappings, ir,
@@ -484,7 +486,14 @@ fn generate_typescript(config: &Config, output: Option<PathBuf>) -> Result<()> {
         crate_name.to_string(),
         experimental,
     )
-    .lower();
+    .lower()
+    .map_err(|error| match error {
+        TypeScriptLowerError::ValueTypeMemberNameCollision { .. }
+        | TypeScriptLowerError::TopLevelFunctionNameCollision { .. } => CliError::CommandFailed {
+            command: format!("generate typescript: {error}"),
+            status: None,
+        },
+    })?;
     let runtime_package = config.wasm_runtime_package();
 
     let ts_code = TypeScriptEmitter::emit(&ts_module).replacen(
