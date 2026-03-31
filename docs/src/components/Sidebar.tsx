@@ -62,6 +62,7 @@ const sections: Section[] = [
       { id: "structs", label: "Structs" },
       { id: "default-values", label: "Default Values" },
       { id: "enums", label: "Enums" },
+      { id: "methods-and-constructors", label: "Methods & Constructors" },
     ]
   },
   { 
