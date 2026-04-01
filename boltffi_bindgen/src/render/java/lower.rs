@@ -29,9 +29,9 @@ use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{
     CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef, CustomTypeDef,
     EnumDef, EnumRepr, FieldDef, FunctionDef, MethodDef, ParamDef, Receiver, RecordDef, ReturnDef,
-    StreamDef, StreamMode,
+    StreamDef, StreamMode, VariantPayload,
 };
-use crate::ir::ids::{CallbackId, CustomTypeId, FieldName, RecordId};
+use crate::ir::ids::{CallbackId, CustomTypeId, EnumId, FieldName, RecordId};
 use crate::ir::ops::{
     FieldReadOp, FieldWriteOp, OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq,
     remap_root_in_seq,
@@ -1210,21 +1210,17 @@ impl<'a> JavaLowerer<'a> {
             ReturnDef::Result {
                 err: TypeExpr::Enum(id),
                 ..
-            } => self
-                .ffi
-                .catalog
-                .resolve_enum(id)
-                .filter(|e| e.is_error)
-                .map(|_| {
-                    (
-                        Some(format!(
-                            "{}.Exception",
-                            NamingConvention::class_name(id.as_str())
-                        )),
-                        false,
-                    )
-                })
-                .unwrap_or((None, false)),
+            } if self.is_flat_error_enum(id) => (
+                Some(format!(
+                    "{}.Exception",
+                    NamingConvention::class_name(id.as_str())
+                )),
+                false,
+            ),
+            ReturnDef::Result {
+                err: TypeExpr::Enum(id),
+                ..
+            } if self.is_error_enum(id) => (None, true),
             ReturnDef::Result {
                 err: TypeExpr::Record(id),
                 ..
@@ -1667,6 +1663,33 @@ impl<'a> JavaLowerer<'a> {
             .is_some_and(|record| record.is_error)
     }
 
+    fn is_error_enum(&self, id: &EnumId) -> bool {
+        self.ffi
+            .catalog
+            .resolve_enum(id)
+            .is_some_and(|enumeration| enumeration.is_error)
+    }
+
+    fn is_flat_error_enum(&self, id: &EnumId) -> bool {
+        self.ffi
+            .catalog
+            .resolve_enum(id)
+            .is_some_and(|enumeration| self.uses_flat_error_enum_template(enumeration))
+    }
+
+    fn uses_flat_error_enum_template(&self, enumeration: &EnumDef) -> bool {
+        if !enumeration.is_error {
+            return false;
+        }
+
+        match &enumeration.repr {
+            EnumRepr::CStyle { .. } => true,
+            EnumRepr::Data { variants, .. } => variants
+                .iter()
+                .all(|variant| matches!(variant.payload, VariantPayload::Unit)),
+        }
+    }
+
     fn lower_constructor(
         &self,
         class: &ClassDef,
@@ -1913,7 +1936,11 @@ impl<'a> JavaLowerer<'a> {
         let abi_enum = self.abi_enum_for(enumeration);
         let class_name = NamingConvention::class_name(enumeration.id.as_str());
         let kind = if enumeration.is_error {
-            JavaEnumKind::Error
+            if self.uses_flat_error_enum_template(enumeration) {
+                JavaEnumKind::Error
+            } else {
+                JavaEnumKind::ErrorAbstractClass
+            }
         } else if abi_enum.is_c_style {
             JavaEnumKind::CStyle
         } else if self.options.min_java_version.supports_sealed()
@@ -1986,7 +2013,11 @@ impl<'a> JavaLowerer<'a> {
             JavaEnumKind::CStyle | JavaEnumKind::Error => {
                 NamingConvention::enum_constant_name(variant.name.as_str())
             }
-            _ => NamingConvention::class_name(variant.name.as_str()),
+            JavaEnumKind::SealedInterface
+            | JavaEnumKind::AbstractClass
+            | JavaEnumKind::ErrorAbstractClass => {
+                NamingConvention::class_name(variant.name.as_str())
+            }
         };
         let fields = match &variant.payload {
             AbiEnumPayload::Unit => Vec::new(),
@@ -2012,14 +2043,13 @@ impl<'a> JavaLowerer<'a> {
     ) -> i128 {
         match kind {
             JavaEnumKind::CStyle => discriminant,
-            JavaEnumKind::Error | JavaEnumKind::SealedInterface | JavaEnumKind::AbstractClass => {
-                match abi_enum.codec_tag_strategy {
-                    EnumTagStrategy::Discriminant => discriminant,
-                    EnumTagStrategy::OrdinalIndex => {
-                        abi_enum.resolve_codec_tag(ordinal, discriminant)
-                    }
-                }
-            }
+            JavaEnumKind::Error
+            | JavaEnumKind::SealedInterface
+            | JavaEnumKind::AbstractClass
+            | JavaEnumKind::ErrorAbstractClass => match abi_enum.codec_tag_strategy {
+                EnumTagStrategy::Discriminant => discriminant,
+                EnumTagStrategy::OrdinalIndex => abi_enum.resolve_codec_tag(ordinal, discriminant),
+            },
         }
     }
 
@@ -4047,6 +4077,61 @@ mod tests {
         assert_eq!(
             func.return_plan.result_err_decode(),
             "AppError.decode(reader)"
+        );
+    }
+
+    #[test]
+    fn payload_error_enum_result_uses_throwable_abstract_class() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(EnumDef {
+            id: EnumId::new("ApiError"),
+            repr: EnumRepr::Data {
+                tag_type: PrimitiveType::I32,
+                variants: vec![
+                    crate::ir::definitions::DataVariant {
+                        name: crate::ir::ids::VariantName::new("Network"),
+                        discriminant: 0,
+                        payload: VariantPayload::Struct(vec![field("message", TypeExpr::String)]),
+                        doc: None,
+                    },
+                    crate::ir::definitions::DataVariant {
+                        name: crate::ir::ids::VariantName::new("Http"),
+                        discriminant: 1,
+                        payload: VariantPayload::Struct(vec![
+                            field("code", TypeExpr::Primitive(PrimitiveType::I32)),
+                            field("message", TypeExpr::String),
+                        ]),
+                        doc: None,
+                    },
+                ],
+            },
+            is_error: true,
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+        contract.functions.push(function(
+            "fetch",
+            vec![],
+            ReturnDef::Result {
+                ok: TypeExpr::String,
+                err: TypeExpr::Enum(EnumId::new("ApiError")),
+            },
+        ));
+
+        let module = lower(&contract);
+        let enumeration = &module.enums[0];
+        let func = &module.functions[0];
+
+        assert!(enumeration.is_error());
+        assert!(enumeration.is_abstract());
+        assert!(func.return_plan.is_result());
+        assert!(func.return_plan.result_has_typed_exception());
+        assert!(func.return_plan.result_err_throws_directly());
+        assert_eq!(
+            func.return_plan.result_err_decode(),
+            "ApiError.decode(reader)"
         );
     }
 

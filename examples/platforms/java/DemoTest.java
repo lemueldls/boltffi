@@ -963,6 +963,26 @@ public final class DemoTest {
             assert e.getError() == ValidationError.INVALID_FORMAT : "validateUsername typed error";
         }
 
+        assert Demo.mayFail(true).equals("Success!") : "mayFail ok";
+        try {
+            Demo.mayFail(false);
+            assert false : "mayFail should throw structured AppError";
+        } catch (AppError e) {
+            assert e.code() == 400 : "mayFail code";
+            assert e.message().equals("Invalid input") : "mayFail message field";
+            assert e.getMessage().equals("Invalid input") : "mayFail exception message";
+        }
+
+        assert Demo.divideApp(10, 2) == 5 : "divideApp ok";
+        try {
+            Demo.divideApp(10, 0);
+            assert false : "divideApp should throw structured AppError";
+        } catch (AppError e) {
+            assert e.code() == 500 : "divideApp code";
+            assert e.message().equals("Division by zero") : "divideApp message field";
+            assert e.getMessage().equals("Division by zero") : "divideApp exception message";
+        }
+
         System.out.println("  PASS\n");
     }
 
