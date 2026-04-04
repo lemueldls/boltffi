@@ -834,6 +834,14 @@ public final class DemoTest {
         };
         OffsetCallback offsetCallback = (value, delta) -> value + delta;
         VecProcessor vecProcessor = values -> Arrays.stream(values).map(value -> value * value).toArray();
+        MessageFormatter messageFormatter = (scope, message) -> scope + "::" + message.toUpperCase();
+        OptionalMessageCallback optionalMessageCallback = key -> key > 0 ? Optional.of("message:" + key) : Optional.empty();
+        ResultMessageCallback resultMessageCallback = key -> {
+            if (key < 0) {
+                throw new MathError.Exception(MathError.NEGATIVE_INPUT);
+            }
+            return "message:" + key;
+        };
 
         assert Demo.invokeValueCallback(doubler, 4) == 8 : "invokeValueCallback";
         assert Demo.invokeValueCallbackTwice(doubler, 3, 4) == 14 : "invokeValueCallbackTwice";
@@ -845,6 +853,28 @@ public final class DemoTest {
         assert Demo.mapStatus(statusMapper, Status.PENDING) == Status.ACTIVE : "mapStatus";
         assert flipper.mapStatus(Status.ACTIVE) == Status.INACTIVE : "makeStatusFlipper direct";
         assert Demo.mapStatus(flipper, Status.INACTIVE) == Status.PENDING : "makeStatusFlipper bridged";
+        assert Demo.formatMessageWithCallback(messageFormatter, "sync", "borrowed strings").equals("sync::BORROWED STRINGS")
+            : "formatMessageWithCallback";
+        assert Demo.formatMessageWithBoxedCallback(messageFormatter, "boxed", "borrowed strings").equals("boxed::BORROWED STRINGS")
+            : "formatMessageWithBoxedCallback";
+        assert Demo.formatMessageWithOptionalCallback(Optional.of(messageFormatter), "optional", "borrowed strings")
+            .equals("optional::BORROWED STRINGS") : "formatMessageWithOptionalCallback some";
+        assert Demo.formatMessageWithOptionalCallback(Optional.empty(), "fallback", "message").equals("fallback::message")
+            : "formatMessageWithOptionalCallback none";
+        MessageFormatter prefixer = Demo.makeMessagePrefixer("prefix");
+        assert prefixer.formatMessage("scope", "message").equals("prefix::scope::message") : "makeMessagePrefixer direct";
+        assert Demo.formatMessageWithCallback(prefixer, "sync", "formatter").equals("prefix::sync::formatter")
+            : "makeMessagePrefixer bridged";
+        Optional<String> optionalMessage = Demo.invokeOptionalMessageCallback(optionalMessageCallback, 7);
+        assert optionalMessage.isPresent() && optionalMessage.get().equals("message:7") : "invokeOptionalMessageCallback some";
+        assert !Demo.invokeOptionalMessageCallback(optionalMessageCallback, 0).isPresent() : "invokeOptionalMessageCallback none";
+        assert Demo.invokeResultMessageCallback(resultMessageCallback, 8).equals("message:8") : "invokeResultMessageCallback ok";
+        try {
+            Demo.invokeResultMessageCallback(resultMessageCallback, -1);
+            assert false : "invokeResultMessageCallback should throw";
+        } catch (MathError.Exception e) {
+            assert e.getError() == MathError.NEGATIVE_INPUT : "invokeResultMessageCallback error type";
+        }
 
         int[] processed = Demo.processVec(vecProcessor, new int[]{1, 2, 3});
         assert processed.length == 3 : "processVec length";
@@ -904,19 +934,87 @@ public final class DemoTest {
                 public CompletableFuture<String> fetchString(String input) {
                     return CompletableFuture.completedFuture(input.toUpperCase());
                 }
+
+                @Override
+                public CompletableFuture<String> fetchJoinedMessage(String scope, String message) {
+                    return CompletableFuture.completedFuture(scope + "::" + message.toUpperCase());
+                }
             };
+            AsyncPointTransformer asyncPointTransformer =
+                point -> CompletableFuture.completedFuture(new Point(point.x() + 50.0, point.y() + 60.0));
             AsyncOptionFetcher asyncOptionFetcher = key -> CompletableFuture.completedFuture(
                 key > 0 ? Optional.of(key * 1000L) : Optional.empty()
             );
+            AsyncOptionalMessageFetcher asyncOptionalMessageFetcher = key -> CompletableFuture.completedFuture(
+                key > 0 ? Optional.of("async-message:" + key) : Optional.empty()
+            );
+            AsyncResultFormatter asyncResultFormatter = new AsyncResultFormatter() {
+                @Override
+                public CompletableFuture<String> renderMessage(String scope, String message) {
+                    if (scope.isEmpty()) {
+                        CompletableFuture<String> failed = new CompletableFuture<>();
+                        failed.completeExceptionally(new MathError.Exception(MathError.NEGATIVE_INPUT));
+                        return failed;
+                    }
+                    return CompletableFuture.completedFuture(scope + "::" + message.toUpperCase());
+                }
+
+                @Override
+                public CompletableFuture<Point> transformPoint(Point point, Status status) {
+                    if (status == Status.INACTIVE) {
+                        CompletableFuture<Point> failed = new CompletableFuture<>();
+                        failed.completeExceptionally(new MathError.Exception(MathError.NEGATIVE_INPUT));
+                        return failed;
+                    }
+                    return CompletableFuture.completedFuture(new Point(point.x() + 500.0, point.y() + 600.0));
+                }
+            };
 
             assert Demo.fetchWithAsyncCallback(asyncFetcher, 5).get() == 500 : "fetchWithAsyncCallback";
             assert Demo.fetchStringWithAsyncCallback(asyncFetcher, "boltffi").get().equals("BOLTFFI") : "fetchStringWithAsyncCallback";
+            assert Demo.fetchJoinedMessageWithAsyncCallback(asyncFetcher, "async", "borrowed strings").get()
+                .equals("async::BORROWED STRINGS") : "fetchJoinedMessageWithAsyncCallback";
+            Point asyncPoint = Demo.transformPointWithAsyncCallback(asyncPointTransformer, new Point(1.0, 2.0)).get();
+            assert asyncPoint.x() == 51.0 : "transformPointWithAsyncCallback.x";
+            assert asyncPoint.y() == 62.0 : "transformPointWithAsyncCallback.y";
 
             Optional<Long> some = Demo.invokeAsyncOptionFetcher(asyncOptionFetcher, 7).get();
             assert some.isPresent() && some.get() == 7000L : "invokeAsyncOptionFetcher some";
 
             Optional<Long> none = Demo.invokeAsyncOptionFetcher(asyncOptionFetcher, 0).get();
             assert !none.isPresent() : "invokeAsyncOptionFetcher none";
+            Optional<String> someMessage = Demo.invokeAsyncOptionalMessageFetcher(asyncOptionalMessageFetcher, 9).get();
+            assert someMessage.isPresent() && someMessage.get().equals("async-message:9")
+                : "invokeAsyncOptionalMessageFetcher some";
+            assert !Demo.invokeAsyncOptionalMessageFetcher(asyncOptionalMessageFetcher, 0).get().isPresent()
+                : "invokeAsyncOptionalMessageFetcher none";
+            assert Demo.renderMessageWithAsyncResultCallback(asyncResultFormatter, "async", "result").get()
+                .equals("async::RESULT") : "renderMessageWithAsyncResultCallback ok";
+            Point asyncResultPoint = Demo.transformPointWithAsyncResultCallback(
+                asyncResultFormatter,
+                new Point(3.0, 4.0),
+                Status.ACTIVE
+            ).get();
+            assert asyncResultPoint.x() == 503.0 : "transformPointWithAsyncResultCallback.x";
+            assert asyncResultPoint.y() == 604.0 : "transformPointWithAsyncResultCallback.y";
+            try {
+                Demo.renderMessageWithAsyncResultCallback(asyncResultFormatter, "", "result").get();
+                assert false : "renderMessageWithAsyncResultCallback should throw";
+            } catch (Exception e) {
+                Throwable cause = e instanceof java.util.concurrent.ExecutionException ? e.getCause() : e;
+                assert cause instanceof MathError.Exception : "renderMessageWithAsyncResultCallback error type";
+                assert ((MathError.Exception) cause).getError() == MathError.NEGATIVE_INPUT
+                    : "renderMessageWithAsyncResultCallback error value";
+            }
+            try {
+                Demo.transformPointWithAsyncResultCallback(asyncResultFormatter, new Point(3.0, 4.0), Status.INACTIVE).get();
+                assert false : "transformPointWithAsyncResultCallback should throw";
+            } catch (Exception e) {
+                Throwable cause = e instanceof java.util.concurrent.ExecutionException ? e.getCause() : e;
+                assert cause instanceof MathError.Exception : "transformPointWithAsyncResultCallback error type";
+                assert ((MathError.Exception) cause).getError() == MathError.NEGATIVE_INPUT
+                    : "transformPointWithAsyncResultCallback error value";
+            }
         } catch (Exception exception) {
             throw new RuntimeException("async callback test failed", exception);
         }
