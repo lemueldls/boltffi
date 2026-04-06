@@ -1866,9 +1866,12 @@ impl<'a> KotlinLowerer<'a> {
         let return_info =
             self.callback_return_info(&method.returns, output_route, &abi_method.error);
         let invoker = self.async_callback_invoker(&return_info, output_route);
+        let method_name_pascal = NamingConvention::class_name(method.id.as_str());
         KotlinAsyncCallbackMethod {
             name: NamingConvention::method_name(method.id.as_str()),
             ffi_name: abi_method.vtable_field.as_str().to_string(),
+            complete_name: format!("complete{}", method_name_pascal),
+            fail_name: format!("fail{}", method_name_pascal),
             invoker_name: invoker.name,
             params,
             return_info,
@@ -2521,6 +2524,7 @@ impl<'a> KotlinLowerer<'a> {
                 .library_name
                 .clone()
                 .unwrap_or_else(|| self.contract.package.name.clone()),
+            desktop_loader: self.options.desktop_loader,
             prefix: naming::ffi_prefix().to_string(),
             functions,
             wire_functions,

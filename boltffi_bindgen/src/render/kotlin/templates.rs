@@ -1348,7 +1348,16 @@ mod tests {
                 doc: None,
             }],
         };
-        insta::assert_snapshot!(template.render().unwrap());
+        let rendered = template.render().unwrap();
+        let decode_index = rendered
+            .find("val resultDecoded = result")
+            .expect("decoded argument should be rendered");
+        let register_index = rendered
+            .find("pendingAsyncCallbacks[callbackData] = callbackPtr")
+            .expect("pending callback registration should be rendered");
+        assert!(decode_index < register_index);
+        assert!(!rendered.contains("throw t"));
+        insta::assert_snapshot!(rendered);
     }
 
     #[test]
