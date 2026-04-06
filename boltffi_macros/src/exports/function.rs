@@ -20,7 +20,7 @@ use crate::lowering::params::{FfiParams, transform_params, transform_params_asyn
 use crate::lowering::returns::lower::{encoded_return_body, encoded_return_buffer_expression};
 use crate::lowering::returns::model::{
     ResolvedReturn, ReturnInvocationContext, ReturnLoweringContext, ReturnPlatform,
-    WasmOptionScalarEncoding,
+    ValueReturnStrategy, WasmOptionScalarEncoding,
 };
 use crate::safety;
 
@@ -433,7 +433,7 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
 
             let native_body = quote! {
                 #call_and_bind
-                <::boltffi::__private::Seal as ::boltffi::__private::VecTransport<_>>::pack(#result_ident)
+                <_ as ::boltffi::__private::VecTransport>::pack_vec(#result_ident)
             };
 
             let wasm_body = quote! {
@@ -591,6 +591,28 @@ fn generate_async_export(
             return_type: quote! {},
             body: quote! {
                 let _ = ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle);
+            },
+        }
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::CompositeValue
+    ) {
+        AsyncWasmCompleteExport {
+            params: quote! {
+                out: *mut ::boltffi::__private::FfiBuf,
+                handle: ::boltffi::__private::RustFutureHandle,
+                _out_status: *mut ::boltffi::__private::FfiStatus
+            },
+            return_type: quote! {},
+            body: quote! {
+                if out.is_null() {
+                    return;
+                }
+                let buf = match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(result) => ::boltffi::__private::FfiBuf::from_vec(vec![result]),
+                    None => ::boltffi::__private::FfiBuf::empty(),
+                };
+                out.write(buf);
             },
         }
     } else if let Some(strategy) = return_abi.encoded_return_strategy() {

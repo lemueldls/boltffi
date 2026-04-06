@@ -447,7 +447,7 @@ impl<'a> ValueParamDecoder<'a> {
                     #on_wire_record_error
                 }
                 unsafe {
-                    <::boltffi::__private::Seal as ::boltffi::__private::VecTransport<#inner_type>>::unpack(
+                    <#inner_type as ::boltffi::__private::VecTransport>::unpack_vec(
                         #ptr_name,
                         raw_byte_len
                     )
@@ -484,7 +484,7 @@ impl<'a> ValueParamDecoder<'a> {
                     #on_wire_record_error
                 }
                 unsafe {
-                    <::boltffi::__private::Seal as ::boltffi::__private::VecTransport<#inner_type>>::unpack(
+                    <#inner_type as ::boltffi::__private::VecTransport>::unpack_vec(
                         #ptr_name,
                         raw_byte_len
                     )

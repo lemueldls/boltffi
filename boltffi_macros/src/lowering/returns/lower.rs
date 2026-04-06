@@ -210,7 +210,7 @@ pub fn encoded_return_buffer_expression(
 ) -> proc_macro2::TokenStream {
     match strategy {
         EncodedReturnStrategy::DirectVec => quote! {
-            <::boltffi::__private::Seal as ::boltffi::__private::VecTransport<_>>::pack(#result_ident)
+            <_ as ::boltffi::__private::VecTransport>::pack_vec(#result_ident)
         },
         EncodedReturnStrategy::Utf8String => quote! {
             #[cfg(target_arch = "wasm32")]
