@@ -7,14 +7,23 @@ use crate::{
     },
     render::dart::{
         DartLibrary, NamingConvention,
-        templates::{NativeFunctionsTemplate, NativeRecordTemplate, PreludeTemplate},
+        templates::{
+            BuildHookTemplate, NativeFunctionsTemplate, NativeRecordTemplate, PreludeTemplate,
+            PubspecTemplate,
+        },
     },
 };
+
+pub struct DartPackage {
+    pub pubspec: String,
+    pub lib: String,
+    pub build: String,
+}
 
 pub struct DartEmitter {}
 
 impl DartEmitter {
-    pub fn emit(library: &DartLibrary) -> String {
+    pub fn emit(library: &DartLibrary, package_name: &str, crate_dir: &str) -> DartPackage {
         let mut output = String::new();
 
         output.push_str(PreludeTemplate {}.render().unwrap().as_str());
@@ -45,7 +54,24 @@ impl DartEmitter {
         );
         output.push_str("\n\n");
 
-        output
+        DartPackage {
+            pubspec: PubspecTemplate {
+                package_name,
+                description: None,
+                version: None,
+                repository: None,
+            }
+            .render()
+            .unwrap(),
+            lib: output,
+            build: BuildHookTemplate {
+                crate_name: package_name,
+                crate_path: crate_dir,
+                build_mode: "release",
+            }
+            .render()
+            .unwrap(),
+        }
     }
 }
 
