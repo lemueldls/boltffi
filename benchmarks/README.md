@@ -2,6 +2,7 @@
 
 Performance comparison across platforms:
 - **Swift/Kotlin**: BoltFFI vs UniFFI
+- **Java (JVM)**: BoltFFI vs [uniffi-bindgen-java](https://github.com/IronCoreLabs/uniffi-bindgen-java) (FFM) vs UniFFI (Kotlin/JNA)
 - **WASM**: BoltFFI vs wasm-bindgen
 
 All libraries wrap the exact same Rust code with identical public APIs, so the only variable is FFI overhead.
@@ -149,6 +150,16 @@ just bench-kotlin
 
 Report: `kotlin-jvm-bench/build/results/jmh/report.txt`
 
+### Java FFM (JVM via JMH)
+
+Requires JDK 22+ and `uniffi-bindgen-java` on PATH (or set `UNIFFI_BINDGEN_JAVA`).
+
+```bash
+just bench-java
+```
+
+Report: `java-jvm-bench/build/results/jmh/results.json`
+
 ### iOS
 
 ```bash
@@ -170,6 +181,59 @@ just bench-wasm
 ```
 
 ## Results
+
+### JVM (JMH on Apple M4 Max)
+
+Three-way comparison: BoltFFI (JNI), uniffi-bindgen-java (Java FFM, JDK 25), and UniFFI (Kotlin/JNA). All use the same Rust benchmark library (`bench_uniffi` for FFM/JNA, `bench_boltffi` for JNI) with identical data structures. Times in nanoseconds (lower is better).
+
+| Benchmark                         | BoltFFI (JNI) | uniffi-bindgen-java (FFM) | UniFFI (Kotlin/JNA) |
+|-----------------------------------|---------------|---------------------------|---------------------|
+| noop                              | 2 ns          | 5 ns                      | 3,591 ns            |
+| echo_i32                          | 3 ns          | 5 ns                      | 3,969 ns            |
+| add                               | 3 ns          | 4 ns                      | 3,773 ns            |
+| inc_u64                           | 98 ns         | 5 ns                      | 3,796 ns            |
+| echo_string_small                 | 236 ns        | 145 ns                    | 15,592 ns           |
+| echo_string_1k                    | 517 ns        | 1,075 ns                  | 15,588 ns           |
+| simple_enum                       | 6 ns          | 157 ns                    | 24,711 ns           |
+| find_even (100x)                  | 11,430 ns     | 5,431 ns                  | 972,494 ns          |
+| generate_locations_1k             | 7,075 ns      | 16,640 ns                 | 29,502 ns           |
+| generate_locations_10k            | 57,870 ns     | 132,814 ns                | 181,685 ns          |
+| generate_trades_1k                | 8,405 ns      | 21,579 ns                 | 36,828 ns           |
+| generate_trades_10k               | 78,892 ns     | 183,427 ns                | 182,906 ns          |
+| generate_particles_1k             | 9,382 ns      | 25,930 ns                 | 28,313 ns           |
+| generate_particles_10k            | 88,499 ns     | 229,298 ns                | 207,028 ns          |
+| generate_sensors_1k               | 8,874 ns      | 23,050 ns                 | 35,415 ns           |
+| generate_sensors_10k              | 83,244 ns     | 215,935 ns                | 309,952 ns          |
+| generate_user_profiles_100        | 28,147 ns     | 35,303 ns                 | 41,166 ns           |
+| generate_user_profiles_1k         | 283,478 ns    | 352,007 ns                | 324,239 ns          |
+| sum_ratings_1k                    | 7,566 ns      | 12,167 ns                 | 37,507 ns           |
+| sum_ratings_10k                   | 76,239 ns     | 110,174 ns                | 269,337 ns          |
+| sum_trade_volumes_1k              | 11,980 ns     | 18,146 ns                 | 32,796 ns           |
+| sum_trade_volumes_10k             | 95,087 ns     | 166,004 ns                | 204,140 ns          |
+| sum_particle_masses_1k            | 13,578 ns     | 21,557 ns                 | 36,190 ns           |
+| sum_particle_masses_10k           | 137,895 ns    | 204,995 ns                | 249,635 ns          |
+| avg_sensor_temp_1k                | 10,323 ns     | 18,856 ns                 | 32,909 ns           |
+| avg_sensor_temp_10k               | 121,569 ns    | 173,644 ns                | 219,836 ns          |
+| process_locations_1k              | 7,512 ns      | 11,552 ns                 | 36,573 ns           |
+| process_locations_10k             | 83,806 ns     | 104,063 ns                | 260,757 ns          |
+| sum_user_scores_100               | 26,001 ns     | 54,682 ns                 | 51,994 ns           |
+| sum_user_scores_1k                | 265,348 ns    | 528,509 ns                | 474,765 ns          |
+| count_active_users_100            | 26,568 ns     | 52,367 ns                 | 51,800 ns           |
+| count_active_users_1k             | 259,881 ns    | 511,834 ns                | 437,673 ns          |
+| generate_i32_vec_10k              | 2,718 ns      | 7,390 ns                  | 37,417 ns           |
+| generate_i32_vec_100k             | 21,222 ns     | 46,407 ns                 | 277,746 ns          |
+| generate_f64_vec_10k              | 5,965 ns      | 9,452 ns                  | 41,282 ns           |
+| generate_bytes_64k                | 4,760 ns      | 23,900 ns                 | 34,665 ns           |
+| sum_i32_vec_10k                   | 2,552 ns      | 12,586 ns                 | 51,452 ns           |
+| sum_i32_vec_100k                  | 16,269 ns     | 99,880 ns                 | 591,020 ns          |
+| sum_f64_vec_10k                   | 8,843 ns      | 18,145 ns                 | 62,032 ns           |
+| counter_increment (1k calls)      | 6,251 ns      | 18,322 ns                 | 4,060,635 ns        |
+| datastore_add (1k items)          | 82,551 ns     | 125,735 ns                | 10,337,197 ns       |
+| accumulator (1k calls)            | 6,188 ns      | 18,369 ns                 | 3,934,264 ns        |
+
+BoltFFI's `counter_increment_single_threaded` (no Mutex): 2,360 ns, `accumulator_single_threaded`: 3,275 ns.
+
+### Swift (macOS, Apple M3)
 
 These are actual results from running `just bench-swift` on Apple M3 chip:
 
