@@ -29,7 +29,14 @@ impl ResolvedReturn {
             }
             ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec) => {
                 quote! {
-                    return ::boltffi::__private::FfiBuf::default();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        return;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        return ::boltffi::__private::FfiBuf::default();
+                    }
                 }
             }
             ValueReturnStrategy::Buffer(_) => match (
