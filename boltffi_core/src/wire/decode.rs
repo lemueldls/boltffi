@@ -305,6 +305,13 @@ impl WireDecode for DateTime<Utc> {
     }
 }
 
+impl WireDecode for () {
+    #[inline]
+    fn decode_from(_buf: &[u8]) -> DecodeResult<Self> {
+        Ok(((), 0))
+    }
+}
+
 impl<T: WireDecode> WireDecode for Option<T> {
     fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
         let mut reader = WireReader::new(buf);
@@ -331,6 +338,13 @@ impl<T: WireDecode, E: WireDecode> WireDecode for Result<T, E> {
                 reader.finish(Err(value))
             }
         }
+    }
+}
+
+impl<T: WireDecode> WireDecode for Box<T> {
+    fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
+        let (value, consumed) = T::decode_from(buf)?;
+        Ok((Box::new(value), consumed))
     }
 }
 

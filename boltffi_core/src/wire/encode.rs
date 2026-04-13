@@ -338,6 +338,30 @@ impl<T: WireEncode> WireEncode for Option<T> {
     }
 }
 
+impl<T: WireEncode> WireEncode for Box<T> {
+    const ENCODING_KIND: WireEncodingKind = T::ENCODING_KIND;
+
+    #[inline]
+    fn is_fixed_size() -> bool {
+        T::is_fixed_size()
+    }
+
+    #[inline]
+    fn fixed_size() -> Option<usize> {
+        T::fixed_size()
+    }
+
+    #[inline]
+    fn wire_size(&self) -> usize {
+        (**self).wire_size()
+    }
+
+    #[inline]
+    fn encode_to(&self, buffer: &mut [u8]) -> usize {
+        (**self).encode_to(buffer)
+    }
+}
+
 impl<T: WireEncode> WireEncode for Vec<T> {
     #[inline]
     fn wire_size(&self) -> usize {
