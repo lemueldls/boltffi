@@ -1,20 +1,18 @@
-//! Command-line tool that orchestrates code generation, building, packaging,
-//! and verification.
-
-mod android;
 mod build;
+mod cargo;
 mod check;
+mod cli;
 mod commands;
 mod config;
-mod desktop;
-mod error;
 mod pack;
 mod reporter;
 mod target;
+mod toolchain;
 
 use clap::{Parser, Subcommand};
 use std::{fmt, path::PathBuf};
 
+use cli::{CliError, Result};
 use commands::build::{BuildCommandOptions, BuildPlatform};
 use commands::check::CheckOptions;
 use commands::doctor::{ConfigSummary, DoctorOptions};
@@ -27,7 +25,6 @@ use commands::pack::{
 use commands::verify::VerifyOptions;
 use commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
 use config::{Config, Target};
-use error::{CliError, Result};
 
 #[derive(Parser)]
 #[command(name = "boltffi")]
@@ -834,7 +831,7 @@ mod tests {
     use crate::commands::doctor::ConfigSummary;
     use crate::commands::pack::PackCommand;
     use crate::target::RustTarget;
-    use crate::{config::Config, error::CliError};
+    use crate::{cli::CliError, config::Config};
     use clap::Parser;
     use std::path::PathBuf;
 

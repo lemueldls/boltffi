@@ -4,13 +4,13 @@ use boltffi_bindgen::{
     FactoryStyle as BindgenFactoryStyle, KotlinApiStyle as BindgenKotlinApiStyle, KotlinOptions,
 };
 
+use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::{
     GenerateRequest, LanguageGenerator, ScanPointerWidth, bindgen_type_mappings,
 };
 use crate::config::{
     FactoryStyle as ConfigFactoryStyle, KotlinApiStyle as ConfigKotlinApiStyle, Target,
 };
-use crate::error::{CliError, Result};
 
 pub struct KotlinGenerator;
 

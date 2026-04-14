@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
+use crate::cli::Result;
 use crate::config::{
     AndroidConfig, AndroidKotlinConfig, AndroidPackConfig, AppleConfig, AppleSwiftConfig,
     CargoConfig, Config, DartConfig, ErrorStyle, FactoryStyle, HeaderConfig, JavaConfig,
     PackageConfig, PythonConfig, SpmConfig, TargetsConfig, WasmConfig, XcframeworkConfig,
 };
-use crate::error::Result;
 
 pub struct InitOptions {
     pub name: Option<String>,

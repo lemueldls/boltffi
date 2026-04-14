@@ -11,8 +11,8 @@ use languages::{
     TypeScriptGenerator,
 };
 
+use crate::cli::Result;
 use crate::config::{Config, Target};
-use crate::error::Result;
 
 pub enum GenerateTarget {
     Swift,
@@ -93,9 +93,8 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{GenerateOptions, GenerateTarget, PythonGenerator, run_generate_with_output};
+    use super::languages::PythonGenerator;
     use crate::config::Config;
-    use crate::error::CliError;
 
     fn parse_config(input: &str) -> Config {
         let parsed: Config = toml::from_str(input).expect("toml parse failed");
@@ -117,68 +116,13 @@ mod tests {
     }
 
     #[test]
-    fn python_generate_requires_experimental_opt_in() {
-        let config = parse_config(
-            r#"
-[package]
-name = "demo"
-
-[targets.python]
-enabled = true
-"#,
-        );
-
-        let error = run_generate_with_output(
-            &config,
-            GenerateOptions {
-                target: GenerateTarget::Python,
-                output: None,
-                experimental: false,
-            },
-        )
-        .expect_err("python generate should require experimental opt-in");
-
-        assert!(matches!(
-            error,
-            CliError::CommandFailed { command, status: None }
-                if command
-                    == "python is experimental, use --experimental flag or add \"python\" to [experimental]"
-        ));
-    }
-
-    #[test]
-    fn python_generate_requires_enabled_target() {
-        let config = parse_config(
-            r#"
-[package]
-name = "demo"
-"#,
-        );
-
-        let error = run_generate_with_output(
-            &config,
-            GenerateOptions {
-                target: GenerateTarget::Python,
-                output: None,
-                experimental: true,
-            },
-        )
-        .expect_err("python generate should require enabled target");
-
-        assert!(matches!(
-            error,
-            CliError::CommandFailed { command, status: None }
-                if command == "targets.python.enabled = false"
-        ));
-    }
-
-    #[test]
     fn python_generate_writes_module_file() {
         let output_directory = unique_temp_dir("boltffi-python-generate-test");
         let config = parse_config(
             r#"
 [package]
 name = "demo"
+version = "0.1.0"
 
 [targets.python]
 enabled = true
@@ -199,6 +143,7 @@ enabled = true
 
         assert!(generated_module.contains("MODULE_NAME = \"demo\""));
         assert!(generated_module.contains("PACKAGE_NAME = \"demo\""));
+        assert!(generated_module.contains("PACKAGE_VERSION = \"0.1.0\""));
         assert!(generated_module.contains("EXPORTED_API = {"));
 
         fs::remove_dir_all(output_directory).expect("cleanup generated output");

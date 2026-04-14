@@ -6,11 +6,11 @@ use boltffi_bindgen::{
     scan_crate_with_pointer_width,
 };
 
+use crate::cli::{CliError, Result};
 use crate::config::{
     Config, Experimental, Target, TypeConversion as ConfigTypeConversion,
     TypeMapping as ConfigTypeMapping,
 };
-use crate::error::{CliError, Result};
 
 #[derive(Debug, Clone)]
 pub struct SourceCrate {

@@ -1,8 +1,8 @@
 use boltffi_bindgen::render::python::{PythonEmitter, PythonLowerer};
 
+use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::{GenerateRequest, LanguageGenerator, ScanPointerWidth};
 use crate::config::Target;
-use crate::error::{CliError, Result};
 
 pub struct PythonGenerator;
 
@@ -48,6 +48,7 @@ impl LanguageGenerator for PythonGenerator {
             &lowered_crate.ffi_contract,
             &lowered_crate.abi_contract,
             &module_name,
+            request.config().package_version(),
         )
         .lower();
         let python_source = PythonEmitter::emit(&python_module);

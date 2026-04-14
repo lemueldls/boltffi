@@ -1,8 +1,8 @@
 use boltffi_bindgen::render::dart::{DartEmitter, DartLowerer};
 
+use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::{GenerateRequest, LanguageGenerator, ScanPointerWidth};
 use crate::config::Target;
-use crate::error::{CliError, Result};
 
 pub struct DartGenerator;
 
