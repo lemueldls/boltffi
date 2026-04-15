@@ -5,7 +5,9 @@ use crate::ir::{
     AbiContract,
     abi::{AbiCall, AbiEnum, AbiEnumField, AbiEnumPayload, CallId, CallMode},
     contract::FfiContract,
-    definitions::{DefaultValue, EnumDef, FieldDef, FunctionDef, RecordDef, ReturnDef},
+    definitions::{
+        ClassDef, DefaultValue, EnumDef, FieldDef, FunctionDef, MethodDef, RecordDef, ReturnDef,
+    },
     ids::BuiltinId,
     types::{PrimitiveType, TypeExpr},
 };
@@ -13,8 +15,8 @@ use crate::render::kotlin::NamingConvention;
 use boltffi_ffi_rules::transport::EnumTagStrategy;
 
 use super::plan::{
-    KmpEnum, KmpEnumField, KmpEnumVariant, KmpFunction, KmpModule, KmpParam, KmpRecord,
-    KmpRecordField,
+    KmpClass, KmpClassConstructor, KmpClassMethod, KmpEnum, KmpEnumField, KmpEnumVariant,
+    KmpFunction, KmpModule, KmpParam, KmpRecord, KmpRecordField,
 };
 
 pub struct KmpLowerer<'a> {
@@ -47,6 +49,12 @@ impl<'a> KmpLowerer<'a> {
             .all_enums()
             .map(|enumeration| self.lower_enum(enumeration))
             .collect::<Vec<_>>();
+        let classes = self
+            .contract
+            .catalog
+            .all_classes()
+            .map(|class| self.lower_class(class))
+            .collect::<Vec<_>>();
         let mut functions = Vec::new();
 
         for function in &self.contract.functions {
@@ -63,6 +71,7 @@ impl<'a> KmpLowerer<'a> {
         KmpModule {
             records,
             enums,
+            classes,
             functions,
         }
     }
@@ -305,6 +314,58 @@ impl<'a> KmpLowerer<'a> {
             EnumTagStrategy::OrdinalIndex => abi_enum.resolve_codec_tag(ordinal, discriminant),
         }
     }
+
+    fn lower_class(&self, class: &ClassDef) -> KmpClass {
+        KmpClass {
+            class_name: NamingConvention::class_name(class.id.as_str()),
+            doc: class.doc.clone(),
+            constructors: class
+                .constructors
+                .iter()
+                .map(|constructor| KmpClassConstructor {
+                    params: constructor
+                        .params()
+                        .into_iter()
+                        .map(|param| KmpParam {
+                            name: NamingConvention::param_name(param.name.as_str()),
+                            kotlin_type: self.kotlin_type(&param.type_expr),
+                        })
+                        .collect::<Vec<_>>(),
+                    doc: constructor.doc().map(String::from),
+                })
+                .collect::<Vec<_>>(),
+            methods: class
+                .methods
+                .iter()
+                .map(|method| self.lower_class_method(method))
+                .collect::<Vec<_>>(),
+        }
+    }
+
+    fn lower_class_method(&self, method: &MethodDef) -> KmpClassMethod {
+        KmpClassMethod {
+            name: NamingConvention::method_name(method.id.as_str()),
+            params: method
+                .params
+                .iter()
+                .map(|param| KmpParam {
+                    name: NamingConvention::param_name(param.name.as_str()),
+                    kotlin_type: self.kotlin_type(&param.type_expr),
+                })
+                .collect::<Vec<_>>(),
+            return_type: match &method.returns {
+                ReturnDef::Void => None,
+                ReturnDef::Value(type_expr) => Some(self.kotlin_type(type_expr)),
+                ReturnDef::Result { ok, err } => Some(format!(
+                    "BoltFFIResult<{}, {}>",
+                    self.kotlin_type(ok),
+                    self.kotlin_type(err)
+                )),
+            },
+            is_async: method.execution_kind() == ExecutionKind::Async,
+            doc: method.doc.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -332,6 +393,7 @@ mod tests {
 
         assert!(!module.records.is_empty());
         assert!(!module.enums.is_empty());
+        assert!(!module.classes.is_empty());
         assert!(!module.functions.is_empty());
         assert!(
             module

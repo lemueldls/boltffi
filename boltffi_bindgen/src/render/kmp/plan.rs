@@ -20,6 +20,7 @@ pub struct KmpOutputs {
 pub struct KmpModule {
     pub records: Vec<KmpRecord>,
     pub enums: Vec<KmpEnum>,
+    pub classes: Vec<KmpClass>,
     pub functions: Vec<KmpFunction>,
 }
 
@@ -59,6 +60,29 @@ pub struct KmpEnumVariant {
 pub struct KmpEnumField {
     pub name: String,
     pub kotlin_type: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct KmpClass {
+    pub class_name: String,
+    pub doc: Option<String>,
+    pub constructors: Vec<KmpClassConstructor>,
+    pub methods: Vec<KmpClassMethod>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KmpClassConstructor {
+    pub params: Vec<KmpParam>,
+    pub doc: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KmpClassMethod {
+    pub name: String,
+    pub params: Vec<KmpParam>,
+    pub return_type: Option<String>,
+    pub is_async: bool,
+    pub doc: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -9,6 +9,7 @@ pub struct CommonMainTemplate<'a> {
     pub module_name: &'a str,
     pub record_sources: &'a [String],
     pub enum_sources: &'a [String],
+    pub class_sources: &'a [String],
     pub functions: &'a [KmpFunction],
 }
 
@@ -27,6 +28,7 @@ pub struct NativeMainTemplate<'a> {
     pub package_name: &'a str,
     pub module_name: &'a str,
     pub native_binding_package: &'a str,
+    pub class_sources: &'a [String],
     pub functions: &'a [KmpFunction],
 }
 
@@ -73,6 +75,24 @@ pub struct KmpRecordFieldView<'a> {
     pub name: &'a str,
     pub kotlin_type: &'a str,
     pub default_value: Option<&'a str>,
+}
+
+#[derive(Template)]
+#[template(path = "kmp_class_common.txt", escape = "none")]
+pub struct ClassCommonTemplate<'a> {
+    pub class_name: &'a str,
+    pub doc: Option<&'a str>,
+    pub constructor_sources: &'a [String],
+    pub method_sources: &'a [String],
+}
+
+#[derive(Template)]
+#[template(path = "kmp_class_actual.txt", escape = "none")]
+pub struct ClassActualTemplate<'a> {
+    pub class_name: &'a str,
+    pub doc: Option<&'a str>,
+    pub constructor_sources: &'a [String],
+    pub method_sources: &'a [String],
 }
 
 pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
@@ -136,6 +156,60 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             .expect("KMP enum template should render")
         })
         .collect::<Vec<_>>();
+    let class_common_sources = module
+        .classes
+        .iter()
+        .map(|class| {
+            let constructor_sources = class
+                .constructors
+                .iter()
+                .map(|ctor| {
+                    render_kmp_constructor_signature(&ctor.params, ctor.doc.as_deref(), false)
+                })
+                .collect::<Vec<_>>();
+            let method_sources = class
+                .methods
+                .iter()
+                .map(|method| render_kmp_method_signature(method, false))
+                .collect::<Vec<_>>();
+
+            ClassCommonTemplate {
+                class_name: &class.class_name,
+                doc: class.doc.as_deref(),
+                constructor_sources: &constructor_sources,
+                method_sources: &method_sources,
+            }
+            .render()
+            .expect("KMP class common template should render")
+        })
+        .collect::<Vec<_>>();
+    let class_actual_sources = module
+        .classes
+        .iter()
+        .map(|class| {
+            let constructor_sources = class
+                .constructors
+                .iter()
+                .map(|ctor| {
+                    render_kmp_constructor_signature(&ctor.params, ctor.doc.as_deref(), true)
+                })
+                .collect::<Vec<_>>();
+            let method_sources = class
+                .methods
+                .iter()
+                .map(|method| render_kmp_method_signature(method, true))
+                .collect::<Vec<_>>();
+
+            ClassActualTemplate {
+                class_name: &class.class_name,
+                doc: class.doc.as_deref(),
+                constructor_sources: &constructor_sources,
+                method_sources: &method_sources,
+            }
+            .render()
+            .expect("KMP class actual template should render")
+        })
+        .collect::<Vec<_>>();
 
     KmpOutputs {
         common_main_source: CommonMainTemplate {
@@ -143,6 +217,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             module_name: &options.module_name,
             record_sources: &record_sources,
             enum_sources: &enum_sources,
+            class_sources: &class_common_sources,
             functions: &module.functions,
         }
         .render()
@@ -159,6 +234,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             package_name: &options.package_name,
             module_name: &options.module_name,
             native_binding_package: &options.native_binding_package,
+            class_sources: &class_actual_sources,
             functions: &module.functions,
         }
         .render()
@@ -212,6 +288,27 @@ mod tests {
                     doc: Some("Operation succeeded.".to_string()),
                 }],
                 doc: Some("The result of an operation.".to_string()),
+            }],
+            classes: vec![super::super::plan::KmpClass {
+                class_name: "Widget".to_string(),
+                doc: Some("A handle-backed widget.".to_string()),
+                constructors: vec![super::super::plan::KmpClassConstructor {
+                    params: vec![KmpParam {
+                        name: "name".to_string(),
+                        kotlin_type: "String".to_string(),
+                    }],
+                    doc: Some("Creates a widget.".to_string()),
+                }],
+                methods: vec![super::super::plan::KmpClassMethod {
+                    name: "rename".to_string(),
+                    params: vec![KmpParam {
+                        name: "name".to_string(),
+                        kotlin_type: "String".to_string(),
+                    }],
+                    return_type: None,
+                    is_async: false,
+                    doc: Some("Renames the widget.".to_string()),
+                }],
             }],
             functions: vec![
                 KmpFunction {
@@ -274,11 +371,43 @@ mod tests {
             .render()
             .unwrap(),
         ];
+        let constructor_sources = vec![render_kmp_constructor_signature(
+            &[KmpParam {
+                name: "name".to_string(),
+                kotlin_type: "String".to_string(),
+            }],
+            Some("Creates a widget."),
+            false,
+        )];
+        let method_sources = vec![render_kmp_method_signature(
+            &super::super::plan::KmpClassMethod {
+                name: "rename".to_string(),
+                params: vec![KmpParam {
+                    name: "name".to_string(),
+                    kotlin_type: "String".to_string(),
+                }],
+                return_type: None,
+                is_async: false,
+                doc: Some("Renames the widget.".to_string()),
+            },
+            false,
+        )];
+        let class_common_sources = vec![
+            ClassCommonTemplate {
+                class_name: "Widget",
+                doc: Some("A handle-backed widget."),
+                constructor_sources: &constructor_sources,
+                method_sources: &method_sources,
+            }
+            .render()
+            .unwrap(),
+        ];
         let rendered = CommonMainTemplate {
             package_name: &options.package_name,
             module_name: &options.module_name,
             record_sources: &record_sources,
             enum_sources: &enum_sources,
+            class_sources: &class_common_sources,
             functions: &module.functions,
         }
         .render()
@@ -307,10 +436,42 @@ mod tests {
     fn snapshot_native_main_template() {
         let module = test_module();
         let options = test_options();
+        let constructor_sources = vec![render_kmp_constructor_signature(
+            &[KmpParam {
+                name: "name".to_string(),
+                kotlin_type: "String".to_string(),
+            }],
+            Some("Creates a widget."),
+            true,
+        )];
+        let method_sources = vec![render_kmp_method_signature(
+            &super::super::plan::KmpClassMethod {
+                name: "rename".to_string(),
+                params: vec![KmpParam {
+                    name: "name".to_string(),
+                    kotlin_type: "String".to_string(),
+                }],
+                return_type: None,
+                is_async: false,
+                doc: Some("Renames the widget.".to_string()),
+            },
+            true,
+        )];
+        let class_actual_sources = vec![
+            ClassActualTemplate {
+                class_name: "Widget",
+                doc: Some("A handle-backed widget."),
+                constructor_sources: &constructor_sources,
+                method_sources: &method_sources,
+            }
+            .render()
+            .unwrap(),
+        ];
         let rendered = NativeMainTemplate {
             package_name: &options.package_name,
             module_name: &options.module_name,
             native_binding_package: &options.native_binding_package,
+            class_sources: &class_actual_sources,
             functions: &module.functions,
         }
         .render()
@@ -338,6 +499,76 @@ mod tests {
             class_name: "Location",
             fields: &fields,
             doc: Some("A physical location."),
+        }
+        .render()
+        .unwrap();
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn snapshot_class_common_template() {
+        let constructor_sources = vec![render_kmp_constructor_signature(
+            &[KmpParam {
+                name: "name".to_string(),
+                kotlin_type: "String".to_string(),
+            }],
+            Some("Creates a widget."),
+            false,
+        )];
+        let method_sources = vec![render_kmp_method_signature(
+            &super::super::plan::KmpClassMethod {
+                name: "rename".to_string(),
+                params: vec![KmpParam {
+                    name: "name".to_string(),
+                    kotlin_type: "String".to_string(),
+                }],
+                return_type: None,
+                is_async: false,
+                doc: Some("Renames the widget.".to_string()),
+            },
+            false,
+        )];
+        let rendered = ClassCommonTemplate {
+            class_name: "Widget",
+            doc: Some("A handle-backed widget."),
+            constructor_sources: &constructor_sources,
+            method_sources: &method_sources,
+        }
+        .render()
+        .unwrap();
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn snapshot_class_actual_template() {
+        let constructor_sources = vec![render_kmp_constructor_signature(
+            &[KmpParam {
+                name: "name".to_string(),
+                kotlin_type: "String".to_string(),
+            }],
+            Some("Creates a widget."),
+            true,
+        )];
+        let method_sources = vec![render_kmp_method_signature(
+            &super::super::plan::KmpClassMethod {
+                name: "rename".to_string(),
+                params: vec![KmpParam {
+                    name: "name".to_string(),
+                    kotlin_type: "String".to_string(),
+                }],
+                return_type: None,
+                is_async: false,
+                doc: Some("Renames the widget.".to_string()),
+            },
+            true,
+        )];
+        let rendered = ClassActualTemplate {
+            class_name: "Widget",
+            doc: Some("A handle-backed widget."),
+            constructor_sources: &constructor_sources,
+            method_sources: &method_sources,
         }
         .render()
         .unwrap();
@@ -392,4 +623,70 @@ mod tests {
 
         insta::assert_snapshot!(rendered);
     }
+}
+
+fn render_kmp_constructor_signature(
+    params: &[super::plan::KmpParam],
+    doc: Option<&str>,
+    actual: bool,
+) -> String {
+    let signature = params
+        .iter()
+        .map(|param| format!("{}: {}", param.name, param.kotlin_type))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut rendered = String::new();
+    if let Some(doc) = doc {
+        rendered.push_str(&render_doc_block(doc, "    "));
+    }
+    if actual {
+        rendered.push_str(&format!("    constructor({signature}) : this(0L)\n"));
+    } else {
+        rendered.push_str(&format!("    constructor({signature})\n"));
+    }
+    rendered
+}
+
+fn render_kmp_method_signature(method: &super::plan::KmpClassMethod, actual: bool) -> String {
+    let signature = method
+        .params
+        .iter()
+        .map(|param| format!("{}: {}", param.name, param.kotlin_type))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let return_suffix = method
+        .return_type
+        .as_ref()
+        .map(|ret| format!(": {ret}"))
+        .unwrap_or_default();
+    let suspend_prefix = if method.is_async { "suspend " } else { "" };
+    let mut rendered = String::new();
+    if let Some(doc) = method.doc.as_deref() {
+        rendered.push_str(&render_doc_block(doc, "    "));
+    }
+    if actual {
+        rendered.push_str(&format!(
+            "    {suspend_prefix}fun {}({signature}){return_suffix} = TODO(\"KMP class method not yet implemented\")\n",
+            method.name
+        ));
+    } else {
+        rendered.push_str(&format!(
+            "    {suspend_prefix}fun {}({signature}){return_suffix}\n",
+            method.name
+        ));
+    }
+    rendered
+}
+
+fn render_doc_block(doc: &str, indent: &str) -> String {
+    let mut rendered = format!("{indent}/**\n");
+    for line in doc.lines() {
+        if line.is_empty() {
+            rendered.push_str(&format!("{indent} *\n"));
+        } else {
+            rendered.push_str(&format!("{indent} * {line}\n"));
+        }
+    }
+    rendered.push_str(&format!("{indent} */\n"));
+    rendered
 }
