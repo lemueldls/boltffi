@@ -141,6 +141,7 @@ mod tests {
         assert!(pyproject_source.contains("build-backend = \"setuptools.build_meta\""));
         assert!(setup_source.contains("Extension("));
         assert!(setup_source.contains("\"demo_lib._native\""));
+        assert!(setup_source.contains("\"*.pyi\""));
         assert!(init_source.contains("from pathlib import Path"));
         assert!(init_source.contains("from . import _native"));
         assert!(init_source.contains("_native._initialize_loader"));
