@@ -7,6 +7,8 @@ expression: rendered
  * A handle-backed widget.
  */
 actual class Widget private constructor(private val handle: Long) {
+	internal fun __boltffiHandle(): Long = handle
+
     /**
      * Creates a widget.
      */

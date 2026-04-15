@@ -797,6 +797,11 @@ impl<'a> KmpLowerer<'a> {
             } else {
                 (None, None, None, None)
             };
+        let async_invoke_result_expr = if method.execution_kind() == ExecutionKind::Async {
+            self.callback_async_invoker_result_expr(&abi_method.returns)
+        } else {
+            None
+        };
         KmpCallbackMethod {
             ffi_name: abi_method.vtable_field.as_str().to_string(),
             name: NamingConvention::method_name(method.id.as_str()),
@@ -804,6 +809,7 @@ impl<'a> KmpLowerer<'a> {
             fail_name,
             invoker_symbol,
             invoker_failure_symbol,
+            async_invoke_result_expr,
             params: method
                 .params
                 .iter()
@@ -823,6 +829,75 @@ impl<'a> KmpLowerer<'a> {
             },
             is_async: method.execution_kind() == ExecutionKind::Async,
             doc: method.doc.clone(),
+        }
+    }
+
+    fn callback_async_invoker_result_expr(
+        &self,
+        ret_shape: &crate::ir::abi::ReturnShape,
+    ) -> Option<String> {
+        use boltffi_ffi_rules::transport::ValueReturnStrategy;
+
+        match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => None,
+            ValueReturnStrategy::Scalar(_) => {
+                let Some(transport) = &ret_shape.transport else {
+                    return Some("result".to_string());
+                };
+                match transport {
+                    Transport::Scalar(ScalarOrigin::Primitive(primitive)) => {
+                        let expr = match primitive {
+                            PrimitiveType::Bool => "result",
+                            PrimitiveType::I8 | PrimitiveType::U8 => "result.toByte()",
+                            PrimitiveType::I16 | PrimitiveType::U16 => "result.toShort()",
+                            PrimitiveType::I32 | PrimitiveType::U32 => "result.toInt()",
+                            PrimitiveType::I64
+                            | PrimitiveType::U64
+                            | PrimitiveType::ISize
+                            | PrimitiveType::USize => "result.toLong()",
+                            PrimitiveType::F32 => "result",
+                            PrimitiveType::F64 => "result",
+                        };
+                        Some(expr.to_string())
+                    }
+                    Transport::Scalar(ScalarOrigin::CStyleEnum { .. }) => {
+                        Some("result.value".to_string())
+                    }
+                    _ => Some("result".to_string()),
+                }
+            }
+            ValueReturnStrategy::ObjectHandle => {
+                let Some(Transport::Handle { nullable, .. }) = &ret_shape.transport else {
+                    return Some("result".to_string());
+                };
+                if *nullable {
+                    Some("result?.__boltffiHandle() ?: 0L".to_string())
+                } else {
+                    Some("result.__boltffiHandle()".to_string())
+                }
+            }
+            ValueReturnStrategy::CallbackHandle => {
+                let Some(Transport::Callback {
+                    callback_id,
+                    nullable,
+                    ..
+                }) = &ret_shape.transport
+                else {
+                    return Some("result".to_string());
+                };
+                let callback_name = NamingConvention::class_name(callback_id.as_str());
+                if *nullable {
+                    Some(format!(
+                        "result?.let {{ {}Bridge.retain(it) }} ?: 0L",
+                        callback_name
+                    ))
+                } else {
+                    Some(format!("{}Bridge.retain(result)", callback_name))
+                }
+            }
+            ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
+                Some("result".to_string())
+            }
         }
     }
 

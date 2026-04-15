@@ -127,6 +127,7 @@ pub struct KmpCallbackMethod {
     pub fail_name: Option<String>,
     pub invoker_symbol: Option<String>,
     pub invoker_failure_symbol: Option<String>,
+    pub async_invoke_result_expr: Option<String>,
     pub params: Vec<KmpParam>,
     pub return_type: Option<String>,
     pub is_async: bool,

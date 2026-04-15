@@ -52,7 +52,7 @@ object WidgetEventsBridge {
 
     private fun completeOnComplete(callbackData: Long, result: Int) {
         val callbackPtr = pendingAsyncCallbacks.remove(callbackData) ?: return
-        __native_callback_invokeAsyncCallbackI32(callbackPtr, callbackData, result)
+        __native_callback_invokeAsyncCallbackI32(callbackPtr, callbackData, result.toInt())
     }
 
     private fun failOnComplete(callbackData: Long) {

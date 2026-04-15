@@ -531,6 +531,7 @@ mod tests {
                     fail_name: None,
                     invoker_symbol: None,
                     invoker_failure_symbol: None,
+                    async_invoke_result_expr: None,
                     params: vec![KmpParam {
                         name: "value".to_string(),
                         kotlin_type: "Int".to_string(),
@@ -667,6 +668,7 @@ mod tests {
                 fail_name: None,
                 invoker_symbol: None,
                 invoker_failure_symbol: None,
+                async_invoke_result_expr: None,
                 params: vec![KmpParam {
                     name: "value".to_string(),
                     kotlin_type: "Int".to_string(),
@@ -745,6 +747,7 @@ mod tests {
                         fail_name: None,
                         invoker_symbol: None,
                         invoker_failure_symbol: None,
+                        async_invoke_result_expr: None,
                         params: vec![KmpParam {
                             name: "value".to_string(),
                             kotlin_type: "Int".to_string(),
@@ -988,6 +991,7 @@ mod tests {
                 fail_name: None,
                 invoker_symbol: None,
                 invoker_failure_symbol: None,
+                async_invoke_result_expr: None,
                 params: vec![KmpParam {
                     name: "value".to_string(),
                     kotlin_type: "Int".to_string(),
@@ -1067,6 +1071,7 @@ mod tests {
                 fail_name: None,
                 invoker_symbol: None,
                 invoker_failure_symbol: None,
+                async_invoke_result_expr: None,
                 params: vec![KmpParam {
                     name: "value".to_string(),
                     kotlin_type: "Int".to_string(),
@@ -1100,6 +1105,7 @@ mod tests {
                 fail_name: Some("failOnComplete".to_string()),
                 invoker_symbol: Some("invokeAsyncCallbackI32".to_string()),
                 invoker_failure_symbol: Some("invokeAsyncCallbackI32Failure".to_string()),
+                async_invoke_result_expr: Some("result.toInt()".to_string()),
                 params: vec![KmpParam {
                     name: "value".to_string(),
                     kotlin_type: "Int".to_string(),
@@ -1386,11 +1392,11 @@ fn render_kmp_callback_bridge_method_signature(
         } else {
             String::new()
         };
-        let complete_invoke_arg = if method.return_type.is_some() {
-            ", result"
-        } else {
-            ""
-        };
+        let complete_invoke_arg = method
+            .async_invoke_result_expr
+            .as_deref()
+            .map(|expr| format!(", {expr}"))
+            .unwrap_or_default();
         let complete_call = if call_args.is_empty() {
             if method.return_type.is_some() {
                 format!(

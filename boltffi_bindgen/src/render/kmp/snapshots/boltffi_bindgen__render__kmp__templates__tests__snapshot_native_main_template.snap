@@ -85,6 +85,8 @@ private fun boltffiDecodeF64List(bytes: ByteArray): List<Double> =
  * A handle-backed widget.
  */
 actual class Widget private constructor(private val handle: Long) {
+	internal fun __boltffiHandle(): Long = handle
+
     /**
      * Creates a widget.
      */
