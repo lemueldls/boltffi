@@ -35,7 +35,7 @@ impl PythonEmitter {
             files: vec![
                 PythonOutputFile {
                     relative_path: PathBuf::from("pyproject.toml"),
-                    contents: PyprojectTemplate.render().unwrap(),
+                    contents: rendered_text_file(PyprojectTemplate.render().unwrap()),
                 },
                 PythonOutputFile {
                     relative_path: PathBuf::from("setup.py"),
@@ -71,6 +71,14 @@ impl PythonEmitter {
                 },
             ],
         }
+    }
+}
+
+fn rendered_text_file(contents: String) -> String {
+    if contents.ends_with('\n') {
+        contents
+    } else {
+        format!("{contents}\n")
     }
 }
 
@@ -139,6 +147,7 @@ mod tests {
         let native_source = rendered_file(&rendered, "demo_lib/_native.c");
 
         assert!(pyproject_source.contains("build-backend = \"setuptools.build_meta\""));
+        assert!(pyproject_source.ends_with('\n'));
         assert!(setup_source.contains("Extension("));
         assert!(setup_source.contains("\"demo_lib._native\""));
         assert!(setup_source.contains("\"*.pyi\""));

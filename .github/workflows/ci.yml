@@ -176,6 +176,7 @@ jobs:
           cat <<'TOML' > boltffi.python.ci.toml
           [targets.python]
           enabled = true
+          output = "dist/python"
           TOML
       - run: cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- --overlay boltffi.python.ci.toml pack python --release --experimental --python python
       - run: python -m pip install --target .tmp/python-smoke dist/python/wheelhouse/*.whl

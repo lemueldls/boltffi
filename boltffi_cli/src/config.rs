@@ -17,6 +17,7 @@ pub enum Target {
     Header,
     Dart,
     Python,
+    CSharp,
 }
 
 impl Target {
@@ -29,6 +30,7 @@ impl Target {
             Target::Header => "header",
             Target::Dart => "dart",
             Target::Python => "python",
+            Target::CSharp => "csharp",
         }
     }
 }
@@ -47,6 +49,7 @@ impl Experimental {
         },
         Experimental::WholeTarget(Target::Dart),
         Experimental::WholeTarget(Target::Python),
+        Experimental::WholeTarget(Target::CSharp),
     ];
 
     pub fn is_target_experimental(target: Target) -> bool {
@@ -101,6 +104,8 @@ pub struct TargetsConfig {
     pub dart: DartConfig,
     #[serde(default)]
     pub python: PythonConfig,
+    #[serde(default)]
+    pub csharp: CSharpConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -147,6 +152,23 @@ pub struct PythonWheelConfig {
     #[serde(alias = "wheel_output")]
     pub output: Option<PathBuf>,
     pub interpreters: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CSharpConfig {
+    #[serde(default = "default_csharp_output")]
+    pub output: PathBuf,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl Default for CSharpConfig {
+    fn default() -> Self {
+        Self {
+            output: default_csharp_output(),
+            enabled: false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
@@ -560,6 +582,10 @@ fn default_python_output() -> PathBuf {
     PathBuf::from("dist/python")
 }
 
+fn default_csharp_output() -> PathBuf {
+    PathBuf::from("dist/csharp")
+}
+
 fn read_toml_value(path: &Path) -> Result<toml::Value, ConfigError> {
     let content = std::fs::read_to_string(path).map_err(|err| ConfigError::Read {
         path: path.to_path_buf(),
@@ -792,6 +818,10 @@ impl Config {
 
     pub fn is_python_enabled(&self) -> bool {
         self.targets.python.enabled
+    }
+
+    pub fn is_csharp_enabled(&self) -> bool {
+        self.targets.csharp.enabled
     }
 
     pub fn apple_include_macos(&self) -> bool {
@@ -1037,6 +1067,7 @@ impl Config {
             Target::Header => self.is_apple_enabled() || self.is_android_enabled(),
             Target::Dart => self.is_dart_enabled(),
             Target::Python => self.is_python_enabled(),
+            Target::CSharp => self.is_csharp_enabled(),
         }
     }
 
@@ -1145,6 +1176,10 @@ impl Config {
 
     pub fn python_wheel_interpreters(&self) -> Option<&[String]> {
         self.targets.python.wheel.interpreters.as_deref()
+    }
+
+    pub fn csharp_output(&self) -> PathBuf {
+        self.targets.csharp.output.clone()
     }
 
     pub fn wasm_triple(&self) -> &str {

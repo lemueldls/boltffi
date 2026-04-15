@@ -174,6 +174,8 @@ enum GenerateTargetArg {
     Dart,
     #[value(help = "Generate experimental Python bindings")]
     Python,
+    #[value(help = "Generate experimental C# bindings")]
+    Csharp,
     #[value(help = "Generate all bindings")]
     All,
 }
@@ -446,6 +448,7 @@ fn execute_command(
                         GenerateTargetArg::Typescript => GenerateTarget::Typescript,
                         GenerateTargetArg::Dart => GenerateTarget::Dart,
                         GenerateTargetArg::Python => GenerateTarget::Python,
+                        GenerateTargetArg::Csharp => GenerateTarget::CSharp,
                         GenerateTargetArg::All => GenerateTarget::All,
                     })
                     .unwrap_or(GenerateTarget::All),
