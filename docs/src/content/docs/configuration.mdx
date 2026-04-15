@@ -473,6 +473,44 @@ The default output is `dist/java/android`. The `min_sdk` sets the minimum Androi
 
 Both JVM and Android targets can be enabled simultaneously. They share the same `package`, `module_name`, and `min_version` settings but produce separate output.
 
+## Kotlin Multiplatform (KMP) Configuration
+
+The `[targets.kmp]` section generates a shared Kotlin facade for `commonMain` plus JVM and Native
+platform implementations.
+
+```toml
+[targets.kmp]
+enabled = true
+output = "dist/kmp"
+package = "com.mycompany.mylib"
+module_name = "MyLibKmp"
+library_name = "mylib"
+```
+
+### KMP output layout
+
+`boltffi generate kmp` produces the following structure by default:
+
+```text
+dist/kmp/
+    commonMain/kotlin/com/mycompany/mylib/MyLibKmp.kt
+    jvmMain/kotlin/com/mycompany/mylib/MyLibKmp.kt
+    nativeMain/kotlin/com/mycompany/mylib/MyLibKmp.kt
+    jvmMain/kotlin/com/mycompany/mylib/jvmffi/MyLibKmpJvmFfi.kt
+    jvmMain/jni/jni_glue.c
+    include/mylib.h
+    include/mylib.def
+```
+
+The generated `.def` file is intended for Kotlin/Native `cinterop` and contains the generated C
+header reference (`headers = ...`) along with linker hints (`linkerOpts = ...`).
+
+### KMP v1 scope
+
+KMP support is intentionally incremental in v1. The unified shared facade currently includes sync
+exported free functions with primitive parameters and primitive/void returns. Unsupported exports
+are skipped and listed in comments in the generated `commonMain` file.
+
 ## WASM Configuration
 
 The `[targets.wasm]` section controls WebAssembly builds and npm package generation.
@@ -617,6 +655,10 @@ min_version = 8
 
 [targets.java.jvm]
 enabled = true
+
+[targets.kmp]
+enabled = true
+package = "com.mycompany.mylib"
 
 [targets.wasm]
 output = "dist/wasm"

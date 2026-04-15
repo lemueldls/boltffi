@@ -180,3 +180,68 @@ impl KmpEmitter {
             .join(", ")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::KmpEmitter;
+    use crate::render::kmp::plan::{KmpFunction, KmpModule, KmpOptions, KmpParam};
+
+    fn test_options() -> KmpOptions {
+        KmpOptions {
+            package_name: "com.example.demo".to_string(),
+            module_name: "DemoKmp".to_string(),
+            jvm_binding_package: "com.example.demo.jvmffi".to_string(),
+            native_binding_package: "com.example.demo.native".to_string(),
+            header_file_name: "demo.h".to_string(),
+            library_name: "demo".to_string(),
+        }
+    }
+
+    fn test_module() -> KmpModule {
+        KmpModule {
+            functions: vec![KmpFunction {
+                public_name: "echoI32".to_string(),
+                ffi_symbol: "boltffi_echo_i32".to_string(),
+                params: vec![KmpParam {
+                    name: "value".to_string(),
+                    kotlin_type: "Int".to_string(),
+                }],
+                return_type: Some("Int".to_string()),
+            }],
+            skipped_functions: vec!["echoString".to_string()],
+        }
+    }
+
+    #[test]
+    fn render_common_main_emits_expect_facade() {
+        let output = KmpEmitter::render_common_main(&test_module(), &test_options());
+
+        assert!(output.contains("package com.example.demo"));
+        assert!(output.contains("expect object DemoKmp"));
+        assert!(output.contains("expect fun echoI32(value: Int): Int"));
+        assert!(output.contains("Skipped functions"));
+    }
+
+    #[test]
+    fn render_platform_actuals_reference_binding_packages() {
+        let module = test_module();
+        let options = test_options();
+
+        let jvm = KmpEmitter::render_jvm_main(&module, &options);
+        let native = KmpEmitter::render_native_main(&module, &options);
+
+        assert!(jvm.contains("import com.example.demo.jvmffi.echoI32 as __jvm_echoI32"));
+        assert!(native.contains(
+            "import com.example.demo.native.boltffi_echo_i32 as __native_boltffi_echo_i32"
+        ));
+    }
+
+    #[test]
+    fn render_cinterop_def_includes_header_package_and_linker() {
+        let def = KmpEmitter::render_cinterop_def(&test_options());
+
+        assert!(def.contains("headers = demo.h"));
+        assert!(def.contains("package = com.example.demo.native"));
+        assert!(def.contains("linkerOpts = -ldemo"));
+    }
+}

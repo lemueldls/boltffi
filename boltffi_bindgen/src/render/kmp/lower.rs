@@ -120,3 +120,37 @@ impl<'a> KmpLowerer<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::ir::{Lowerer, build_contract};
+    use crate::scan::scan_crate_with_pointer_width;
+
+    use super::KmpLowerer;
+
+    fn demo_source_directory() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/demo")
+    }
+
+    #[test]
+    fn lower_demo_contract_collects_supported_and_skipped_functions() {
+        let mut scanned_module =
+            scan_crate_with_pointer_width(&demo_source_directory(), "demo", None)
+                .expect("demo crate should scan");
+        let ffi_contract = build_contract(&mut scanned_module);
+        let abi_contract = Lowerer::new(&ffi_contract).to_abi_contract();
+
+        let module = KmpLowerer::new(&ffi_contract, &abi_contract).lower();
+
+        assert!(!module.functions.is_empty());
+        assert!(
+            module
+                .functions
+                .iter()
+                .any(|function| function.public_name == "echoI32")
+        );
+        assert!(!module.skipped_functions.is_empty());
+    }
+}

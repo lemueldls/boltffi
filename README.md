@@ -133,6 +133,7 @@ The generated bindings use each language's idioms. Swift gets async/await. Kotli
 |----------|--------------|
 | Swift    | Full support |
 | Kotlin   | Full support |
+| Kotlin Multiplatform (KMP) | v1 support |
 | Java     | Full support |
 | WASM/TypeScript | Full support |
 | C        | Partial      |
