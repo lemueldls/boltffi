@@ -5,3 +5,6 @@
 {% endif %}expect class {{ class_name }} private constructor(handle: Long) {
 {% for ctor in constructor_sources %}{{ ctor }}{% endfor %}{% for method in method_sources %}{{ method }}{% endfor %}{% for stream in stream_sources %}{{ stream }}{% endfor %}
 }
+{%- for stream_support in stream_support_sources %}
+{{ stream_support }}
+{%- endfor %}

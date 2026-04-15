@@ -1,7 +1,9 @@
 use askama::Template;
+use heck::ToUpperCamelCase;
 
 use super::plan::{
     KmpCallbackMethod, KmpClassStream, KmpFunction, KmpModule, KmpOptions, KmpOutputs,
+    KmpStreamMode,
 };
 
 #[derive(Template)]
@@ -94,6 +96,7 @@ pub struct ClassCommonTemplate<'a> {
     pub constructor_sources: &'a [String],
     pub method_sources: &'a [String],
     pub stream_sources: &'a [String],
+    pub stream_support_sources: &'a [String],
 }
 
 #[derive(Template)]
@@ -104,6 +107,11 @@ pub struct ClassActualTemplate<'a> {
     pub constructor_sources: &'a [String],
     pub method_sources: &'a [String],
     pub stream_sources: &'a [String],
+}
+
+struct RenderedKmpStream {
+    member_source: String,
+    common_support_source: Option<String>,
 }
 
 #[derive(Template)]
@@ -205,7 +213,15 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             let stream_sources = class
                 .streams
                 .iter()
-                .map(|stream| render_kmp_stream_signature(stream, false))
+                .map(|stream| render_kmp_stream_signature(&class.class_name, stream, false))
+                .collect::<Vec<_>>();
+            let stream_member_sources = stream_sources
+                .iter()
+                .map(|stream| stream.member_source.clone())
+                .collect::<Vec<_>>();
+            let stream_support_sources = stream_sources
+                .iter()
+                .filter_map(|stream| stream.common_support_source.clone())
                 .collect::<Vec<_>>();
 
             ClassCommonTemplate {
@@ -213,7 +229,8 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
                 doc: class.doc.as_deref(),
                 constructor_sources: &constructor_sources,
                 method_sources: &method_sources,
-                stream_sources: &stream_sources,
+                stream_sources: &stream_member_sources,
+                stream_support_sources: &stream_support_sources,
             }
             .render()
             .expect("KMP class common template should render")
@@ -343,7 +360,8 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             let stream_sources = class
                 .streams
                 .iter()
-                .map(|stream| render_kmp_stream_signature(stream, true))
+                .map(|stream| render_kmp_stream_signature(&class.class_name, stream, true))
+                .map(|stream| stream.member_source)
                 .collect::<Vec<_>>();
 
             ClassActualTemplate {
@@ -357,7 +375,18 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             .expect("KMP class actual template should render")
         })
         .collect::<Vec<_>>();
-    let uses_flow = module.classes.iter().any(|class| !class.streams.is_empty());
+    let uses_flow = module.classes.iter().any(|class| {
+        class
+            .streams
+            .iter()
+            .any(|stream| matches!(stream.mode, KmpStreamMode::Async))
+    });
+    let uses_callback_streams = module.classes.iter().any(|class| {
+        class
+            .streams
+            .iter()
+            .any(|stream| matches!(stream.mode, KmpStreamMode::Callback))
+    });
     let uses_async_callback_bridges = module
         .callbacks
         .iter()
@@ -394,7 +423,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             class_sources: &class_actual_sources,
             callback_bridge_sources: &callback_bridge_sources,
             uses_flow,
-            uses_async_callback_bridges,
+            uses_async_callback_bridges: uses_async_callback_bridges || uses_callback_streams,
             functions: &module.functions,
         }
         .render()
@@ -590,22 +619,26 @@ mod tests {
             false,
             None,
         )];
-        let stream_sources = vec![render_kmp_stream_signature(
-            &super::super::plan::KmpClassStream {
-                name: "updates".to_string(),
-                item_type: "Int".to_string(),
-                mode: super::super::plan::KmpStreamMode::Async,
-                pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
-                subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
-                poll_symbol: "boltffi_widget_updates_poll".to_string(),
-                pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
-                wait_symbol: "boltffi_widget_updates_wait".to_string(),
-                unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
-                free_symbol: "boltffi_widget_updates_free".to_string(),
-                doc: Some("Watches widget updates.".to_string()),
-            },
-            false,
-        )];
+        let stream_sources = vec![
+            render_kmp_stream_signature(
+                "Widget",
+                &super::super::plan::KmpClassStream {
+                    name: "updates".to_string(),
+                    item_type: "Int".to_string(),
+                    mode: super::super::plan::KmpStreamMode::Async,
+                    pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
+                    subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
+                    poll_symbol: "boltffi_widget_updates_poll".to_string(),
+                    pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
+                    wait_symbol: "boltffi_widget_updates_wait".to_string(),
+                    unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
+                    free_symbol: "boltffi_widget_updates_free".to_string(),
+                    doc: Some("Watches widget updates.".to_string()),
+                },
+                false,
+            )
+            .member_source,
+        ];
         let class_common_sources = vec![
             ClassCommonTemplate {
                 class_name: "Widget",
@@ -613,6 +646,7 @@ mod tests {
                 constructor_sources: &constructor_sources,
                 method_sources: &method_sources,
                 stream_sources: &stream_sources,
+                stream_support_sources: &[],
             }
             .render()
             .unwrap(),
@@ -741,22 +775,26 @@ mod tests {
             true,
             Some("boltffi_widget_rename"),
         )];
-        let stream_sources = vec![render_kmp_stream_signature(
-            &super::super::plan::KmpClassStream {
-                name: "updates".to_string(),
-                item_type: "Int".to_string(),
-                mode: super::super::plan::KmpStreamMode::Async,
-                pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
-                subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
-                poll_symbol: "boltffi_widget_updates_poll".to_string(),
-                pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
-                wait_symbol: "boltffi_widget_updates_wait".to_string(),
-                unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
-                free_symbol: "boltffi_widget_updates_free".to_string(),
-                doc: Some("Watches widget updates.".to_string()),
-            },
-            true,
-        )];
+        let stream_sources = vec![
+            render_kmp_stream_signature(
+                "Widget",
+                &super::super::plan::KmpClassStream {
+                    name: "updates".to_string(),
+                    item_type: "Int".to_string(),
+                    mode: super::super::plan::KmpStreamMode::Async,
+                    pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
+                    subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
+                    poll_symbol: "boltffi_widget_updates_poll".to_string(),
+                    pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
+                    wait_symbol: "boltffi_widget_updates_wait".to_string(),
+                    unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
+                    free_symbol: "boltffi_widget_updates_free".to_string(),
+                    doc: Some("Watches widget updates.".to_string()),
+                },
+                true,
+            )
+            .member_source,
+        ];
         let class_actual_sources = vec![
             ClassActualTemplate {
                 class_name: "Widget",
@@ -838,28 +876,33 @@ mod tests {
             false,
             None,
         )];
-        let stream_sources = vec![render_kmp_stream_signature(
-            &super::super::plan::KmpClassStream {
-                name: "updates".to_string(),
-                item_type: "Int".to_string(),
-                mode: super::super::plan::KmpStreamMode::Async,
-                pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
-                subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
-                poll_symbol: "boltffi_widget_updates_poll".to_string(),
-                pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
-                wait_symbol: "boltffi_widget_updates_wait".to_string(),
-                unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
-                free_symbol: "boltffi_widget_updates_free".to_string(),
-                doc: Some("Watches widget updates.".to_string()),
-            },
-            false,
-        )];
+        let stream_sources = vec![
+            render_kmp_stream_signature(
+                "Widget",
+                &super::super::plan::KmpClassStream {
+                    name: "updates".to_string(),
+                    item_type: "Int".to_string(),
+                    mode: super::super::plan::KmpStreamMode::Async,
+                    pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
+                    subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
+                    poll_symbol: "boltffi_widget_updates_poll".to_string(),
+                    pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
+                    wait_symbol: "boltffi_widget_updates_wait".to_string(),
+                    unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
+                    free_symbol: "boltffi_widget_updates_free".to_string(),
+                    doc: Some("Watches widget updates.".to_string()),
+                },
+                false,
+            )
+            .member_source,
+        ];
         let rendered = ClassCommonTemplate {
             class_name: "Widget",
             doc: Some("A handle-backed widget."),
             constructor_sources: &constructor_sources,
             method_sources: &method_sources,
             stream_sources: &stream_sources,
+            stream_support_sources: &[],
         }
         .render()
         .unwrap();
@@ -893,22 +936,26 @@ mod tests {
             true,
             Some("boltffi_widget_rename"),
         )];
-        let stream_sources = vec![render_kmp_stream_signature(
-            &super::super::plan::KmpClassStream {
-                name: "updates".to_string(),
-                item_type: "Int".to_string(),
-                mode: super::super::plan::KmpStreamMode::Async,
-                pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
-                subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
-                poll_symbol: "boltffi_widget_updates_poll".to_string(),
-                pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
-                wait_symbol: "boltffi_widget_updates_wait".to_string(),
-                unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
-                free_symbol: "boltffi_widget_updates_free".to_string(),
-                doc: Some("Watches widget updates.".to_string()),
-            },
-            true,
-        )];
+        let stream_sources = vec![
+            render_kmp_stream_signature(
+                "Widget",
+                &super::super::plan::KmpClassStream {
+                    name: "updates".to_string(),
+                    item_type: "Int".to_string(),
+                    mode: super::super::plan::KmpStreamMode::Async,
+                    pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
+                    subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
+                    poll_symbol: "boltffi_widget_updates_poll".to_string(),
+                    pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
+                    wait_symbol: "boltffi_widget_updates_wait".to_string(),
+                    unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
+                    free_symbol: "boltffi_widget_updates_free".to_string(),
+                    doc: Some("Watches widget updates.".to_string()),
+                },
+                true,
+            )
+            .member_source,
+        ];
         let rendered = ClassActualTemplate {
             class_name: "Widget",
             doc: Some("A handle-backed widget."),
@@ -1146,30 +1193,106 @@ fn render_kmp_method_signature(
     rendered
 }
 
-fn render_kmp_stream_signature(stream: &KmpClassStream, actual: bool) -> String {
-    let mut rendered = String::new();
+fn render_kmp_stream_signature(
+    class_name: &str,
+    stream: &KmpClassStream,
+    actual: bool,
+) -> RenderedKmpStream {
+    let mut member_source = String::new();
     if let Some(doc) = stream.doc.as_deref() {
-        rendered.push_str(&render_doc_block(doc, "    "));
+        member_source.push_str(&render_doc_block(doc, "    "));
     }
-    if actual {
-        rendered.push_str(&format!(
-            "    fun {}(): Flow<{}> = flow {{\n        val subscription = __native_class_{}(handle)\n        if (subscription == 0L) return@flow\n        try {{\n            while (true) {{\n                val ready = __native_class_{}(subscription, 50)\n                if (ready < 0) break\n                val bytes = __native_class_{}(subscription, 16L) ?: continue\n                if (bytes.isEmpty()) {{\n                    if (ready == 0) continue\n                    break\n                }}\n                for (item in {}) {{\n                    emit(item)\n                }}\n            }}\n        }} finally {{\n            __native_class_{}(subscription)\n            __native_class_{}(subscription)\n        }}\n    }}\n",
-            stream.name,
-            stream.item_type,
-            stream.subscribe_symbol,
-            stream.wait_symbol,
-            stream.pop_batch_symbol,
-            stream.pop_batch_items_expr,
-            stream.unsubscribe_symbol,
-            stream.free_symbol
-        ));
-    } else {
-        rendered.push_str(&format!(
-            "    fun {}(): Flow<{}>\n",
-            stream.name, stream.item_type
-        ));
+
+    let stream_pascal = stream.name.to_upper_camel_case();
+    let batch_interface = format!("{class_name}{stream_pascal}Subscription");
+    let callback_interface = format!("{class_name}{stream_pascal}Cancellable");
+
+    match stream.mode {
+        KmpStreamMode::Async => {
+            if actual {
+                member_source.push_str(&format!(
+                    "    fun {}(): Flow<{}> = flow {{\n        val subscription = __native_class_{}(handle)\n        if (subscription == 0L) return@flow\n        try {{\n            while (true) {{\n                val ready = __native_class_{}(subscription, 50)\n                if (ready < 0) break\n                val bytes = __native_class_{}(subscription, 16L) ?: continue\n                if (bytes.isEmpty()) {{\n                    if (ready == 0) continue\n                    break\n                }}\n                for (item in {}) {{\n                    emit(item)\n                }}\n            }}\n        }} finally {{\n            __native_class_{}(subscription)\n            __native_class_{}(subscription)\n        }}\n    }}\n",
+                    stream.name,
+                    stream.item_type,
+                    stream.subscribe_symbol,
+                    stream.wait_symbol,
+                    stream.pop_batch_symbol,
+                    stream.pop_batch_items_expr,
+                    stream.unsubscribe_symbol,
+                    stream.free_symbol
+                ));
+            } else {
+                member_source.push_str(&format!(
+                    "    fun {}(): Flow<{}>\n",
+                    stream.name, stream.item_type
+                ));
+            }
+            RenderedKmpStream {
+                member_source,
+                common_support_source: None,
+            }
+        }
+        KmpStreamMode::Batch => {
+            if actual {
+                member_source.push_str(&format!(
+                    "    fun {}(): {} {{\n        val subscription = __native_class_{}(handle)\n        return object : {} {{\n            private val closed = java.util.concurrent.atomic.AtomicBoolean(false)\n\n            override fun close() {{\n                if (!closed.compareAndSet(false, true)) return\n                if (subscription == 0L) return\n                __native_class_{}(subscription)\n            }}\n\n            override fun popBatch(maxCount: Long): List<{}> {{\n                if (subscription == 0L) return emptyList()\n                val bytes = __native_class_{}(subscription, maxCount) ?: return emptyList()\n                if (bytes.isEmpty()) return emptyList()\n                return {}\n            }}\n\n            override fun wait(timeout: Int): Int {{\n                if (subscription == 0L) return -1\n                return __native_class_{}(subscription, timeout)\n            }}\n\n            override fun unsubscribe() {{\n                if (subscription == 0L) return\n                __native_class_{}(subscription)\n            }}\n        }}\n    }}\n",
+                    stream.name,
+                    batch_interface,
+                    stream.subscribe_symbol,
+                    batch_interface,
+                    stream.free_symbol,
+                    stream.item_type,
+                    stream.pop_batch_symbol,
+                    stream.pop_batch_items_expr,
+                    stream.wait_symbol,
+                    stream.unsubscribe_symbol,
+                ));
+            } else {
+                member_source
+                    .push_str(&format!("    fun {}(): {}\n", stream.name, batch_interface));
+            }
+            let common_support_source = Some(format!(
+                "interface {} : AutoCloseable {{\n    fun popBatch(maxCount: Long = 16L): List<{}>\n    fun wait(timeout: Int): Int\n    fun unsubscribe()\n    override fun close()\n}}\n",
+                batch_interface, stream.item_type
+            ));
+            RenderedKmpStream {
+                member_source,
+                common_support_source,
+            }
+        }
+        KmpStreamMode::Callback => {
+            if actual {
+                member_source.push_str(&format!(
+                    "    fun {}(callback: ({}) -> Unit): {} {{\n        val subscription = __native_class_{}(handle)\n        if (subscription == 0L) {{\n            return object : {} {{\n                override fun cancel() {{}}\n                override fun close() {{}}\n            }}\n        }}\n        val cancelled = java.util.concurrent.atomic.AtomicBoolean(false)\n        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)\n        val job = scope.launch {{\n            try {{\n                while (!cancelled.get()) {{\n                    val ready = __native_class_{}(subscription, 50)\n                    if (ready < 0) break\n                    val bytes = __native_class_{}(subscription, 16L) ?: continue\n                    if (bytes.isEmpty()) {{\n                        if (ready == 0) continue\n                        break\n                    }}\n                    for (item in {}) {{\n                        callback(item)\n                    }}\n                }}\n            }} finally {{\n                __native_class_{}(subscription)\n                __native_class_{}(subscription)\n            }}\n        }}\n        return object : {} {{\n            override fun cancel() {{\n                if (!cancelled.compareAndSet(false, true)) return\n                __native_class_{}(subscription)\n                job.cancel()\n            }}\n\n            override fun close() {{\n                cancel()\n            }}\n        }}\n    }}\n",
+                    stream.name,
+                    stream.item_type,
+                    callback_interface,
+                    stream.subscribe_symbol,
+                    callback_interface,
+                    stream.wait_symbol,
+                    stream.pop_batch_symbol,
+                    stream.pop_batch_items_expr,
+                    stream.unsubscribe_symbol,
+                    stream.free_symbol,
+                    callback_interface,
+                    stream.unsubscribe_symbol,
+                ));
+            } else {
+                member_source.push_str(&format!(
+                    "    fun {}(callback: ({}) -> Unit): {}\n",
+                    stream.name, stream.item_type, callback_interface
+                ));
+            }
+            let common_support_source = Some(format!(
+                "interface {} : AutoCloseable {{\n    fun cancel()\n    override fun close()\n}}\n",
+                callback_interface
+            ));
+            RenderedKmpStream {
+                member_source,
+                common_support_source,
+            }
+        }
     }
-    rendered
 }
 
 fn render_kmp_callback_method_signature(method: &KmpCallbackMethod) -> String {
