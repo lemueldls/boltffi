@@ -15,5 +15,13 @@ actual class Widget private constructor(private val handle: Long) {
      * Renames the widget.
      */
     fun rename(name: String) = __native_class_boltffi_widget_rename(handle, name)
+    /**
+     * Watches widget updates.
+     */
+    fun updates(): Flow<Int> = flow {
+        val subscription = __native_class_boltffi_widget_updates_subscribe(handle)
+        if (subscription == 0L) return@flow
+        error("KMP async stream bridge not yet implemented")
+    }
 
 }

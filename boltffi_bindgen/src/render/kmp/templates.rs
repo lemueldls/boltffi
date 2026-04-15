@@ -1,6 +1,9 @@
 use askama::Template;
 
-use super::plan::{KmpFunction, KmpModule, KmpOptions, KmpOutputs};
+use super::plan::{
+    KmpCallbackMethod, KmpClassStream, KmpFunction, KmpModule, KmpOptions, KmpOutputs,
+    KmpStreamMode,
+};
 
 #[derive(Template)]
 #[template(path = "render_kmp/common_main.txt", escape = "none")]
@@ -10,6 +13,8 @@ pub struct CommonMainTemplate<'a> {
     pub record_sources: &'a [String],
     pub enum_sources: &'a [String],
     pub class_sources: &'a [String],
+    pub callback_sources: &'a [String],
+    pub uses_flow: bool,
     pub functions: &'a [KmpFunction],
 }
 
@@ -30,6 +35,7 @@ pub struct NativeMainTemplate<'a> {
     pub native_binding_package: &'a str,
     pub class_imports: &'a [String],
     pub class_sources: &'a [String],
+    pub uses_flow: bool,
     pub functions: &'a [KmpFunction],
 }
 
@@ -85,6 +91,7 @@ pub struct ClassCommonTemplate<'a> {
     pub doc: Option<&'a str>,
     pub constructor_sources: &'a [String],
     pub method_sources: &'a [String],
+    pub stream_sources: &'a [String],
 }
 
 #[derive(Template)]
@@ -93,6 +100,16 @@ pub struct ClassActualTemplate<'a> {
     pub class_name: &'a str,
     pub doc: Option<&'a str>,
     pub constructor_sources: &'a [String],
+    pub method_sources: &'a [String],
+    pub stream_sources: &'a [String],
+}
+
+#[derive(Template)]
+#[template(path = "kmp_callback_trait.txt", escape = "none")]
+pub struct CallbackTraitTemplate<'a> {
+    pub interface_name: &'a str,
+    pub is_closure: bool,
+    pub doc: Option<&'a str>,
     pub method_sources: &'a [String],
 }
 
@@ -173,15 +190,40 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
                 .iter()
                 .map(|method| render_kmp_method_signature(method, false, None))
                 .collect::<Vec<_>>();
+            let stream_sources = class
+                .streams
+                .iter()
+                .map(|stream| render_kmp_stream_signature(stream, false))
+                .collect::<Vec<_>>();
 
             ClassCommonTemplate {
                 class_name: &class.class_name,
                 doc: class.doc.as_deref(),
                 constructor_sources: &constructor_sources,
                 method_sources: &method_sources,
+                stream_sources: &stream_sources,
             }
             .render()
             .expect("KMP class common template should render")
+        })
+        .collect::<Vec<_>>();
+    let callback_sources = module
+        .callbacks
+        .iter()
+        .map(|callback| {
+            let method_sources = callback
+                .methods
+                .iter()
+                .map(render_kmp_callback_method_signature)
+                .collect::<Vec<_>>();
+            CallbackTraitTemplate {
+                interface_name: &callback.interface_name,
+                is_closure: callback.is_closure,
+                doc: callback.doc.as_deref(),
+                method_sources: &method_sources,
+            }
+            .render()
+            .expect("KMP callback trait template should render")
         })
         .collect::<Vec<_>>();
     let class_imports = module
@@ -200,8 +242,19 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
                     options.native_binding_package, method.ffi_symbol, method.ffi_symbol
                 )
             });
+            let stream_imports = class.streams.iter().flat_map(|stream| {
+                [stream.subscribe_symbol.as_str()]
+                    .into_iter()
+                    .map(|symbol| {
+                        format!(
+                            "import {}.{} as __native_class_{}",
+                            options.native_binding_package, symbol, symbol
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
 
-            ctor_imports.chain(method_imports)
+            ctor_imports.chain(method_imports).chain(stream_imports)
         })
         .collect::<Vec<_>>();
     let class_actual_sources = module
@@ -225,17 +278,24 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
                 .iter()
                 .map(|method| render_kmp_method_signature(method, true, Some(&method.ffi_symbol)))
                 .collect::<Vec<_>>();
+            let stream_sources = class
+                .streams
+                .iter()
+                .map(|stream| render_kmp_stream_signature(stream, true))
+                .collect::<Vec<_>>();
 
             ClassActualTemplate {
                 class_name: &class.class_name,
                 doc: class.doc.as_deref(),
                 constructor_sources: &constructor_sources,
                 method_sources: &method_sources,
+                stream_sources: &stream_sources,
             }
             .render()
             .expect("KMP class actual template should render")
         })
         .collect::<Vec<_>>();
+    let uses_flow = module.classes.iter().any(|class| !class.streams.is_empty());
 
     KmpOutputs {
         common_main_source: CommonMainTemplate {
@@ -244,6 +304,8 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             record_sources: &record_sources,
             enum_sources: &enum_sources,
             class_sources: &class_common_sources,
+            callback_sources: &callback_sources,
+            uses_flow,
             functions: &module.functions,
         }
         .render()
@@ -262,6 +324,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             native_binding_package: &options.native_binding_package,
             class_imports: &class_imports,
             class_sources: &class_actual_sources,
+            uses_flow,
             functions: &module.functions,
         }
         .render()
@@ -338,6 +401,33 @@ mod tests {
                     is_async: false,
                     doc: Some("Renames the widget.".to_string()),
                 }],
+                streams: vec![super::super::plan::KmpClassStream {
+                    name: "updates".to_string(),
+                    item_type: "Int".to_string(),
+                    mode: super::super::plan::KmpStreamMode::Async,
+                    subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
+                    poll_symbol: "boltffi_widget_updates_poll".to_string(),
+                    pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
+                    wait_symbol: "boltffi_widget_updates_wait".to_string(),
+                    unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
+                    free_symbol: "boltffi_widget_updates_free".to_string(),
+                    doc: Some("Watches widget updates.".to_string()),
+                }],
+            }],
+            callbacks: vec![super::super::plan::KmpCallback {
+                interface_name: "WidgetEvents".to_string(),
+                methods: vec![super::super::plan::KmpCallbackMethod {
+                    name: "onUpdate".to_string(),
+                    params: vec![KmpParam {
+                        name: "value".to_string(),
+                        kotlin_type: "Int".to_string(),
+                    }],
+                    return_type: None,
+                    is_async: false,
+                    doc: Some("Called when widget updates.".to_string()),
+                }],
+                is_closure: false,
+                doc: Some("Widget callback interface.".to_string()),
             }],
             functions: vec![
                 KmpFunction {
@@ -424,12 +514,50 @@ mod tests {
             false,
             None,
         )];
+        let stream_sources = vec![render_kmp_stream_signature(
+            &super::super::plan::KmpClassStream {
+                name: "updates".to_string(),
+                item_type: "Int".to_string(),
+                mode: super::super::plan::KmpStreamMode::Async,
+                subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
+                poll_symbol: "boltffi_widget_updates_poll".to_string(),
+                pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
+                wait_symbol: "boltffi_widget_updates_wait".to_string(),
+                unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
+                free_symbol: "boltffi_widget_updates_free".to_string(),
+                doc: Some("Watches widget updates.".to_string()),
+            },
+            false,
+        )];
         let class_common_sources = vec![
             ClassCommonTemplate {
                 class_name: "Widget",
                 doc: Some("A handle-backed widget."),
                 constructor_sources: &constructor_sources,
                 method_sources: &method_sources,
+                stream_sources: &stream_sources,
+            }
+            .render()
+            .unwrap(),
+        ];
+        let callback_method_sources = vec![render_kmp_callback_method_signature(
+            &super::super::plan::KmpCallbackMethod {
+                name: "onUpdate".to_string(),
+                params: vec![KmpParam {
+                    name: "value".to_string(),
+                    kotlin_type: "Int".to_string(),
+                }],
+                return_type: None,
+                is_async: false,
+                doc: Some("Called when widget updates.".to_string()),
+            },
+        )];
+        let callback_sources = vec![
+            CallbackTraitTemplate {
+                interface_name: "WidgetEvents",
+                is_closure: false,
+                doc: Some("Widget callback interface."),
+                method_sources: &callback_method_sources,
             }
             .render()
             .unwrap(),
@@ -440,6 +568,8 @@ mod tests {
             record_sources: &record_sources,
             enum_sources: &enum_sources,
             class_sources: &class_common_sources,
+            callback_sources: &callback_sources,
+            uses_flow: true,
             functions: &module.functions,
         }
         .render()
@@ -471,6 +601,7 @@ mod tests {
         let class_imports = vec![
             "import com.example.demo.native.boltffi_widget_new as __native_class_boltffi_widget_new".to_string(),
             "import com.example.demo.native.boltffi_widget_rename as __native_class_boltffi_widget_rename".to_string(),
+            "import com.example.demo.native.boltffi_widget_updates_subscribe as __native_class_boltffi_widget_updates_subscribe".to_string(),
         ];
         let constructor_sources = vec![render_kmp_constructor_signature(
             &[KmpParam {
@@ -496,12 +627,28 @@ mod tests {
             true,
             Some("boltffi_widget_rename"),
         )];
+        let stream_sources = vec![render_kmp_stream_signature(
+            &super::super::plan::KmpClassStream {
+                name: "updates".to_string(),
+                item_type: "Int".to_string(),
+                mode: super::super::plan::KmpStreamMode::Async,
+                subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
+                poll_symbol: "boltffi_widget_updates_poll".to_string(),
+                pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
+                wait_symbol: "boltffi_widget_updates_wait".to_string(),
+                unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
+                free_symbol: "boltffi_widget_updates_free".to_string(),
+                doc: Some("Watches widget updates.".to_string()),
+            },
+            true,
+        )];
         let class_actual_sources = vec![
             ClassActualTemplate {
                 class_name: "Widget",
                 doc: Some("A handle-backed widget."),
                 constructor_sources: &constructor_sources,
                 method_sources: &method_sources,
+                stream_sources: &stream_sources,
             }
             .render()
             .unwrap(),
@@ -512,6 +659,7 @@ mod tests {
             native_binding_package: &options.native_binding_package,
             class_imports: &class_imports,
             class_sources: &class_actual_sources,
+            uses_flow: true,
             functions: &module.functions,
         }
         .render()
@@ -572,11 +720,27 @@ mod tests {
             false,
             None,
         )];
+        let stream_sources = vec![render_kmp_stream_signature(
+            &super::super::plan::KmpClassStream {
+                name: "updates".to_string(),
+                item_type: "Int".to_string(),
+                mode: super::super::plan::KmpStreamMode::Async,
+                subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
+                poll_symbol: "boltffi_widget_updates_poll".to_string(),
+                pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
+                wait_symbol: "boltffi_widget_updates_wait".to_string(),
+                unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
+                free_symbol: "boltffi_widget_updates_free".to_string(),
+                doc: Some("Watches widget updates.".to_string()),
+            },
+            false,
+        )];
         let rendered = ClassCommonTemplate {
             class_name: "Widget",
             doc: Some("A handle-backed widget."),
             constructor_sources: &constructor_sources,
             method_sources: &method_sources,
+            stream_sources: &stream_sources,
         }
         .render()
         .unwrap();
@@ -610,10 +774,52 @@ mod tests {
             true,
             Some("boltffi_widget_rename"),
         )];
+        let stream_sources = vec![render_kmp_stream_signature(
+            &super::super::plan::KmpClassStream {
+                name: "updates".to_string(),
+                item_type: "Int".to_string(),
+                mode: super::super::plan::KmpStreamMode::Async,
+                subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
+                poll_symbol: "boltffi_widget_updates_poll".to_string(),
+                pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
+                wait_symbol: "boltffi_widget_updates_wait".to_string(),
+                unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
+                free_symbol: "boltffi_widget_updates_free".to_string(),
+                doc: Some("Watches widget updates.".to_string()),
+            },
+            true,
+        )];
         let rendered = ClassActualTemplate {
             class_name: "Widget",
             doc: Some("A handle-backed widget."),
             constructor_sources: &constructor_sources,
+            method_sources: &method_sources,
+            stream_sources: &stream_sources,
+        }
+        .render()
+        .unwrap();
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn snapshot_callback_trait_template() {
+        let method_sources = vec![render_kmp_callback_method_signature(
+            &super::super::plan::KmpCallbackMethod {
+                name: "onUpdate".to_string(),
+                params: vec![KmpParam {
+                    name: "value".to_string(),
+                    kotlin_type: "Int".to_string(),
+                }],
+                return_type: None,
+                is_async: false,
+                doc: Some("Called when widget updates.".to_string()),
+            },
+        )];
+        let rendered = CallbackTraitTemplate {
+            interface_name: "WidgetEvents",
+            is_closure: false,
+            doc: Some("Widget callback interface."),
             method_sources: &method_sources,
         }
         .render()
@@ -746,6 +952,54 @@ fn render_kmp_method_signature(
             method.name
         ));
     }
+    rendered
+}
+
+fn render_kmp_stream_signature(stream: &KmpClassStream, actual: bool) -> String {
+    let mut rendered = String::new();
+    if let Some(doc) = stream.doc.as_deref() {
+        rendered.push_str(&render_doc_block(doc, "    "));
+    }
+    if actual {
+        let mode = match stream.mode {
+            KmpStreamMode::Async => "async",
+            KmpStreamMode::Batch => "batch",
+            KmpStreamMode::Callback => "callback",
+        };
+        rendered.push_str(&format!(
+            "    fun {}(): Flow<{}> = flow {{\n        val subscription = __native_class_{}(handle)\n        if (subscription == 0L) return@flow\n        error(\"KMP {} stream bridge not yet implemented\")\n    }}\n",
+            stream.name, stream.item_type, stream.subscribe_symbol, mode
+        ));
+    } else {
+        rendered.push_str(&format!(
+            "    fun {}(): Flow<{}>\n",
+            stream.name, stream.item_type
+        ));
+    }
+    rendered
+}
+
+fn render_kmp_callback_method_signature(method: &KmpCallbackMethod) -> String {
+    let signature = method
+        .params
+        .iter()
+        .map(|param| format!("{}: {}", param.name, param.kotlin_type))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let return_suffix = method
+        .return_type
+        .as_ref()
+        .map(|ret| format!(": {ret}"))
+        .unwrap_or_default();
+    let suspend_prefix = if method.is_async { "suspend " } else { "" };
+    let mut rendered = String::new();
+    if let Some(doc) = method.doc.as_deref() {
+        rendered.push_str(&render_doc_block(doc, "    "));
+    }
+    rendered.push_str(&format!(
+        "    {suspend_prefix}fun {}({signature}){return_suffix}\n",
+        method.name
+    ));
     rendered
 }
 

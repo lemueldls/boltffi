@@ -3,10 +3,11 @@ use heck::ToLowerCamelCase;
 
 use crate::ir::{
     AbiContract,
-    abi::{AbiCall, AbiEnum, AbiEnumField, AbiEnumPayload, CallId, CallMode},
+    abi::{AbiCall, AbiEnum, AbiEnumField, AbiEnumPayload, AbiStream, CallId, CallMode},
     contract::FfiContract,
     definitions::{
-        ClassDef, DefaultValue, EnumDef, FieldDef, FunctionDef, MethodDef, RecordDef, ReturnDef,
+        CallbackMethodDef, CallbackTraitDef, ClassDef, DefaultValue, EnumDef, FieldDef,
+        FunctionDef, MethodDef, RecordDef, ReturnDef, StreamDef, StreamMode,
     },
     ids::BuiltinId,
     types::{PrimitiveType, TypeExpr},
@@ -16,8 +17,9 @@ use boltffi_ffi_rules::naming;
 use boltffi_ffi_rules::transport::EnumTagStrategy;
 
 use super::plan::{
-    KmpClass, KmpClassConstructor, KmpClassMethod, KmpEnum, KmpEnumField, KmpEnumVariant,
-    KmpFunction, KmpModule, KmpParam, KmpRecord, KmpRecordField,
+    KmpCallback, KmpCallbackMethod, KmpClass, KmpClassConstructor, KmpClassMethod, KmpClassStream,
+    KmpEnum, KmpEnumField, KmpEnumVariant, KmpFunction, KmpModule, KmpParam, KmpRecord,
+    KmpRecordField, KmpStreamMode,
 };
 
 pub struct KmpLowerer<'a> {
@@ -56,6 +58,12 @@ impl<'a> KmpLowerer<'a> {
             .all_classes()
             .map(|class| self.lower_class(class))
             .collect::<Vec<_>>();
+        let callbacks = self
+            .contract
+            .catalog
+            .all_callbacks()
+            .map(|callback| self.lower_callback(callback))
+            .collect::<Vec<_>>();
         let mut functions = Vec::new();
 
         for function in &self.contract.functions {
@@ -73,6 +81,7 @@ impl<'a> KmpLowerer<'a> {
             records,
             enums,
             classes,
+            callbacks,
             functions,
         }
     }
@@ -341,6 +350,39 @@ impl<'a> KmpLowerer<'a> {
                 .iter()
                 .map(|method| self.lower_class_method(class, method))
                 .collect::<Vec<_>>(),
+            streams: class
+                .streams
+                .iter()
+                .map(|stream| self.lower_class_stream(class, stream))
+                .collect::<Vec<_>>(),
+        }
+    }
+
+    fn abi_stream_for<'b>(&'b self, class: &ClassDef, stream: &StreamDef) -> &'b AbiStream {
+        self.abi
+            .streams
+            .iter()
+            .find(|item| item.class_id == class.id && item.stream_id == stream.id)
+            .expect("abi stream missing")
+    }
+
+    fn lower_class_stream(&self, class: &ClassDef, stream: &StreamDef) -> KmpClassStream {
+        let abi_stream = self.abi_stream_for(class, stream);
+        KmpClassStream {
+            name: NamingConvention::method_name(stream.id.as_str()),
+            item_type: self.kotlin_type(&stream.item_type),
+            mode: match stream.mode {
+                StreamMode::Async => KmpStreamMode::Async,
+                StreamMode::Batch => KmpStreamMode::Batch,
+                StreamMode::Callback => KmpStreamMode::Callback,
+            },
+            subscribe_symbol: abi_stream.subscribe.as_str().to_string(),
+            poll_symbol: abi_stream.poll.as_str().to_string(),
+            pop_batch_symbol: abi_stream.pop_batch.as_str().to_string(),
+            wait_symbol: abi_stream.wait.as_str().to_string(),
+            unsubscribe_symbol: abi_stream.unsubscribe.as_str().to_string(),
+            free_symbol: abi_stream.free.as_str().to_string(),
+            doc: stream.doc.clone(),
         }
     }
 
@@ -348,6 +390,44 @@ impl<'a> KmpLowerer<'a> {
         KmpClassMethod {
             ffi_symbol: naming::method_ffi_name(class.id.as_str(), method.id.as_str())
                 .into_string(),
+            name: NamingConvention::method_name(method.id.as_str()),
+            params: method
+                .params
+                .iter()
+                .map(|param| KmpParam {
+                    name: NamingConvention::param_name(param.name.as_str()),
+                    kotlin_type: self.kotlin_type(&param.type_expr),
+                })
+                .collect::<Vec<_>>(),
+            return_type: match &method.returns {
+                ReturnDef::Void => None,
+                ReturnDef::Value(type_expr) => Some(self.kotlin_type(type_expr)),
+                ReturnDef::Result { ok, err } => Some(format!(
+                    "BoltFFIResult<{}, {}>",
+                    self.kotlin_type(ok),
+                    self.kotlin_type(err)
+                )),
+            },
+            is_async: method.execution_kind() == ExecutionKind::Async,
+            doc: method.doc.clone(),
+        }
+    }
+
+    fn lower_callback(&self, callback: &CallbackTraitDef) -> KmpCallback {
+        KmpCallback {
+            interface_name: NamingConvention::class_name(callback.id.as_str()),
+            methods: callback
+                .methods
+                .iter()
+                .map(|method| self.lower_callback_method(method))
+                .collect::<Vec<_>>(),
+            is_closure: matches!(callback.kind, crate::ir::definitions::CallbackKind::Closure),
+            doc: callback.doc.clone(),
+        }
+    }
+
+    fn lower_callback_method(&self, method: &CallbackMethodDef) -> KmpCallbackMethod {
+        KmpCallbackMethod {
             name: NamingConvention::method_name(method.id.as_str()),
             params: method
                 .params
@@ -398,6 +478,7 @@ mod tests {
         assert!(!module.records.is_empty());
         assert!(!module.enums.is_empty());
         assert!(!module.classes.is_empty());
+        assert!(!module.callbacks.is_empty());
         assert!(!module.functions.is_empty());
         assert!(
             module

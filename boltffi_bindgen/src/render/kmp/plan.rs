@@ -21,6 +21,7 @@ pub struct KmpModule {
     pub records: Vec<KmpRecord>,
     pub enums: Vec<KmpEnum>,
     pub classes: Vec<KmpClass>,
+    pub callbacks: Vec<KmpCallback>,
     pub functions: Vec<KmpFunction>,
 }
 
@@ -68,6 +69,28 @@ pub struct KmpClass {
     pub doc: Option<String>,
     pub constructors: Vec<KmpClassConstructor>,
     pub methods: Vec<KmpClassMethod>,
+    pub streams: Vec<KmpClassStream>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KmpStreamMode {
+    Async,
+    Batch,
+    Callback,
+}
+
+#[derive(Debug, Clone)]
+pub struct KmpClassStream {
+    pub name: String,
+    pub item_type: String,
+    pub mode: KmpStreamMode,
+    pub subscribe_symbol: String,
+    pub poll_symbol: String,
+    pub pop_batch_symbol: String,
+    pub wait_symbol: String,
+    pub unsubscribe_symbol: String,
+    pub free_symbol: String,
+    pub doc: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +103,23 @@ pub struct KmpClassConstructor {
 #[derive(Debug, Clone)]
 pub struct KmpClassMethod {
     pub ffi_symbol: String,
+    pub name: String,
+    pub params: Vec<KmpParam>,
+    pub return_type: Option<String>,
+    pub is_async: bool,
+    pub doc: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KmpCallback {
+    pub interface_name: String,
+    pub methods: Vec<KmpCallbackMethod>,
+    pub is_closure: bool,
+    pub doc: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KmpCallbackMethod {
     pub name: String,
     pub params: Vec<KmpParam>,
     pub return_type: Option<String>,

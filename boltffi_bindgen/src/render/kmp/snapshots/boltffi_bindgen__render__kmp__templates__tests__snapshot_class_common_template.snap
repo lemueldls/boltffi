@@ -15,5 +15,9 @@ expect class Widget private constructor(handle: Long) {
      * Renames the widget.
      */
     fun rename(name: String)
+    /**
+     * Watches widget updates.
+     */
+    fun updates(): Flow<Int>
 
 }

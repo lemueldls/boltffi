@@ -3,5 +3,5 @@
 {% for line in doc.lines() %} * {{ line }}
 {% endfor %} */
 {% endif %}actual class {{ class_name }} private constructor(private val handle: Long) {
-{% for ctor in constructor_sources %}{{ ctor }}{% endfor %}{% for method in method_sources %}{{ method }}{% endfor %}
+{% for ctor in constructor_sources %}{{ ctor }}{% endfor %}{% for method in method_sources %}{{ method }}{% endfor %}{% for stream in stream_sources %}{{ stream }}{% endfor %}
 }
