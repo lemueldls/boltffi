@@ -212,9 +212,9 @@ Uuid = { type = "java.util.UUID", conversion = "uuid_string" }
   - Default: inferred from crate name
 
 Generated layout is backend-specific and includes:
-- `commonMain` expect facade wrappers
-- `jvmMain` actual wrappers that delegate to generated JVM/JNI bindings
-- `nativeMain` actual wrappers for Kotlin/Native cinterop usage
+- `commonMain` shared Kotlin declarations
+- `jvmMain` JVM platform implementations that delegate to generated JVM/JNI bindings
+- `nativeMain` Native platform implementations for Kotlin/Native cinterop usage
 - a single cinterop `.def` file emitted adjacent to the generated C header
 
 ## Java

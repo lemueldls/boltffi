@@ -475,8 +475,8 @@ Both JVM and Android targets can be enabled simultaneously. They share the same 
 
 ## Kotlin Multiplatform (KMP) Configuration
 
-The `[targets.kmp]` section generates a shared Kotlin facade for `commonMain` plus JVM and Native
-platform implementations.
+The `[targets.kmp]` section generates shared Kotlin declarations for `commonMain` plus JVM and
+Native platform implementations.
 
 ```toml
 [targets.kmp]
@@ -505,11 +505,9 @@ dist/kmp/
 The generated `.def` file is intended for Kotlin/Native `cinterop` and contains the generated C
 header reference (`headers = ...`) along with linker hints (`linkerOpts = ...`).
 
-### KMP v1 scope
-
-KMP support is intentionally incremental in v1. The unified shared facade currently includes sync
-exported free functions with primitive parameters and primitive/void returns. Unsupported exports
-are skipped and listed in comments in the generated `commonMain` file.
+The shared source surface mirrors the generated Rust contract as closely as the selected ABI shape
+allows. `commonMain` declares the public API, while `jvmMain` and `nativeMain` provide the
+platform-specific implementations.
 
 ## WASM Configuration
 

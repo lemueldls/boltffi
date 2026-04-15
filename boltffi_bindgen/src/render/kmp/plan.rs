@@ -14,14 +14,11 @@ pub struct KmpOutputs {
     pub jvm_main_source: String,
     pub native_main_source: String,
     pub cinterop_def: String,
-    pub supported_functions: usize,
-    pub skipped_functions: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct KmpModule {
     pub functions: Vec<KmpFunction>,
-    pub skipped_functions: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +27,7 @@ pub struct KmpFunction {
     pub ffi_symbol: String,
     pub params: Vec<KmpParam>,
     pub return_type: Option<String>,
+    pub is_async: bool,
 }
 
 #[derive(Debug, Clone)]

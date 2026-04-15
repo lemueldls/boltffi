@@ -3,9 +3,10 @@ use heck::ToLowerCamelCase;
 
 use crate::ir::{
     AbiContract,
-    abi::{AbiCall, CallId, CallMode, ErrorTransport, ParamRole},
+    abi::{AbiCall, CallId, CallMode},
     contract::FfiContract,
     definitions::{FunctionDef, ReturnDef},
+    ids::BuiltinId,
     types::{PrimitiveType, TypeExpr},
 };
 use crate::render::kotlin::NamingConvention;
@@ -31,69 +32,42 @@ impl<'a> KmpLowerer<'a> {
         }
 
         let mut functions = Vec::new();
-        let mut skipped_functions = Vec::new();
 
         for function in &self.contract.functions {
             let Some(call) = call_map.get(function.id.as_str()) else {
-                skipped_functions.push(format!("{} (missing ABI call)", function.id.as_str()));
                 continue;
             };
 
             match self.supported_function(function, call) {
                 Some(kmp_function) => functions.push(kmp_function),
-                None => skipped_functions.push(function.id.as_str().to_string()),
+                None => continue,
             }
         }
 
-        KmpModule {
-            functions,
-            skipped_functions,
-        }
+        KmpModule { functions }
     }
 
     fn supported_function(&self, function: &FunctionDef, call: &AbiCall) -> Option<KmpFunction> {
-        if function.execution_kind() != ExecutionKind::Sync {
-            return None;
-        }
-
-        if !matches!(call.mode, CallMode::Sync) {
-            return None;
-        }
-
-        if !matches!(call.error, ErrorTransport::None) {
-            return None;
-        }
-
         if call.params.len() != function.params.len() {
-            return None;
-        }
-
-        if call
-            .params
-            .iter()
-            .any(|param| !matches!(param.role, ParamRole::Input { .. }))
-        {
             return None;
         }
 
         let mut params = Vec::with_capacity(function.params.len());
         for param in &function.params {
-            let TypeExpr::Primitive(primitive) = &param.type_expr else {
-                return None;
-            };
-
             params.push(KmpParam {
                 name: NamingConvention::param_name(param.name.as_str()),
-                kotlin_type: Self::kotlin_primitive_type(*primitive),
+                kotlin_type: self.kotlin_type(&param.type_expr),
             });
         }
 
         let return_type = match &function.returns {
             ReturnDef::Void => None,
-            ReturnDef::Value(TypeExpr::Primitive(primitive)) => {
-                Some(Self::kotlin_primitive_type(*primitive))
-            }
-            _ => return None,
+            ReturnDef::Value(type_expr) => Some(self.kotlin_type(type_expr)),
+            ReturnDef::Result { ok, err } => Some(format!(
+                "BoltFFIResult<{}, {}>",
+                self.kotlin_type(ok),
+                self.kotlin_type(err)
+            )),
         };
 
         Some(KmpFunction {
@@ -101,7 +75,31 @@ impl<'a> KmpLowerer<'a> {
             ffi_symbol: call.symbol.as_str().to_string(),
             params,
             return_type,
+            is_async: function.execution_kind() == ExecutionKind::Async
+                || matches!(call.mode, CallMode::Async(_)),
         })
+    }
+
+    fn kotlin_type(&self, type_expr: &TypeExpr) -> String {
+        match type_expr {
+            TypeExpr::Void => "Unit".to_string(),
+            TypeExpr::Primitive(primitive) => Self::kotlin_primitive_type(*primitive),
+            TypeExpr::String => "String".to_string(),
+            TypeExpr::Bytes => "ByteArray".to_string(),
+            TypeExpr::Vec(inner) => format!("List<{}>", self.kotlin_type(inner)),
+            TypeExpr::Option(inner) => format!("{}?", self.kotlin_type(inner)),
+            TypeExpr::Result { ok, err } => format!(
+                "BoltFFIResult<{}, {}>",
+                self.kotlin_type(ok),
+                self.kotlin_type(err)
+            ),
+            TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Handle(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Callback(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Custom(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Builtin(id) => self.kotlin_builtin_type(id),
+        }
     }
 
     fn kotlin_primitive_type(primitive: PrimitiveType) -> String {
@@ -117,6 +115,16 @@ impl<'a> KmpLowerer<'a> {
             PrimitiveType::U64 | PrimitiveType::USize => "ULong".to_string(),
             PrimitiveType::F32 => "Float".to_string(),
             PrimitiveType::F64 => "Double".to_string(),
+        }
+    }
+
+    fn kotlin_builtin_type(&self, builtin_id: &BuiltinId) -> String {
+        match builtin_id.as_str() {
+            "Duration" => "Duration".to_string(),
+            "SystemTime" => "Instant".to_string(),
+            "Uuid" => "UUID".to_string(),
+            "Url" => "URI".to_string(),
+            _ => NamingConvention::class_name(builtin_id.as_str()),
         }
     }
 }
@@ -135,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_demo_contract_collects_supported_and_skipped_functions() {
+    fn lower_demo_contract_collects_supported_functions() {
         let mut scanned_module =
             scan_crate_with_pointer_width(&demo_source_directory(), "demo", None)
                 .expect("demo crate should scan");
@@ -151,6 +159,11 @@ mod tests {
                 .iter()
                 .any(|function| function.public_name == "echoI32")
         );
-        assert!(!module.skipped_functions.is_empty());
+        assert!(
+            module
+                .functions
+                .iter()
+                .all(|function| !function.public_name.is_empty())
+        );
     }
 }
