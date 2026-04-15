@@ -1,7 +1,7 @@
 use boltffi_ffi_rules::callable::ExecutionKind;
 use heck::ToLowerCamelCase;
 
-use crate::ir::plan::{ScalarOrigin, Transport};
+use crate::ir::plan::{CompositeLayout, ScalarOrigin, Transport};
 use crate::ir::{
     AbiContract,
     abi::{
@@ -395,7 +395,63 @@ impl<'a> KmpLowerer<'a> {
     fn stream_pop_batch_items_expr(&self, stream: &AbiStream, item_type: &str) -> String {
         match &stream.item_transport {
             Transport::Scalar(origin) => Self::direct_scalar_stream_items_expr(origin),
+            Transport::Composite(layout) => Self::direct_composite_stream_items_expr(layout),
             _ => format!("emptyList<{item_type}>()"),
+        }
+    }
+
+    fn direct_composite_stream_items_expr(layout: &CompositeLayout) -> String {
+        let record_name = NamingConvention::class_name(layout.record_id.as_str());
+        let field_exprs = layout
+            .fields
+            .iter()
+            .map(|field| {
+                let field_name = NamingConvention::param_name(field.name.as_str());
+                let read_expr = Self::primitive_read_expr_at(
+                    "bytes",
+                    &format!("base + {}", field.offset),
+                    field.primitive,
+                );
+                format!("{field_name} = {read_expr}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        format!(
+            "run {{ val stride = {}; List(bytes.size / stride) {{ index -> val base = index * stride; {}({}) }} }}",
+            layout.total_size, record_name, field_exprs
+        )
+    }
+
+    fn primitive_read_expr_at(
+        bytes_ident: &str,
+        offset_expr: &str,
+        primitive: PrimitiveType,
+    ) -> String {
+        match primitive {
+            PrimitiveType::Bool => format!("{bytes_ident}[{offset_expr}].toInt() != 0"),
+            PrimitiveType::I8 => format!("{bytes_ident}[{offset_expr}]"),
+            PrimitiveType::U8 => format!("{bytes_ident}[{offset_expr}].toUByte()"),
+            PrimitiveType::I16 => format!("boltffiReadLeI16({bytes_ident}, {offset_expr})"),
+            PrimitiveType::U16 => {
+                format!("boltffiReadLeI16({bytes_ident}, {offset_expr}).toUShort()")
+            }
+            PrimitiveType::I32 => format!("boltffiReadLeI32({bytes_ident}, {offset_expr})"),
+            PrimitiveType::U32 => {
+                format!("boltffiReadLeI32({bytes_ident}, {offset_expr}).toUInt()")
+            }
+            PrimitiveType::I64 | PrimitiveType::ISize => {
+                format!("boltffiReadLeI64({bytes_ident}, {offset_expr})")
+            }
+            PrimitiveType::U64 | PrimitiveType::USize => {
+                format!("boltffiReadLeI64({bytes_ident}, {offset_expr}).toULong()")
+            }
+            PrimitiveType::F32 => {
+                format!("Float.fromBits(boltffiReadLeI32({bytes_ident}, {offset_expr}))")
+            }
+            PrimitiveType::F64 => {
+                format!("Double.fromBits(boltffiReadLeI64({bytes_ident}, {offset_expr}))")
+            }
         }
     }
 
