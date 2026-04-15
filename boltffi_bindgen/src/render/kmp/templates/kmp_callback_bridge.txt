@@ -16,7 +16,12 @@ private object {{ map_name }} {
 }
 
 object {{ bridge_name }} {
-    fun retain(callback: {{ interface_name }}): Long = {{ map_name }}.insert(callback)
+{% if has_async_methods %}    private val pendingAsyncCallbacks = mutableMapOf<Long, Long>()
+    private val asyncCallbackScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default
+    )
+
+{% endif %}    fun retain(callback: {{ interface_name }}): Long = {{ map_name }}.insert(callback)
 
     fun release(handle: Long) {
         {{ map_name }}.remove(handle)

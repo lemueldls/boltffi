@@ -503,9 +503,26 @@ impl<'a> KmpLowerer<'a> {
         method: &CallbackMethodDef,
         abi_method: &AbiCallbackMethod,
     ) -> KmpCallbackMethod {
+        let method_name_pascal = NamingConvention::class_name(method.id.as_str());
+        let invoker_suffix = self.invoker_suffix_from_return_shape(&abi_method.returns);
+        let (complete_name, fail_name, invoker_symbol, invoker_failure_symbol) =
+            if method.execution_kind() == ExecutionKind::Async {
+                (
+                    Some(format!("complete{method_name_pascal}")),
+                    Some(format!("fail{method_name_pascal}")),
+                    Some(format!("invokeAsyncCallback{invoker_suffix}")),
+                    Some(format!("invokeAsyncCallback{invoker_suffix}Failure")),
+                )
+            } else {
+                (None, None, None, None)
+            };
         KmpCallbackMethod {
             ffi_name: abi_method.vtable_field.as_str().to_string(),
             name: NamingConvention::method_name(method.id.as_str()),
+            complete_name,
+            fail_name,
+            invoker_symbol,
+            invoker_failure_symbol,
             params: method
                 .params
                 .iter()
@@ -525,6 +542,41 @@ impl<'a> KmpLowerer<'a> {
             },
             is_async: method.execution_kind() == ExecutionKind::Async,
             doc: method.doc.clone(),
+        }
+    }
+
+    fn invoker_suffix_from_return_shape(&self, ret_shape: &crate::ir::abi::ReturnShape) -> String {
+        use boltffi_ffi_rules::transport::ValueReturnStrategy;
+
+        match ret_shape.value_return_strategy() {
+            ValueReturnStrategy::Void => "Void".to_string(),
+            ValueReturnStrategy::Scalar(_) => {
+                let Some(Transport::Scalar(origin)) = &ret_shape.transport else {
+                    unreachable!("scalar return strategy requires scalar transport");
+                };
+                self.invoker_suffix_from_primitive(origin.primitive())
+            }
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+                "Handle".to_string()
+            }
+            ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
+                "Wire".to_string()
+            }
+        }
+    }
+
+    fn invoker_suffix_from_primitive(&self, primitive: PrimitiveType) -> String {
+        match primitive {
+            PrimitiveType::Bool => "Bool".to_string(),
+            PrimitiveType::I8 | PrimitiveType::U8 => "I8".to_string(),
+            PrimitiveType::I16 | PrimitiveType::U16 => "I16".to_string(),
+            PrimitiveType::I32 | PrimitiveType::U32 => "I32".to_string(),
+            PrimitiveType::I64
+            | PrimitiveType::U64
+            | PrimitiveType::ISize
+            | PrimitiveType::USize => "I64".to_string(),
+            PrimitiveType::F32 => "F32".to_string(),
+            PrimitiveType::F64 => "F64".to_string(),
         }
     }
 }

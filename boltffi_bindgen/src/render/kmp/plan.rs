@@ -123,6 +123,10 @@ pub struct KmpCallback {
 pub struct KmpCallbackMethod {
     pub ffi_name: String,
     pub name: String,
+    pub complete_name: Option<String>,
+    pub fail_name: Option<String>,
+    pub invoker_symbol: Option<String>,
+    pub invoker_failure_symbol: Option<String>,
     pub params: Vec<KmpParam>,
     pub return_type: Option<String>,
     pub is_async: bool,

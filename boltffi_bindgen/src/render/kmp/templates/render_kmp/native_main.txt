@@ -5,9 +5,15 @@ package {{ package_name }}
 import kotlinx.coroutines.flow.flow
 
 {% endif %}
+{% if uses_async_callback_bridges %}import kotlinx.coroutines.launch
+
+{% endif %}
 
 {% for function in functions -%}
 import {{ native_binding_package }}.{{ function.ffi_symbol }} as __native_{{ function.ffi_symbol }}
+{% endfor %}
+{% for callback_import in callback_imports -%}
+{{ callback_import }}
 {% endfor %}
 {% for class_import in class_imports -%}
 {{ class_import }}

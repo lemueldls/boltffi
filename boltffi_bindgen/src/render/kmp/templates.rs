@@ -32,10 +32,12 @@ pub struct NativeMainTemplate<'a> {
     pub package_name: &'a str,
     pub module_name: &'a str,
     pub native_binding_package: &'a str,
+    pub callback_imports: &'a [String],
     pub class_imports: &'a [String],
     pub class_sources: &'a [String],
     pub callback_bridge_sources: &'a [String],
     pub uses_flow: bool,
+    pub uses_async_callback_bridges: bool,
     pub functions: &'a [KmpFunction],
 }
 
@@ -119,6 +121,7 @@ pub struct CallbackBridgeTemplate<'a> {
     pub interface_name: &'a str,
     pub map_name: &'a str,
     pub bridge_name: &'a str,
+    pub has_async_methods: bool,
     pub method_sources: &'a [String],
 }
 
@@ -250,11 +253,34 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
                 interface_name: &callback.interface_name,
                 map_name: &map_name,
                 bridge_name: &bridge_name,
+                has_async_methods: callback.methods.iter().any(|method| method.is_async),
                 method_sources: &method_sources,
             }
             .render()
             .expect("KMP callback bridge template should render")
         })
+        .collect::<Vec<_>>();
+    let callback_imports = module
+        .callbacks
+        .iter()
+        .flat_map(|callback| callback.methods.iter())
+        .flat_map(|method| {
+            [
+                method.invoker_symbol.as_deref(),
+                method.invoker_failure_symbol.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .map(|symbol| {
+                format!(
+                    "import {}.{} as __native_callback_{}",
+                    options.native_binding_package, symbol, symbol
+                )
+            })
+            .collect::<Vec<_>>()
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect::<Vec<_>>();
     let class_imports = module
         .classes
@@ -332,6 +358,11 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
         })
         .collect::<Vec<_>>();
     let uses_flow = module.classes.iter().any(|class| !class.streams.is_empty());
+    let uses_async_callback_bridges = module
+        .callbacks
+        .iter()
+        .flat_map(|callback| callback.methods.iter())
+        .any(|method| method.is_async);
 
     KmpOutputs {
         common_main_source: CommonMainTemplate {
@@ -358,10 +389,12 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             package_name: &options.package_name,
             module_name: &options.module_name,
             native_binding_package: &options.native_binding_package,
+            callback_imports: &callback_imports,
             class_imports: &class_imports,
             class_sources: &class_actual_sources,
             callback_bridge_sources: &callback_bridge_sources,
             uses_flow,
+            uses_async_callback_bridges,
             functions: &module.functions,
         }
         .render()
@@ -457,6 +490,10 @@ mod tests {
                 methods: vec![super::super::plan::KmpCallbackMethod {
                     ffi_name: "on_update".to_string(),
                     name: "onUpdate".to_string(),
+                    complete_name: None,
+                    fail_name: None,
+                    invoker_symbol: None,
+                    invoker_failure_symbol: None,
                     params: vec![KmpParam {
                         name: "value".to_string(),
                         kotlin_type: "Int".to_string(),
@@ -584,6 +621,10 @@ mod tests {
             &super::super::plan::KmpCallbackMethod {
                 ffi_name: "on_update".to_string(),
                 name: "onUpdate".to_string(),
+                complete_name: None,
+                fail_name: None,
+                invoker_symbol: None,
+                invoker_failure_symbol: None,
                 params: vec![KmpParam {
                     name: "value".to_string(),
                     kotlin_type: "Int".to_string(),
@@ -653,10 +694,15 @@ mod tests {
                 interface_name: "WidgetEvents",
                 map_name: "WidgetEventsHandleMap",
                 bridge_name: "WidgetEventsBridge",
+                has_async_methods: false,
                 method_sources: &[render_kmp_callback_bridge_method_signature(
                     &super::super::plan::KmpCallbackMethod {
                         ffi_name: "on_update".to_string(),
                         name: "onUpdate".to_string(),
+                        complete_name: None,
+                        fail_name: None,
+                        invoker_symbol: None,
+                        invoker_failure_symbol: None,
                         params: vec![KmpParam {
                             name: "value".to_string(),
                             kotlin_type: "Int".to_string(),
@@ -726,10 +772,12 @@ mod tests {
             package_name: &options.package_name,
             module_name: &options.module_name,
             native_binding_package: &options.native_binding_package,
+            callback_imports: &[],
             class_imports: &class_imports,
             class_sources: &class_actual_sources,
             callback_bridge_sources: &callback_bridge_sources,
             uses_flow: true,
+            uses_async_callback_bridges: false,
             functions: &module.functions,
         }
         .render()
@@ -880,6 +928,10 @@ mod tests {
             &super::super::plan::KmpCallbackMethod {
                 ffi_name: "on_update".to_string(),
                 name: "onUpdate".to_string(),
+                complete_name: None,
+                fail_name: None,
+                invoker_symbol: None,
+                invoker_failure_symbol: None,
                 params: vec![KmpParam {
                     name: "value".to_string(),
                     kotlin_type: "Int".to_string(),
@@ -955,6 +1007,10 @@ mod tests {
             &super::super::plan::KmpCallbackMethod {
                 ffi_name: "on_update".to_string(),
                 name: "onUpdate".to_string(),
+                complete_name: None,
+                fail_name: None,
+                invoker_symbol: None,
+                invoker_failure_symbol: None,
                 params: vec![KmpParam {
                     name: "value".to_string(),
                     kotlin_type: "Int".to_string(),
@@ -969,6 +1025,40 @@ mod tests {
             interface_name: "WidgetEvents",
             map_name: "WidgetEventsHandleMap",
             bridge_name: "WidgetEventsBridge",
+            has_async_methods: false,
+            method_sources: &method_sources,
+        }
+        .render()
+        .unwrap();
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn snapshot_callback_bridge_template_with_async_method() {
+        let method_sources = vec![render_kmp_callback_bridge_method_signature(
+            &super::super::plan::KmpCallbackMethod {
+                ffi_name: "on_complete".to_string(),
+                name: "onComplete".to_string(),
+                complete_name: Some("completeOnComplete".to_string()),
+                fail_name: Some("failOnComplete".to_string()),
+                invoker_symbol: Some("invokeAsyncCallbackI32".to_string()),
+                invoker_failure_symbol: Some("invokeAsyncCallbackI32Failure".to_string()),
+                params: vec![KmpParam {
+                    name: "value".to_string(),
+                    kotlin_type: "Int".to_string(),
+                }],
+                return_type: Some("Int".to_string()),
+                is_async: true,
+                doc: Some("Called when async callback completes.".to_string()),
+            },
+            "WidgetEventsHandleMap",
+        )];
+        let rendered = CallbackBridgeTemplate {
+            interface_name: "WidgetEvents",
+            map_name: "WidgetEventsHandleMap",
+            bridge_name: "WidgetEventsBridge",
+            has_async_methods: true,
             method_sources: &method_sources,
         }
         .render()
@@ -1143,9 +1233,58 @@ fn render_kmp_callback_bridge_method_signature(
         rendered.push_str(&render_doc_block(doc, "    "));
     }
     if method.is_async {
+        let complete_name = method
+            .complete_name
+            .as_deref()
+            .expect("async callback method requires completion helper");
+        let fail_name = method
+            .fail_name
+            .as_deref()
+            .expect("async callback method requires failure helper");
+        let invoker_symbol = method
+            .invoker_symbol
+            .as_deref()
+            .expect("async callback method requires invoker symbol");
+        let invoker_failure_symbol = method
+            .invoker_failure_symbol
+            .as_deref()
+            .expect("async callback method requires failure invoker symbol");
+        let complete_signature = if let Some(return_type) = method.return_type.as_deref() {
+            format!(", result: {return_type}")
+        } else {
+            String::new()
+        };
+        let complete_invoke_arg = if method.return_type.is_some() {
+            ", result"
+        } else {
+            ""
+        };
+        let complete_call = if call_args.is_empty() {
+            if method.return_type.is_some() {
+                format!(
+                    "val result = callback.{}()\n                {complete_name}(callbackData, result)",
+                    method.name
+                )
+            } else {
+                format!(
+                    "callback.{}()\n                {complete_name}(callbackData)",
+                    method.name
+                )
+            }
+        } else if method.return_type.is_some() {
+            format!(
+                "val result = callback.{}({call_args})\n                {complete_name}(callbackData, result)",
+                method.name
+            )
+        } else {
+            format!(
+                "callback.{}({call_args})\n                {complete_name}(callbackData)",
+                method.name
+            )
+        };
         rendered.push_str(&format!(
-            "    fun {}(handle: Long{param_suffix}){return_suffix} {{\n        error(\"KMP async callback bridge not yet implemented\")\n    }}\n",
-            method.ffi_name
+            "    fun {}(handle: Long{param_suffix}, callbackPtr: Long, callbackData: Long) {{\n        val callback = {map_name}.get(handle) ?: run {{\n            __native_callback_{invoker_failure_symbol}(callbackPtr, callbackData)\n            return\n        }}\n        pendingAsyncCallbacks[callbackData] = callbackPtr\n        asyncCallbackScope.launch {{\n            try {{\n                {complete_call}\n            }} catch (_: Throwable) {{\n                {fail_name}(callbackData)\n            }}\n        }}\n    }}\n\n    private fun {complete_name}(callbackData: Long{complete_signature}) {{\n        val callbackPtr = pendingAsyncCallbacks.remove(callbackData) ?: return\n        __native_callback_{invoker_symbol}(callbackPtr, callbackData{complete_invoke_arg})\n    }}\n\n    private fun {fail_name}(callbackData: Long) {{\n        val callbackPtr = pendingAsyncCallbacks.remove(callbackData) ?: return\n        __native_callback_{invoker_failure_symbol}(callbackPtr, callbackData)\n    }}\n",
+            method.ffi_name,
         ));
     } else if method.return_type.is_some() {
         rendered.push_str(&format!(
