@@ -8,6 +8,7 @@ pub struct CommonMainTemplate<'a> {
     pub package_name: &'a str,
     pub module_name: &'a str,
     pub record_sources: &'a [String],
+    pub enum_sources: &'a [String],
     pub functions: &'a [KmpFunction],
 }
 
@@ -45,6 +46,29 @@ pub struct RecordTemplate<'a> {
     pub doc: Option<&'a str>,
 }
 
+#[derive(Template)]
+#[template(path = "kmp_enum.txt", escape = "none")]
+pub struct EnumTemplate<'a> {
+    pub class_name: &'a str,
+    pub is_c_style: bool,
+    pub is_error: bool,
+    pub value_type: Option<&'a str>,
+    pub variants: &'a [KmpEnumVariantView],
+    pub doc: Option<&'a str>,
+}
+
+pub struct KmpEnumVariantView {
+    pub name: String,
+    pub tag: i128,
+    pub fields: Vec<KmpEnumFieldView>,
+    pub doc: Option<String>,
+}
+
+pub struct KmpEnumFieldView {
+    pub name: String,
+    pub kotlin_type: String,
+}
+
 pub struct KmpRecordFieldView<'a> {
     pub name: &'a str,
     pub kotlin_type: &'a str,
@@ -75,12 +99,50 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             .expect("KMP record template should render")
         })
         .collect::<Vec<_>>();
+    let enum_sources = module
+        .enums
+        .iter()
+        .map(|enumeration| {
+            let variants = enumeration
+                .variants
+                .iter()
+                .map(|variant| {
+                    let fields = variant
+                        .fields
+                        .iter()
+                        .map(|field| KmpEnumFieldView {
+                            name: field.name.clone(),
+                            kotlin_type: field.kotlin_type.clone(),
+                        })
+                        .collect::<Vec<_>>();
+                    KmpEnumVariantView {
+                        name: variant.name.clone(),
+                        tag: variant.tag,
+                        fields,
+                        doc: variant.doc.clone(),
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            EnumTemplate {
+                class_name: &enumeration.class_name,
+                is_c_style: enumeration.is_c_style,
+                is_error: enumeration.is_error,
+                value_type: enumeration.value_type.as_deref(),
+                variants: &variants,
+                doc: enumeration.doc.as_deref(),
+            }
+            .render()
+            .expect("KMP enum template should render")
+        })
+        .collect::<Vec<_>>();
 
     KmpOutputs {
         common_main_source: CommonMainTemplate {
             package_name: &options.package_name,
             module_name: &options.module_name,
             record_sources: &record_sources,
+            enum_sources: &enum_sources,
             functions: &module.functions,
         }
         .render()
@@ -138,6 +200,19 @@ mod tests {
                 }],
                 doc: Some("A physical location.".to_string()),
             }],
+            enums: vec![super::super::plan::KmpEnum {
+                class_name: "Result".to_string(),
+                is_c_style: false,
+                is_error: false,
+                value_type: None,
+                variants: vec![super::super::plan::KmpEnumVariant {
+                    name: "Success".to_string(),
+                    tag: 0,
+                    fields: vec![],
+                    doc: Some("Operation succeeded.".to_string()),
+                }],
+                doc: Some("The result of an operation.".to_string()),
+            }],
             functions: vec![
                 KmpFunction {
                     public_name: "echoI32".to_string(),
@@ -181,10 +256,29 @@ mod tests {
             .render()
             .unwrap(),
         ];
+        let enum_variants = vec![KmpEnumVariantView {
+            name: "Success".to_string(),
+            tag: 0,
+            fields: vec![],
+            doc: Some("Operation succeeded.".to_string()),
+        }];
+        let enum_sources = vec![
+            EnumTemplate {
+                class_name: "Result",
+                is_c_style: false,
+                is_error: false,
+                value_type: None,
+                variants: &enum_variants,
+                doc: Some("The result of an operation."),
+            }
+            .render()
+            .unwrap(),
+        ];
         let rendered = CommonMainTemplate {
             package_name: &options.package_name,
             module_name: &options.module_name,
             record_sources: &record_sources,
+            enum_sources: &enum_sources,
             functions: &module.functions,
         }
         .render()
@@ -244,6 +338,40 @@ mod tests {
             class_name: "Location",
             fields: &fields,
             doc: Some("A physical location."),
+        }
+        .render()
+        .unwrap();
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn snapshot_enum_template() {
+        let variants = vec![
+            KmpEnumVariantView {
+                name: "Success".to_string(),
+                tag: 0,
+                fields: vec![],
+                doc: Some("Operation succeeded.".to_string()),
+            },
+            KmpEnumVariantView {
+                name: "Error".to_string(),
+                tag: 1,
+                fields: vec![KmpEnumFieldView {
+                    name: "message".to_string(),
+                    kotlin_type: "String".to_string(),
+                }],
+                doc: Some("Operation failed.".to_string()),
+            },
+        ];
+
+        let rendered = EnumTemplate {
+            class_name: "Result",
+            is_c_style: false,
+            is_error: false,
+            value_type: None,
+            variants: &variants,
+            doc: Some("The result of an operation."),
         }
         .render()
         .unwrap();

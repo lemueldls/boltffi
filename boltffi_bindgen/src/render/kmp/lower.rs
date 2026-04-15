@@ -3,15 +3,19 @@ use heck::ToLowerCamelCase;
 
 use crate::ir::{
     AbiContract,
-    abi::{AbiCall, CallId, CallMode},
+    abi::{AbiCall, AbiEnum, AbiEnumField, AbiEnumPayload, CallId, CallMode},
     contract::FfiContract,
-    definitions::{DefaultValue, FieldDef, FunctionDef, RecordDef, ReturnDef},
+    definitions::{DefaultValue, EnumDef, FieldDef, FunctionDef, RecordDef, ReturnDef},
     ids::BuiltinId,
     types::{PrimitiveType, TypeExpr},
 };
 use crate::render::kotlin::NamingConvention;
+use boltffi_ffi_rules::transport::EnumTagStrategy;
 
-use super::plan::{KmpFunction, KmpModule, KmpParam, KmpRecord, KmpRecordField};
+use super::plan::{
+    KmpEnum, KmpEnumField, KmpEnumVariant, KmpFunction, KmpModule, KmpParam, KmpRecord,
+    KmpRecordField,
+};
 
 pub struct KmpLowerer<'a> {
     contract: &'a FfiContract,
@@ -37,6 +41,12 @@ impl<'a> KmpLowerer<'a> {
             .all_records()
             .map(|record| self.lower_record(record))
             .collect::<Vec<_>>();
+        let enums = self
+            .contract
+            .catalog
+            .all_enums()
+            .map(|enumeration| self.lower_enum(enumeration))
+            .collect::<Vec<_>>();
         let mut functions = Vec::new();
 
         for function in &self.contract.functions {
@@ -50,7 +60,11 @@ impl<'a> KmpLowerer<'a> {
             }
         }
 
-        KmpModule { records, functions }
+        KmpModule {
+            records,
+            enums,
+            functions,
+        }
     }
 
     fn supported_function(&self, function: &FunctionDef, call: &AbiCall) -> Option<KmpFunction> {
@@ -198,6 +212,99 @@ impl<'a> KmpLowerer<'a> {
             DefaultValue::Null => "null".to_string(),
         }
     }
+
+    fn abi_enum_for(&self, enumeration: &EnumDef) -> &AbiEnum {
+        self.abi
+            .enums
+            .iter()
+            .find(|abi_enum| abi_enum.id == enumeration.id)
+            .expect("abi enum missing")
+    }
+
+    fn lower_enum(&self, enumeration: &EnumDef) -> KmpEnum {
+        let abi_enum = self.abi_enum_for(enumeration);
+        let class_name = NamingConvention::class_name(enumeration.id.as_str());
+        let is_c_style = abi_enum.is_c_style;
+        let is_error = enumeration.is_error;
+        let value_type = match &enumeration.repr {
+            crate::ir::definitions::EnumRepr::CStyle { tag_type, .. } => {
+                Some(Self::kotlin_primitive_type(*tag_type))
+            }
+            _ => None,
+        };
+        let variant_docs = enumeration.variant_docs();
+        let variants = abi_enum
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(index, variant)| {
+                let mut lowered = self.lower_enum_variant(abi_enum, variant, index, is_c_style);
+                lowered.doc = variant_docs.get(index).cloned().flatten();
+                lowered
+            })
+            .collect::<Vec<_>>();
+
+        KmpEnum {
+            class_name,
+            is_c_style,
+            is_error,
+            value_type,
+            variants,
+            doc: enumeration.doc.clone(),
+        }
+    }
+
+    fn lower_enum_variant(
+        &self,
+        abi_enum: &AbiEnum,
+        variant: &crate::ir::abi::AbiEnumVariant,
+        ordinal: usize,
+        is_c_style: bool,
+    ) -> KmpEnumVariant {
+        let fields = match &variant.payload {
+            AbiEnumPayload::Unit => Vec::new(),
+            AbiEnumPayload::Tuple(fields) | AbiEnumPayload::Struct(fields) => fields
+                .iter()
+                .enumerate()
+                .map(|(index, field)| self.lower_enum_field(field, index))
+                .collect(),
+        };
+        let name = if is_c_style {
+            NamingConvention::enum_entry_name(variant.name.as_str())
+        } else {
+            NamingConvention::class_name(variant.name.as_str())
+        };
+
+        KmpEnumVariant {
+            name,
+            tag: self.kotlin_enum_variant_tag(abi_enum, ordinal, variant.discriminant),
+            fields,
+            doc: None,
+        }
+    }
+
+    fn lower_enum_field(&self, field: &AbiEnumField, index: usize) -> KmpEnumField {
+        KmpEnumField {
+            name: if field.name.as_str().is_empty() {
+                format!("value_{}", index)
+            } else {
+                NamingConvention::property_name(field.name.as_str())
+            },
+            kotlin_type: self.kotlin_type(&field.type_expr),
+        }
+    }
+
+    fn kotlin_enum_variant_tag(
+        &self,
+        abi_enum: &AbiEnum,
+        ordinal: usize,
+        discriminant: i128,
+    ) -> i128 {
+        match abi_enum.codec_tag_strategy {
+            EnumTagStrategy::Discriminant => discriminant,
+            EnumTagStrategy::OrdinalIndex => abi_enum.resolve_codec_tag(ordinal, discriminant),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -224,6 +331,7 @@ mod tests {
         let module = KmpLowerer::new(&ffi_contract, &abi_contract).lower();
 
         assert!(!module.records.is_empty());
+        assert!(!module.enums.is_empty());
         assert!(!module.functions.is_empty());
         assert!(
             module
