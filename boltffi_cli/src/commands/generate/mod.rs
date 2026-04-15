@@ -99,6 +99,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use super::languages::KmpGenerator;
     use super::languages::PythonGenerator;
     use crate::config::Config;
 
@@ -175,6 +176,59 @@ enabled = true
         assert!(!generated_native.contains("boltffi_echo_vec_i32"));
         assert!(generated_native.contains("boltffi_python_initialize_loader"));
         assert!(generated_native.contains("PyInit__native"));
+
+        fs::remove_dir_all(output_directory).expect("cleanup generated output");
+    }
+
+    #[test]
+    fn kmp_generate_writes_expected_artifacts() {
+        let output_directory = unique_temp_dir("boltffi-kmp-generate-test");
+        let config = parse_config(
+            r#"
+[package]
+name = "demo"
+version = "0.1.0"
+
+[targets.kmp]
+enabled = true
+package = "com.example.demo"
+module_name = "DemoKmp"
+"#,
+        );
+
+        KmpGenerator::generate_from_source_directory(
+            &config,
+            Some(output_directory.clone()),
+            &demo_source_directory(),
+            "demo",
+        )
+        .expect("kmp generate should succeed");
+
+        let common_path = output_directory
+            .join("commonMain/kotlin/com/example/demo/DemoKmp.kt");
+        let jvm_path = output_directory.join("jvmMain/kotlin/com/example/demo/DemoKmp.kt");
+        let native_path = output_directory
+            .join("nativeMain/kotlin/com/example/demo/DemoKmp.kt");
+        let def_path = output_directory.join("include/demo.def");
+        let header_path = output_directory.join("include/demo.h");
+        let jni_path = output_directory.join("jvmMain/jni/jni_glue.c");
+        let jvm_binding_path = output_directory
+            .join("jvmMain/kotlin/com/example/demo/jvmffi/DemoKmpJvmFfi.kt");
+
+        assert!(common_path.exists());
+        assert!(jvm_path.exists());
+        assert!(native_path.exists());
+        assert!(def_path.exists());
+        assert!(header_path.exists());
+        assert!(jni_path.exists());
+        assert!(jvm_binding_path.exists());
+
+        let common_source = fs::read_to_string(&common_path).expect("common source readable");
+        let def_source = fs::read_to_string(&def_path).expect("def source readable");
+        assert!(common_source.contains("expect object DemoKmp"));
+        assert!(common_source.contains("Skipped functions"));
+        assert!(def_source.contains("headers = demo.h"));
+        assert!(def_source.contains("package = com.example.demo.native"));
 
         fs::remove_dir_all(output_directory).expect("cleanup generated output");
     }

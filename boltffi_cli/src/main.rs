@@ -1090,8 +1090,8 @@ enabled = true
 
     #[test]
     fn cli_parses_generate_kmp_target() {
-        let cli = Cli::try_parse_from(["boltffi", "generate", "kmp"])
-            .expect("cli parse should succeed");
+        let cli =
+            Cli::try_parse_from(["boltffi", "generate", "kmp"]).expect("cli parse should succeed");
 
         assert!(matches!(
             cli.command,
