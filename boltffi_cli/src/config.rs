@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 pub enum Target {
     Swift,
     Kotlin,
+    Kmp,
     Java,
     TypeScript,
     Header,
@@ -23,6 +24,7 @@ impl Target {
         match self {
             Target::Swift => "swift",
             Target::Kotlin => "kotlin",
+            Target::Kmp => "kmp",
             Target::Java => "java",
             Target::TypeScript => "typescript",
             Target::Header => "header",
@@ -97,9 +99,34 @@ pub struct TargetsConfig {
     #[serde(default)]
     pub java: JavaConfig,
     #[serde(default)]
+    pub kmp: KmpConfig,
+    #[serde(default)]
     pub dart: DartConfig,
     #[serde(default)]
     pub python: PythonConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KmpConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_kmp_output")]
+    pub output: PathBuf,
+    pub package: Option<String>,
+    pub module_name: Option<String>,
+    pub library_name: Option<String>,
+}
+
+impl Default for KmpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            output: default_kmp_output(),
+            package: None,
+            module_name: None,
+            library_name: None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -547,6 +574,10 @@ fn default_python_output() -> PathBuf {
     PathBuf::from("dist/python")
 }
 
+fn default_kmp_output() -> PathBuf {
+    PathBuf::from("dist/kmp")
+}
+
 fn read_toml_value(path: &Path) -> Result<toml::Value, ConfigError> {
     let content = std::fs::read_to_string(path).map_err(|err| ConfigError::Read {
         path: path.to_path_buf(),
@@ -741,6 +772,10 @@ impl Config {
 
     pub fn is_python_enabled(&self) -> bool {
         self.targets.python.enabled
+    }
+
+    pub fn is_kmp_enabled(&self) -> bool {
+        self.targets.kmp.enabled
     }
 
     pub fn apple_include_macos(&self) -> bool {
@@ -981,12 +1016,36 @@ impl Config {
         match target {
             Target::Swift => self.is_apple_enabled(),
             Target::Kotlin => self.is_android_enabled(),
+            Target::Kmp => self.is_kmp_enabled(),
             Target::Java => self.is_java_jvm_enabled(),
             Target::TypeScript => self.is_wasm_enabled(),
             Target::Header => self.is_apple_enabled() || self.is_android_enabled(),
             Target::Dart => self.is_dart_enabled(),
             Target::Python => self.is_python_enabled(),
         }
+    }
+
+    pub fn kmp_output(&self) -> PathBuf {
+        self.targets.kmp.output.clone()
+    }
+
+    pub fn kmp_package(&self) -> String {
+        self.targets.kmp.package.clone().unwrap_or_else(|| {
+            let normalized_name = self.package.name.replace('-', "_");
+            format!("com.example.{normalized_name}")
+        })
+    }
+
+    pub fn kmp_module_name(&self) -> String {
+        self.targets
+            .kmp
+            .module_name
+            .clone()
+            .unwrap_or_else(|| self.kotlin_class_name())
+    }
+
+    pub fn kmp_library_name(&self) -> Option<&str> {
+        self.targets.kmp.library_name.as_deref()
     }
 
     pub fn should_process(&self, target: Target, experimental_flag: bool) -> bool {
@@ -2097,5 +2156,25 @@ enabled = true
         );
 
         assert!(config.should_process(Target::Python, false));
+    }
+
+    #[test]
+    fn kmp_is_not_experimental_target() {
+        assert!(!Experimental::is_target_experimental(Target::Kmp));
+    }
+
+    #[test]
+    fn kmp_should_process_without_experimental_opt_in() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.kmp]
+enabled = true
+"#,
+        );
+
+        assert!(config.should_process(Target::Kmp, false));
     }
 }

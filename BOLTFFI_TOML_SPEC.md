@@ -196,6 +196,27 @@ Uuid = { type = "java.util.UUID", conversion = "uuid_string" }
 - `output` (path, optional): Where `boltffi pack android` writes the `jniLibs/` folder.
   - Default: `{targets.android.output}/jniLibs`
 
+## Kotlin Multiplatform
+
+### `[targets.kmp]` (optional)
+
+- `enabled` (bool): Whether KMP binding generation is active.
+  - Default: `false`
+- `output` (path): Output directory for generated KMP artifacts.
+  - Default: `dist/kmp`
+- `package` (string, optional): Kotlin package for generated `expect/actual` facade code.
+  - Default: `com.example.{package.name}` (with `-` normalized to `_`)
+- `module_name` (string, optional): Logical facade module/object name used for generated source file names.
+  - Default: `PascalCase(package.name)`
+- `library_name` (string, optional): Native library name used by generated loader/linker hints.
+  - Default: inferred from crate name
+
+Generated layout is backend-specific and includes:
+- `commonMain` expect facade wrappers
+- `jvmMain` actual wrappers that delegate to generated JVM/JNI bindings
+- `nativeMain` actual wrappers for Kotlin/Native cinterop usage
+- a single cinterop `.def` file emitted adjacent to the generated C header
+
 ## Java
 
 ### `[targets.java]` (optional)

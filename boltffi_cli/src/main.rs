@@ -164,6 +164,8 @@ enum GenerateTargetArg {
     Swift,
     #[value(help = "Generate Kotlin bindings + JNI glue")]
     Kotlin,
+    #[value(help = "Generate Kotlin Multiplatform facade + cinterop artifacts")]
+    Kmp,
     #[value(help = "Generate Java bindings + JNI glue")]
     Java,
     #[value(help = "Generate C header")]
@@ -407,6 +409,7 @@ fn execute_command(
                     .map(|t| match t {
                         GenerateTargetArg::Swift => GenerateTarget::Swift,
                         GenerateTargetArg::Kotlin => GenerateTarget::Kotlin,
+                        GenerateTargetArg::Kmp => GenerateTarget::Kmp,
                         GenerateTargetArg::Java => GenerateTarget::Java,
                         GenerateTargetArg::Header => GenerateTarget::Header,
                         GenerateTargetArg::Typescript => GenerateTarget::Typescript,
@@ -1080,6 +1083,21 @@ enabled = true
             Commands::Generate {
                 target: Some(GenerateTargetArg::Python),
                 experimental: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_generate_kmp_target() {
+        let cli = Cli::try_parse_from(["boltffi", "generate", "kmp"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Generate {
+                target: Some(GenerateTargetArg::Kmp),
+                experimental: false,
                 ..
             }
         ));
