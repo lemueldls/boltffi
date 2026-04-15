@@ -405,7 +405,7 @@ impl<'a> KmpLowerer<'a> {
     fn wire_encoded_stream_items_expr(&self, stream: &AbiStream, item_type: &str) -> String {
         let StreamItemTransport::WireEncoded { decode_ops } = &stream.item;
         let Some(item_expr) = self.wire_read_expr(decode_ops) else {
-            return format!("emptyList<{item_type}>()");
+            return format!("error(\"Unsupported wire stream decode for {item_type}\")");
         };
         format!(
             "run {{ val reader = boltffiWireReader(bytes); val count = reader.readI32(); List(count) {{ {item_expr} }} }}"
@@ -456,49 +456,7 @@ impl<'a> KmpLowerer<'a> {
                     tag_type,
                     tag_strategy,
                     variants,
-                } => {
-                    let enum_name = NamingConvention::class_name(id.as_str());
-                    let tag_read = Self::wire_primitive_read_expr(*tag_type);
-                    let arms = variants
-                        .iter()
-                        .enumerate()
-                        .map(|(index, variant)| {
-                            let tag_value = match tag_strategy {
-                                EnumTagStrategy::Discriminant => variant.discriminant,
-                                EnumTagStrategy::OrdinalIndex => index as i128,
-                            };
-                            let tag_literal = Self::kotlin_tag_literal(tag_value, *tag_type);
-                            let variant_name = NamingConvention::class_name(variant.name.as_str());
-                            let ctor_expr = match &variant.payload {
-                                VariantPayloadLayout::Unit => {
-                                    format!("{}.{}", enum_name, variant_name)
-                                }
-                                VariantPayloadLayout::Fields(fields) => {
-                                    let args = fields
-                                        .iter()
-                                        .map(|field| {
-                                            let field_name =
-                                                NamingConvention::param_name(field.name.as_str());
-                                            let value_expr = self.wire_read_codec_expr(&field.codec).unwrap_or_else(|| {
-                                                "error(\"Unsupported enum field decode in stream\")"
-                                                    .to_string()
-                                            });
-                                            format!("{} = {}", field_name, value_expr)
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join(", ");
-                                    format!("{}.{}({})", enum_name, variant_name, args)
-                                }
-                            };
-                            format!("{} -> {}", tag_literal, ctor_expr)
-                        })
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    Some(format!(
-                        "run {{ val tag = {}; when (tag) {{ {}; else -> error(\"Unknown enum tag for {}: $tag\") }} }}",
-                        tag_read, arms, enum_name
-                    ))
-                }
+                } => self.wire_read_data_enum_expr(id.as_str(), *tag_type, *tag_strategy, variants),
                 EnumLayout::Recursive => None,
             },
             ReadOp::Result { ok, err, .. } => {
@@ -508,7 +466,7 @@ impl<'a> KmpLowerer<'a> {
                     "if (reader.readU8().toInt() == 0) BoltFFIResult.Ok({ok_expr}) else BoltFFIResult.Err({err_expr})"
                 ))
             }
-            ReadOp::Builtin { .. } => None,
+            ReadOp::Builtin { id, .. } => Self::wire_builtin_read_expr(id),
             ReadOp::Custom { underlying, .. } => self.wire_read_expr(underlying),
         }
     }
@@ -519,7 +477,7 @@ impl<'a> KmpLowerer<'a> {
             CodecPlan::Primitive(primitive) => Some(Self::wire_primitive_read_expr(*primitive)),
             CodecPlan::String => Some("reader.readString()".to_string()),
             CodecPlan::Bytes => Some("reader.readBytes()".to_string()),
-            CodecPlan::Builtin(_) => None,
+            CodecPlan::Builtin(id) => Self::wire_builtin_read_expr(id),
             CodecPlan::Option(inner) => {
                 let inner_expr = self.wire_read_codec_expr(inner)?;
                 Some(format!(
@@ -559,14 +517,10 @@ impl<'a> KmpLowerer<'a> {
                         .iter()
                         .map(|field| {
                             let field_name = NamingConvention::param_name(field.name.as_str());
-                            let value_expr =
-                                self.wire_read_codec_expr(&field.codec).unwrap_or_else(|| {
-                                    "error(\"Unsupported record field decode in stream\")"
-                                        .to_string()
-                                });
-                            format!("{} = {}", field_name, value_expr)
+                            self.wire_read_codec_expr(&field.codec)
+                                .map(|value_expr| format!("{} = {}", field_name, value_expr))
                         })
-                        .collect::<Vec<_>>()
+                        .collect::<Option<Vec<_>>>()?
                         .join(", ");
                     Some(format!("{}({})", record_name, args))
                 }
@@ -581,9 +535,69 @@ impl<'a> KmpLowerer<'a> {
                         tag_read, enum_name
                     ))
                 }
-                _ => None,
+                EnumLayout::Data {
+                    tag_type,
+                    tag_strategy,
+                    variants,
+                } => self.wire_read_data_enum_expr(id.as_str(), *tag_type, *tag_strategy, variants),
+                EnumLayout::Recursive => None,
             },
             CodecPlan::Custom { underlying, .. } => self.wire_read_codec_expr(underlying),
+        }
+    }
+
+    fn wire_read_data_enum_expr(
+        &self,
+        enum_id: &str,
+        tag_type: PrimitiveType,
+        tag_strategy: EnumTagStrategy,
+        variants: &[crate::ir::codec::VariantLayout],
+    ) -> Option<String> {
+        let enum_name = NamingConvention::class_name(enum_id);
+        let tag_read = Self::wire_primitive_read_expr(tag_type);
+        let arms = variants
+            .iter()
+            .enumerate()
+            .map(|(index, variant)| {
+                let tag_value = match tag_strategy {
+                    EnumTagStrategy::Discriminant => variant.discriminant,
+                    EnumTagStrategy::OrdinalIndex => index as i128,
+                };
+                let tag_literal = Self::kotlin_tag_literal(tag_value, tag_type);
+                let variant_name = NamingConvention::class_name(variant.name.as_str());
+                let ctor_expr = match &variant.payload {
+                    VariantPayloadLayout::Unit => format!("{}.{}", enum_name, variant_name),
+                    VariantPayloadLayout::Fields(fields) => {
+                        let args = fields
+                            .iter()
+                            .map(|field| {
+                                let field_name = NamingConvention::param_name(field.name.as_str());
+                                self.wire_read_codec_expr(&field.codec)
+                                    .map(|value_expr| format!("{} = {}", field_name, value_expr))
+                            })
+                            .collect::<Option<Vec<_>>>()?
+                            .join(", ");
+                        format!("{}.{}({})", enum_name, variant_name, args)
+                    }
+                };
+                Some(format!("{} -> {}", tag_literal, ctor_expr))
+            })
+            .collect::<Option<Vec<_>>>()?
+            .join("; ");
+
+        Some(format!(
+            "run {{ val tag = {}; when (tag) {{ {}; else -> error(\"Unknown enum tag for {}: $tag\") }} }}",
+            tag_read, arms, enum_name
+        ))
+    }
+
+    fn wire_builtin_read_expr(builtin_id: &BuiltinId) -> Option<String> {
+        match builtin_id.as_str() {
+            "Duration" => Some("reader.readDuration()".to_string()),
+            "SystemTime" => Some("reader.readInstant()".to_string()),
+            "Uuid" => Some("reader.readUuid()".to_string()),
+            "Url" => Some("reader.readUri()".to_string()),
+            _ => None,
         }
     }
 

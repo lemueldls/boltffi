@@ -837,6 +837,29 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_native_main_template_with_wire_reader() {
+        let module = test_module();
+        let options = test_options();
+        let rendered = NativeMainTemplate {
+            package_name: &options.package_name,
+            module_name: &options.module_name,
+            native_binding_package: &options.native_binding_package,
+            callback_imports: &[],
+            class_imports: &[],
+            class_sources: &[],
+            callback_bridge_sources: &[],
+            uses_flow: false,
+            uses_wire_reader: true,
+            uses_async_callback_bridges: false,
+            functions: &module.functions,
+        }
+        .render()
+        .unwrap();
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
     fn snapshot_record_template() {
         let fields = vec![
             KmpRecordFieldView {
