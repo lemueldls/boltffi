@@ -2,7 +2,6 @@ use askama::Template;
 
 use super::plan::{
     KmpCallbackMethod, KmpClassStream, KmpFunction, KmpModule, KmpOptions, KmpOutputs,
-    KmpStreamMode,
 };
 
 #[derive(Template)]
@@ -243,15 +242,21 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
                 )
             });
             let stream_imports = class.streams.iter().flat_map(|stream| {
-                [stream.subscribe_symbol.as_str()]
-                    .into_iter()
-                    .map(|symbol| {
-                        format!(
-                            "import {}.{} as __native_class_{}",
-                            options.native_binding_package, symbol, symbol
-                        )
-                    })
-                    .collect::<Vec<_>>()
+                [
+                    stream.subscribe_symbol.as_str(),
+                    stream.pop_batch_symbol.as_str(),
+                    stream.wait_symbol.as_str(),
+                    stream.unsubscribe_symbol.as_str(),
+                    stream.free_symbol.as_str(),
+                ]
+                .into_iter()
+                .map(|symbol| {
+                    format!(
+                        "import {}.{} as __native_class_{}",
+                        options.native_binding_package, symbol, symbol
+                    )
+                })
+                .collect::<Vec<_>>()
             });
 
             ctor_imports.chain(method_imports).chain(stream_imports)
@@ -405,6 +410,7 @@ mod tests {
                     name: "updates".to_string(),
                     item_type: "Int".to_string(),
                     mode: super::super::plan::KmpStreamMode::Async,
+                    pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
                     subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
                     poll_symbol: "boltffi_widget_updates_poll".to_string(),
                     pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
@@ -519,6 +525,7 @@ mod tests {
                 name: "updates".to_string(),
                 item_type: "Int".to_string(),
                 mode: super::super::plan::KmpStreamMode::Async,
+                pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
                 subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
                 poll_symbol: "boltffi_widget_updates_poll".to_string(),
                 pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
@@ -602,6 +609,10 @@ mod tests {
             "import com.example.demo.native.boltffi_widget_new as __native_class_boltffi_widget_new".to_string(),
             "import com.example.demo.native.boltffi_widget_rename as __native_class_boltffi_widget_rename".to_string(),
             "import com.example.demo.native.boltffi_widget_updates_subscribe as __native_class_boltffi_widget_updates_subscribe".to_string(),
+            "import com.example.demo.native.boltffi_widget_updates_pop_batch as __native_class_boltffi_widget_updates_pop_batch".to_string(),
+            "import com.example.demo.native.boltffi_widget_updates_wait as __native_class_boltffi_widget_updates_wait".to_string(),
+            "import com.example.demo.native.boltffi_widget_updates_unsubscribe as __native_class_boltffi_widget_updates_unsubscribe".to_string(),
+            "import com.example.demo.native.boltffi_widget_updates_free as __native_class_boltffi_widget_updates_free".to_string(),
         ];
         let constructor_sources = vec![render_kmp_constructor_signature(
             &[KmpParam {
@@ -632,6 +643,7 @@ mod tests {
                 name: "updates".to_string(),
                 item_type: "Int".to_string(),
                 mode: super::super::plan::KmpStreamMode::Async,
+                pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
                 subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
                 poll_symbol: "boltffi_widget_updates_poll".to_string(),
                 pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
@@ -725,6 +737,7 @@ mod tests {
                 name: "updates".to_string(),
                 item_type: "Int".to_string(),
                 mode: super::super::plan::KmpStreamMode::Async,
+                pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
                 subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
                 poll_symbol: "boltffi_widget_updates_poll".to_string(),
                 pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
@@ -779,6 +792,7 @@ mod tests {
                 name: "updates".to_string(),
                 item_type: "Int".to_string(),
                 mode: super::super::plan::KmpStreamMode::Async,
+                pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
                 subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
                 poll_symbol: "boltffi_widget_updates_poll".to_string(),
                 pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
@@ -961,14 +975,16 @@ fn render_kmp_stream_signature(stream: &KmpClassStream, actual: bool) -> String 
         rendered.push_str(&render_doc_block(doc, "    "));
     }
     if actual {
-        let mode = match stream.mode {
-            KmpStreamMode::Async => "async",
-            KmpStreamMode::Batch => "batch",
-            KmpStreamMode::Callback => "callback",
-        };
         rendered.push_str(&format!(
-            "    fun {}(): Flow<{}> = flow {{\n        val subscription = __native_class_{}(handle)\n        if (subscription == 0L) return@flow\n        error(\"KMP {} stream bridge not yet implemented\")\n    }}\n",
-            stream.name, stream.item_type, stream.subscribe_symbol, mode
+            "    fun {}(): Flow<{}> = flow {{\n        val subscription = __native_class_{}(handle)\n        if (subscription == 0L) return@flow\n        try {{\n            while (true) {{\n                val ready = __native_class_{}(subscription, 50)\n                if (ready < 0) break\n                val bytes = __native_class_{}(subscription, 16L) ?: continue\n                if (bytes.isEmpty()) {{\n                    if (ready == 0) continue\n                    break\n                }}\n                for (item in {}) {{\n                    emit(item)\n                }}\n            }}\n        }} finally {{\n            __native_class_{}(subscription)\n            __native_class_{}(subscription)\n        }}\n    }}\n",
+            stream.name,
+            stream.item_type,
+            stream.subscribe_symbol,
+            stream.wait_symbol,
+            stream.pop_batch_symbol,
+            stream.pop_batch_items_expr,
+            stream.unsubscribe_symbol,
+            stream.free_symbol
         ));
     } else {
         rendered.push_str(&format!(

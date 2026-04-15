@@ -13,6 +13,60 @@ import {{ native_binding_package }}.{{ function.ffi_symbol }} as __native_{{ fun
 {{ class_import }}
 {% endfor %}
 
+{% if uses_flow %}
+private fun boltffiReadLeI16(bytes: ByteArray, offset: Int): Short {
+    val b0 = bytes[offset].toInt() and 0xFF
+    val b1 = bytes[offset + 1].toInt() and 0xFF
+    return ((b1 shl 8) or b0).toShort()
+}
+
+private fun boltffiReadLeI32(bytes: ByteArray, offset: Int): Int {
+    val b0 = bytes[offset].toInt() and 0xFF
+    val b1 = bytes[offset + 1].toInt() and 0xFF
+    val b2 = bytes[offset + 2].toInt() and 0xFF
+    val b3 = bytes[offset + 3].toInt() and 0xFF
+    return (b3 shl 24) or (b2 shl 16) or (b1 shl 8) or b0
+}
+
+private fun boltffiReadLeI64(bytes: ByteArray, offset: Int): Long {
+    var value = 0L
+    var shift = 0
+    var index = 0
+    while (index < 8) {
+        val part = bytes[offset + index].toLong() and 0xFFL
+        value = value or (part shl shift)
+        shift += 8
+        index += 1
+    }
+    return value
+}
+
+private fun boltffiDecodeI16List(bytes: ByteArray): List<Short> =
+    List(bytes.size / 2) { index -> boltffiReadLeI16(bytes, index * 2) }
+
+private fun boltffiDecodeU16List(bytes: ByteArray): List<UShort> =
+    List(bytes.size / 2) { index -> boltffiReadLeI16(bytes, index * 2).toUShort() }
+
+private fun boltffiDecodeI32List(bytes: ByteArray): List<Int> =
+    List(bytes.size / 4) { index -> boltffiReadLeI32(bytes, index * 4) }
+
+private fun boltffiDecodeU32List(bytes: ByteArray): List<UInt> =
+    List(bytes.size / 4) { index -> boltffiReadLeI32(bytes, index * 4).toUInt() }
+
+private fun boltffiDecodeI64List(bytes: ByteArray): List<Long> =
+    List(bytes.size / 8) { index -> boltffiReadLeI64(bytes, index * 8) }
+
+private fun boltffiDecodeU64List(bytes: ByteArray): List<ULong> =
+    List(bytes.size / 8) { index -> boltffiReadLeI64(bytes, index * 8).toULong() }
+
+private fun boltffiDecodeF32List(bytes: ByteArray): List<Float> =
+    List(bytes.size / 4) { index -> Float.fromBits(boltffiReadLeI32(bytes, index * 4)) }
+
+private fun boltffiDecodeF64List(bytes: ByteArray): List<Double> =
+    List(bytes.size / 8) { index -> Double.fromBits(boltffiReadLeI64(bytes, index * 8)) }
+
+{% endif %}
+
 {% for class_source in class_sources %}
 {{ class_source }}
 

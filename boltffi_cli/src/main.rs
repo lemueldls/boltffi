@@ -164,7 +164,7 @@ enum GenerateTargetArg {
     Swift,
     #[value(help = "Generate Kotlin bindings + JNI glue")]
     Kotlin,
-    #[value(help = "Generate Kotlin Multiplatform facade + cinterop artifacts")]
+    #[value(help = "Generate Kotlin Multiplatform bindings + cinterop artifacts")]
     Kmp,
     #[value(help = "Generate Java bindings + JNI glue")]
     Java,

@@ -84,6 +84,7 @@ pub struct KmpClassStream {
     pub name: String,
     pub item_type: String,
     pub mode: KmpStreamMode,
+    pub pop_batch_items_expr: String,
     pub subscribe_symbol: String,
     pub poll_symbol: String,
     pub pop_batch_symbol: String,

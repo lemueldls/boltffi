@@ -1,6 +1,7 @@
 use boltffi_ffi_rules::callable::ExecutionKind;
 use heck::ToLowerCamelCase;
 
+use crate::ir::plan::{ScalarOrigin, Transport};
 use crate::ir::{
     AbiContract,
     abi::{AbiCall, AbiEnum, AbiEnumField, AbiEnumPayload, AbiStream, CallId, CallMode},
@@ -368,14 +369,16 @@ impl<'a> KmpLowerer<'a> {
 
     fn lower_class_stream(&self, class: &ClassDef, stream: &StreamDef) -> KmpClassStream {
         let abi_stream = self.abi_stream_for(class, stream);
+        let item_type = self.kotlin_type(&stream.item_type);
         KmpClassStream {
             name: NamingConvention::method_name(stream.id.as_str()),
-            item_type: self.kotlin_type(&stream.item_type),
+            item_type: item_type.clone(),
             mode: match stream.mode {
                 StreamMode::Async => KmpStreamMode::Async,
                 StreamMode::Batch => KmpStreamMode::Batch,
                 StreamMode::Callback => KmpStreamMode::Callback,
             },
+            pop_batch_items_expr: self.stream_pop_batch_items_expr(abi_stream, &item_type),
             subscribe_symbol: abi_stream.subscribe.as_str().to_string(),
             poll_symbol: abi_stream.poll.as_str().to_string(),
             pop_batch_symbol: abi_stream.pop_batch.as_str().to_string(),
@@ -383,6 +386,48 @@ impl<'a> KmpLowerer<'a> {
             unsubscribe_symbol: abi_stream.unsubscribe.as_str().to_string(),
             free_symbol: abi_stream.free.as_str().to_string(),
             doc: stream.doc.clone(),
+        }
+    }
+
+    fn stream_pop_batch_items_expr(&self, stream: &AbiStream, item_type: &str) -> String {
+        match &stream.item_transport {
+            Transport::Scalar(origin) => Self::direct_scalar_stream_items_expr(origin),
+            _ => format!("emptyList<{item_type}>()"),
+        }
+    }
+
+    fn direct_scalar_stream_items_expr(origin: &ScalarOrigin) -> String {
+        match origin {
+            ScalarOrigin::Primitive(primitive) => match primitive {
+                PrimitiveType::Bool => {
+                    "List(bytes.size) { index -> bytes[index].toInt() != 0 }".to_string()
+                }
+                PrimitiveType::I8 => "List(bytes.size) { index -> bytes[index] }".to_string(),
+                PrimitiveType::U8 => {
+                    "List(bytes.size) { index -> bytes[index].toUByte() }".to_string()
+                }
+                PrimitiveType::I16 => "boltffiDecodeI16List(bytes)".to_string(),
+                PrimitiveType::U16 => "boltffiDecodeU16List(bytes)".to_string(),
+                PrimitiveType::I32 => "boltffiDecodeI32List(bytes)".to_string(),
+                PrimitiveType::U32 => "boltffiDecodeU32List(bytes)".to_string(),
+                PrimitiveType::I64 | PrimitiveType::ISize => {
+                    "boltffiDecodeI64List(bytes)".to_string()
+                }
+                PrimitiveType::U64 | PrimitiveType::USize => {
+                    "boltffiDecodeU64List(bytes)".to_string()
+                }
+                PrimitiveType::F32 => "boltffiDecodeF32List(bytes)".to_string(),
+                PrimitiveType::F64 => "boltffiDecodeF64List(bytes)".to_string(),
+            },
+            ScalarOrigin::CStyleEnum { enum_id, tag_type } => {
+                let enum_name = NamingConvention::class_name(enum_id.as_str());
+                let values_expr =
+                    Self::direct_scalar_stream_items_expr(&ScalarOrigin::Primitive(*tag_type));
+                format!(
+                    "{}.map {{ value -> {}.fromValue(value) }}",
+                    values_expr, enum_name
+                )
+            }
         }
     }
 

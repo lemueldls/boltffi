@@ -21,7 +21,23 @@ actual class Widget private constructor(private val handle: Long) {
     fun updates(): Flow<Int> = flow {
         val subscription = __native_class_boltffi_widget_updates_subscribe(handle)
         if (subscription == 0L) return@flow
-        error("KMP async stream bridge not yet implemented")
+        try {
+            while (true) {
+                val ready = __native_class_boltffi_widget_updates_wait(subscription, 50)
+                if (ready < 0) break
+                val bytes = __native_class_boltffi_widget_updates_pop_batch(subscription, 16L) ?: continue
+                if (bytes.isEmpty()) {
+                    if (ready == 0) continue
+                    break
+                }
+                for (item in boltffiDecodeI32List(bytes)) {
+                    emit(item)
+                }
+            }
+        } finally {
+            __native_class_boltffi_widget_updates_unsubscribe(subscription)
+            __native_class_boltffi_widget_updates_free(subscription)
+        }
     }
 
 }

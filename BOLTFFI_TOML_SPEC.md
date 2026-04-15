@@ -204,9 +204,9 @@ Uuid = { type = "java.util.UUID", conversion = "uuid_string" }
   - Default: `false`
 - `output` (path): Output directory for generated KMP artifacts.
   - Default: `dist/kmp`
-- `package` (string, optional): Kotlin package for generated `expect/actual` facade code.
+- `package` (string, optional): Kotlin package for generated `expect/actual` code.
   - Default: `com.example.{package.name}` (with `-` normalized to `_`)
-- `module_name` (string, optional): Logical facade module/object name used for generated source file names.
+- `module_name` (string, optional): Logical module/object name used for generated source file names.
   - Default: `PascalCase(package.name)`
 - `library_name` (string, optional): Native library name used by generated loader/linker hints.
   - Default: inferred from crate name
