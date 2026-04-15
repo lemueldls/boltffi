@@ -39,6 +39,7 @@ pub struct NativeMainTemplate<'a> {
     pub class_sources: &'a [String],
     pub callback_bridge_sources: &'a [String],
     pub uses_flow: bool,
+    pub uses_wire_reader: bool,
     pub uses_async_callback_bridges: bool,
     pub functions: &'a [KmpFunction],
 }
@@ -381,6 +382,12 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             .iter()
             .any(|stream| matches!(stream.mode, KmpStreamMode::Async))
     });
+    let uses_wire_reader = module.classes.iter().any(|class| {
+        class
+            .streams
+            .iter()
+            .any(|stream| stream.pop_batch_items_expr.contains("boltffiWireReader("))
+    });
     let uses_callback_streams = module.classes.iter().any(|class| {
         class
             .streams
@@ -423,6 +430,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             class_sources: &class_actual_sources,
             callback_bridge_sources: &callback_bridge_sources,
             uses_flow,
+            uses_wire_reader,
             uses_async_callback_bridges: uses_async_callback_bridges || uses_callback_streams,
             functions: &module.functions,
         }
@@ -815,6 +823,7 @@ mod tests {
             class_sources: &class_actual_sources,
             callback_bridge_sources: &callback_bridge_sources,
             uses_flow: true,
+            uses_wire_reader: false,
             uses_async_callback_bridges: false,
             functions: &module.functions,
         }

@@ -19,7 +19,7 @@ import {{ native_binding_package }}.{{ function.ffi_symbol }} as __native_{{ fun
 {{ class_import }}
 {% endfor %}
 
-{% if uses_flow %}
+{% if uses_flow || uses_wire_reader %}
 private fun boltffiReadLeI16(bytes: ByteArray, offset: Int): Short {
     val b0 = bytes[offset].toInt() and 0xFF
     val b1 = bytes[offset + 1].toInt() and 0xFF
@@ -70,6 +70,67 @@ private fun boltffiDecodeF32List(bytes: ByteArray): List<Float> =
 
 private fun boltffiDecodeF64List(bytes: ByteArray): List<Double> =
     List(bytes.size / 8) { index -> Double.fromBits(boltffiReadLeI64(bytes, index * 8)) }
+
+{% endif %}
+{% if uses_wire_reader %}
+private class boltffiWireReader(private val bytes: ByteArray) {
+    private var pos: Int = 0
+
+    fun readBool(): Boolean = readU8().toInt() != 0
+
+    fun readI8(): Byte {
+        val value = bytes[pos]
+        pos += 1
+        return value
+    }
+
+    fun readU8(): UByte {
+        val value = bytes[pos].toUByte()
+        pos += 1
+        return value
+    }
+
+    fun readI16(): Short {
+        val value = boltffiReadLeI16(bytes, pos)
+        pos += 2
+        return value
+    }
+
+    fun readU16(): UShort = readI16().toUShort()
+
+    fun readI32(): Int {
+        val value = boltffiReadLeI32(bytes, pos)
+        pos += 4
+        return value
+    }
+
+    fun readU32(): UInt = readI32().toUInt()
+
+    fun readI64(): Long {
+        val value = boltffiReadLeI64(bytes, pos)
+        pos += 8
+        return value
+    }
+
+    fun readU64(): ULong = readI64().toULong()
+
+    fun readF32(): Float = Float.fromBits(readI32())
+
+    fun readF64(): Double = Double.fromBits(readI64())
+
+    fun readBytes(): ByteArray {
+        val len = readI32()
+        if (len <= 0) {
+            return byteArrayOf()
+        }
+        val start = pos
+        val end = pos + len
+        pos = end
+        return bytes.copyOfRange(start, end)
+    }
+
+    fun readString(): String = readBytes().decodeToString()
+}
 
 {% endif %}
 
