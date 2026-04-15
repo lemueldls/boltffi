@@ -5,13 +5,13 @@ use crate::ir::{
     AbiContract,
     abi::{AbiCall, CallId, CallMode},
     contract::FfiContract,
-    definitions::{FunctionDef, ReturnDef},
+    definitions::{DefaultValue, FieldDef, FunctionDef, RecordDef, ReturnDef},
     ids::BuiltinId,
     types::{PrimitiveType, TypeExpr},
 };
 use crate::render::kotlin::NamingConvention;
 
-use super::plan::{KmpFunction, KmpModule, KmpParam};
+use super::plan::{KmpFunction, KmpModule, KmpParam, KmpRecord, KmpRecordField};
 
 pub struct KmpLowerer<'a> {
     contract: &'a FfiContract,
@@ -31,6 +31,12 @@ impl<'a> KmpLowerer<'a> {
             }
         }
 
+        let records = self
+            .contract
+            .catalog
+            .all_records()
+            .map(|record| self.lower_record(record))
+            .collect::<Vec<_>>();
         let mut functions = Vec::new();
 
         for function in &self.contract.functions {
@@ -44,7 +50,7 @@ impl<'a> KmpLowerer<'a> {
             }
         }
 
-        KmpModule { functions }
+        KmpModule { records, functions }
     }
 
     fn supported_function(&self, function: &FunctionDef, call: &AbiCall) -> Option<KmpFunction> {
@@ -127,6 +133,71 @@ impl<'a> KmpLowerer<'a> {
             _ => NamingConvention::class_name(builtin_id.as_str()),
         }
     }
+
+    fn lower_record(&self, record: &RecordDef) -> KmpRecord {
+        KmpRecord {
+            class_name: NamingConvention::class_name(record.id.as_str()),
+            fields: record
+                .fields
+                .iter()
+                .map(|field| self.lower_record_field(field))
+                .collect::<Vec<_>>(),
+            doc: record.doc.clone(),
+        }
+    }
+
+    fn lower_record_field(&self, field: &FieldDef) -> KmpRecordField {
+        let kotlin_type = self.kotlin_type(&field.type_expr);
+        KmpRecordField {
+            name: NamingConvention::param_name(field.name.as_str()),
+            kotlin_type: kotlin_type.clone(),
+            default_value: field
+                .default
+                .as_ref()
+                .map(|default| Self::kotlin_default_literal(default, &kotlin_type)),
+        }
+    }
+
+    fn kotlin_default_literal(default: &DefaultValue, kotlin_type: &str) -> String {
+        use heck::ToUpperCamelCase;
+
+        match default {
+            DefaultValue::Bool(true) => "true".to_string(),
+            DefaultValue::Bool(false) => "false".to_string(),
+            DefaultValue::Integer(v) => match kotlin_type {
+                "Double" => format!("{}.0", v),
+                "Float" => format!("{}.0f", v),
+                "UInt" => format!("{}u", v),
+                "ULong" => format!("{}uL", v),
+                "UShort" => format!("{}u", v),
+                "UByte" => format!("{}u", v),
+                "Long" => format!("{}L", v),
+                _ => v.to_string(),
+            },
+            DefaultValue::Float(v) => {
+                let has_decimal = v.fract() != 0.0;
+                let base = if has_decimal {
+                    format!("{}", v)
+                } else {
+                    format!("{}.0", v)
+                };
+                match kotlin_type {
+                    "Float" => format!("{}f", base),
+                    _ => base,
+                }
+            }
+            DefaultValue::String(v) => format!("\"{}\"", v),
+            DefaultValue::EnumVariant {
+                enum_name,
+                variant_name,
+            } => format!(
+                "{}.{}",
+                enum_name.to_upper_camel_case(),
+                NamingConvention::enum_entry_name(variant_name)
+            ),
+            DefaultValue::Null => "null".to_string(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -152,6 +223,7 @@ mod tests {
 
         let module = KmpLowerer::new(&ffi_contract, &abi_contract).lower();
 
+        assert!(!module.records.is_empty());
         assert!(!module.functions.is_empty());
         assert!(
             module

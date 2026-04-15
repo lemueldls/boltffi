@@ -18,7 +18,22 @@ pub struct KmpOutputs {
 
 #[derive(Debug, Clone)]
 pub struct KmpModule {
+    pub records: Vec<KmpRecord>,
     pub functions: Vec<KmpFunction>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KmpRecord {
+    pub class_name: String,
+    pub fields: Vec<KmpRecordField>,
+    pub doc: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KmpRecordField {
+    pub name: String,
+    pub kotlin_type: String,
+    pub default_value: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -7,6 +7,7 @@ use super::plan::{KmpFunction, KmpModule, KmpOptions, KmpOutputs};
 pub struct CommonMainTemplate<'a> {
     pub package_name: &'a str,
     pub module_name: &'a str,
+    pub record_sources: &'a [String],
     pub functions: &'a [KmpFunction],
 }
 
@@ -36,11 +37,50 @@ pub struct CInteropDefTemplate<'a> {
     pub library_name: &'a str,
 }
 
+#[derive(Template)]
+#[template(path = "kmp_record.txt", escape = "none")]
+pub struct RecordTemplate<'a> {
+    pub class_name: &'a str,
+    pub fields: &'a [KmpRecordFieldView<'a>],
+    pub doc: Option<&'a str>,
+}
+
+pub struct KmpRecordFieldView<'a> {
+    pub name: &'a str,
+    pub kotlin_type: &'a str,
+    pub default_value: Option<&'a str>,
+}
+
 pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
+    let record_sources = module
+        .records
+        .iter()
+        .map(|record| {
+            let fields = record
+                .fields
+                .iter()
+                .map(|field| KmpRecordFieldView {
+                    name: &field.name,
+                    kotlin_type: &field.kotlin_type,
+                    default_value: field.default_value.as_deref(),
+                })
+                .collect::<Vec<_>>();
+
+            RecordTemplate {
+                class_name: &record.class_name,
+                fields: &fields,
+                doc: record.doc.as_deref(),
+            }
+            .render()
+            .expect("KMP record template should render")
+        })
+        .collect::<Vec<_>>();
+
     KmpOutputs {
         common_main_source: CommonMainTemplate {
             package_name: &options.package_name,
             module_name: &options.module_name,
+            record_sources: &record_sources,
             functions: &module.functions,
         }
         .render()
@@ -89,6 +129,15 @@ mod tests {
 
     fn test_module() -> KmpModule {
         KmpModule {
+            records: vec![super::super::plan::KmpRecord {
+                class_name: "Location".to_string(),
+                fields: vec![super::super::plan::KmpRecordField {
+                    name: "id".to_string(),
+                    kotlin_type: "Long".to_string(),
+                    default_value: None,
+                }],
+                doc: Some("A physical location.".to_string()),
+            }],
             functions: vec![
                 KmpFunction {
                     public_name: "echoI32".to_string(),
@@ -118,9 +167,24 @@ mod tests {
     fn snapshot_common_main_template() {
         let module = test_module();
         let options = test_options();
+        let record_fields = vec![KmpRecordFieldView {
+            name: "id",
+            kotlin_type: "Long",
+            default_value: None,
+        }];
+        let record_sources = vec![
+            RecordTemplate {
+                class_name: "Location",
+                fields: &record_fields,
+                doc: Some("A physical location."),
+            }
+            .render()
+            .unwrap(),
+        ];
         let rendered = CommonMainTemplate {
             package_name: &options.package_name,
             module_name: &options.module_name,
+            record_sources: &record_sources,
             functions: &module.functions,
         }
         .render()
@@ -154,6 +218,32 @@ mod tests {
             module_name: &options.module_name,
             native_binding_package: &options.native_binding_package,
             functions: &module.functions,
+        }
+        .render()
+        .unwrap();
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn snapshot_record_template() {
+        let fields = vec![
+            KmpRecordFieldView {
+                name: "id",
+                kotlin_type: "Long",
+                default_value: None,
+            },
+            KmpRecordFieldView {
+                name: "name",
+                kotlin_type: "String",
+                default_value: Some("\"demo\""),
+            },
+        ];
+
+        let rendered = RecordTemplate {
+            class_name: "Location",
+            fields: &fields,
+            doc: Some("A physical location."),
         }
         .render()
         .unwrap();
