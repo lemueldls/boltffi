@@ -34,6 +34,7 @@ pub struct NativeMainTemplate<'a> {
     pub native_binding_package: &'a str,
     pub class_imports: &'a [String],
     pub class_sources: &'a [String],
+    pub callback_bridge_sources: &'a [String],
     pub uses_flow: bool,
     pub functions: &'a [KmpFunction],
 }
@@ -109,6 +110,15 @@ pub struct CallbackTraitTemplate<'a> {
     pub interface_name: &'a str,
     pub is_closure: bool,
     pub doc: Option<&'a str>,
+    pub method_sources: &'a [String],
+}
+
+#[derive(Template)]
+#[template(path = "kmp_callback_bridge.txt", escape = "none")]
+pub struct CallbackBridgeTemplate<'a> {
+    pub interface_name: &'a str,
+    pub map_name: &'a str,
+    pub bridge_name: &'a str,
     pub method_sources: &'a [String],
 }
 
@@ -225,6 +235,27 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             .expect("KMP callback trait template should render")
         })
         .collect::<Vec<_>>();
+    let callback_bridge_sources = module
+        .callbacks
+        .iter()
+        .map(|callback| {
+            let map_name = format!("{}HandleMap", callback.interface_name);
+            let bridge_name = format!("{}Bridge", callback.interface_name);
+            let method_sources = callback
+                .methods
+                .iter()
+                .map(|method| render_kmp_callback_bridge_method_signature(method, &map_name))
+                .collect::<Vec<_>>();
+            CallbackBridgeTemplate {
+                interface_name: &callback.interface_name,
+                map_name: &map_name,
+                bridge_name: &bridge_name,
+                method_sources: &method_sources,
+            }
+            .render()
+            .expect("KMP callback bridge template should render")
+        })
+        .collect::<Vec<_>>();
     let class_imports = module
         .classes
         .iter()
@@ -329,6 +360,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             native_binding_package: &options.native_binding_package,
             class_imports: &class_imports,
             class_sources: &class_actual_sources,
+            callback_bridge_sources: &callback_bridge_sources,
             uses_flow,
             functions: &module.functions,
         }
@@ -423,6 +455,7 @@ mod tests {
             callbacks: vec![super::super::plan::KmpCallback {
                 interface_name: "WidgetEvents".to_string(),
                 methods: vec![super::super::plan::KmpCallbackMethod {
+                    ffi_name: "on_update".to_string(),
                     name: "onUpdate".to_string(),
                     params: vec![KmpParam {
                         name: "value".to_string(),
@@ -549,6 +582,7 @@ mod tests {
         ];
         let callback_method_sources = vec![render_kmp_callback_method_signature(
             &super::super::plan::KmpCallbackMethod {
+                ffi_name: "on_update".to_string(),
                 name: "onUpdate".to_string(),
                 params: vec![KmpParam {
                     name: "value".to_string(),
@@ -614,6 +648,29 @@ mod tests {
             "import com.example.demo.native.boltffi_widget_updates_unsubscribe as __native_class_boltffi_widget_updates_unsubscribe".to_string(),
             "import com.example.demo.native.boltffi_widget_updates_free as __native_class_boltffi_widget_updates_free".to_string(),
         ];
+        let callback_bridge_sources = vec![
+            CallbackBridgeTemplate {
+                interface_name: "WidgetEvents",
+                map_name: "WidgetEventsHandleMap",
+                bridge_name: "WidgetEventsBridge",
+                method_sources: &[render_kmp_callback_bridge_method_signature(
+                    &super::super::plan::KmpCallbackMethod {
+                        ffi_name: "on_update".to_string(),
+                        name: "onUpdate".to_string(),
+                        params: vec![KmpParam {
+                            name: "value".to_string(),
+                            kotlin_type: "Int".to_string(),
+                        }],
+                        return_type: None,
+                        is_async: false,
+                        doc: Some("Called when widget updates.".to_string()),
+                    },
+                    "WidgetEventsHandleMap",
+                )],
+            }
+            .render()
+            .unwrap(),
+        ];
         let constructor_sources = vec![render_kmp_constructor_signature(
             &[KmpParam {
                 name: "name".to_string(),
@@ -671,6 +728,7 @@ mod tests {
             native_binding_package: &options.native_binding_package,
             class_imports: &class_imports,
             class_sources: &class_actual_sources,
+            callback_bridge_sources: &callback_bridge_sources,
             uses_flow: true,
             functions: &module.functions,
         }
@@ -820,6 +878,7 @@ mod tests {
     fn snapshot_callback_trait_template() {
         let method_sources = vec![render_kmp_callback_method_signature(
             &super::super::plan::KmpCallbackMethod {
+                ffi_name: "on_update".to_string(),
                 name: "onUpdate".to_string(),
                 params: vec![KmpParam {
                     name: "value".to_string(),
@@ -883,6 +942,34 @@ mod tests {
             header_file_name: &options.header_file_name,
             native_binding_package: &options.native_binding_package,
             library_name: &options.library_name,
+        }
+        .render()
+        .unwrap();
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn snapshot_callback_bridge_template() {
+        let method_sources = vec![render_kmp_callback_bridge_method_signature(
+            &super::super::plan::KmpCallbackMethod {
+                ffi_name: "on_update".to_string(),
+                name: "onUpdate".to_string(),
+                params: vec![KmpParam {
+                    name: "value".to_string(),
+                    kotlin_type: "Int".to_string(),
+                }],
+                return_type: None,
+                is_async: false,
+                doc: Some("Called when widget updates.".to_string()),
+            },
+            "WidgetEventsHandleMap",
+        )];
+        let rendered = CallbackBridgeTemplate {
+            interface_name: "WidgetEvents",
+            map_name: "WidgetEventsHandleMap",
+            bridge_name: "WidgetEventsBridge",
+            method_sources: &method_sources,
         }
         .render()
         .unwrap();
@@ -1016,6 +1103,61 @@ fn render_kmp_callback_method_signature(method: &KmpCallbackMethod) -> String {
         "    {suspend_prefix}fun {}({signature}){return_suffix}\n",
         method.name
     ));
+    rendered
+}
+
+fn render_kmp_callback_bridge_method_signature(
+    method: &KmpCallbackMethod,
+    map_name: &str,
+) -> String {
+    let params = method
+        .params
+        .iter()
+        .map(|param| format!("{}: {}", param.name, param.kotlin_type))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let call_args = method
+        .params
+        .iter()
+        .map(|param| param.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let param_suffix = if params.is_empty() {
+        String::new()
+    } else {
+        format!(", {params}")
+    };
+    let return_suffix = method
+        .return_type
+        .as_ref()
+        .map(|ret| format!(": {ret}"))
+        .unwrap_or_default();
+    let invoke_expr = if call_args.is_empty() {
+        format!("callback.{}()", method.name)
+    } else {
+        format!("callback.{}({call_args})", method.name)
+    };
+
+    let mut rendered = String::new();
+    if let Some(doc) = method.doc.as_deref() {
+        rendered.push_str(&render_doc_block(doc, "    "));
+    }
+    if method.is_async {
+        rendered.push_str(&format!(
+            "    fun {}(handle: Long{param_suffix}){return_suffix} {{\n        error(\"KMP async callback bridge not yet implemented\")\n    }}\n",
+            method.ffi_name
+        ));
+    } else if method.return_type.is_some() {
+        rendered.push_str(&format!(
+            "    fun {}(handle: Long{param_suffix}){return_suffix} {{\n        val callback = {map_name}.get(handle) ?: error(\"Invalid callback handle: $handle\")\n        return {invoke_expr}\n    }}\n",
+            method.ffi_name
+        ));
+    } else {
+        rendered.push_str(&format!(
+            "    fun {}(handle: Long{param_suffix}){return_suffix} {{\n        val callback = {map_name}.get(handle) ?: return\n        {invoke_expr}\n    }}\n",
+            method.ffi_name
+        ));
+    }
     rendered
 }
 

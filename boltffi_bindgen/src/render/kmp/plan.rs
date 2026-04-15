@@ -121,6 +121,7 @@ pub struct KmpCallback {
 
 #[derive(Debug, Clone)]
 pub struct KmpCallbackMethod {
+    pub ffi_name: String,
     pub name: String,
     pub params: Vec<KmpParam>,
     pub return_type: Option<String>,

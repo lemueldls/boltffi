@@ -71,6 +71,10 @@ private fun boltffiDecodeF64List(bytes: ByteArray): List<Double> =
 {{ class_source }}
 
 {% endfor %}
+{% for callback_bridge_source in callback_bridge_sources %}
+{{ callback_bridge_source }}
+
+{% endfor %}
 
 actual object {{ module_name }} {
 {% for function in functions -%}

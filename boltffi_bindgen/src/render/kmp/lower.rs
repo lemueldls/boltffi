@@ -4,7 +4,10 @@ use heck::ToLowerCamelCase;
 use crate::ir::plan::{ScalarOrigin, Transport};
 use crate::ir::{
     AbiContract,
-    abi::{AbiCall, AbiEnum, AbiEnumField, AbiEnumPayload, AbiStream, CallId, CallMode},
+    abi::{
+        AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiEnum, AbiEnumField, AbiEnumPayload,
+        AbiStream, CallId, CallMode,
+    },
     contract::FfiContract,
     definitions::{
         CallbackMethodDef, CallbackTraitDef, ClassDef, DefaultValue, EnumDef, FieldDef,
@@ -459,20 +462,49 @@ impl<'a> KmpLowerer<'a> {
     }
 
     fn lower_callback(&self, callback: &CallbackTraitDef) -> KmpCallback {
+        let abi_callback = self.abi_callback_for(callback);
         KmpCallback {
             interface_name: NamingConvention::class_name(callback.id.as_str()),
             methods: callback
                 .methods
                 .iter()
-                .map(|method| self.lower_callback_method(method))
+                .map(|method| {
+                    let abi_method = self.abi_callback_method_for(abi_callback, method);
+                    self.lower_callback_method(method, abi_method)
+                })
                 .collect::<Vec<_>>(),
             is_closure: matches!(callback.kind, crate::ir::definitions::CallbackKind::Closure),
             doc: callback.doc.clone(),
         }
     }
 
-    fn lower_callback_method(&self, method: &CallbackMethodDef) -> KmpCallbackMethod {
+    fn abi_callback_for<'b>(&'b self, callback: &CallbackTraitDef) -> &'b AbiCallbackInvocation {
+        self.abi
+            .callbacks
+            .iter()
+            .find(|item| item.callback_id == callback.id)
+            .expect("abi callback missing")
+    }
+
+    fn abi_callback_method_for<'b>(
+        &'b self,
+        callback: &'b AbiCallbackInvocation,
+        method: &CallbackMethodDef,
+    ) -> &'b AbiCallbackMethod {
+        callback
+            .methods
+            .iter()
+            .find(|item| item.id == method.id)
+            .expect("abi callback method missing")
+    }
+
+    fn lower_callback_method(
+        &self,
+        method: &CallbackMethodDef,
+        abi_method: &AbiCallbackMethod,
+    ) -> KmpCallbackMethod {
         KmpCallbackMethod {
+            ffi_name: abi_method.vtable_field.as_str().to_string(),
             name: NamingConvention::method_name(method.id.as_str()),
             params: method
                 .params
