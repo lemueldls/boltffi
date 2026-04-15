@@ -12,6 +12,7 @@ use crate::ir::{
     types::{PrimitiveType, TypeExpr},
 };
 use crate::render::kotlin::NamingConvention;
+use boltffi_ffi_rules::naming;
 use boltffi_ffi_rules::transport::EnumTagStrategy;
 
 use super::plan::{
@@ -323,6 +324,7 @@ impl<'a> KmpLowerer<'a> {
                 .constructors
                 .iter()
                 .map(|constructor| KmpClassConstructor {
+                    ffi_symbol: naming::class_ffi_new(class.id.as_str()).into_string(),
                     params: constructor
                         .params()
                         .into_iter()
@@ -337,13 +339,15 @@ impl<'a> KmpLowerer<'a> {
             methods: class
                 .methods
                 .iter()
-                .map(|method| self.lower_class_method(method))
+                .map(|method| self.lower_class_method(class, method))
                 .collect::<Vec<_>>(),
         }
     }
 
-    fn lower_class_method(&self, method: &MethodDef) -> KmpClassMethod {
+    fn lower_class_method(&self, class: &ClassDef, method: &MethodDef) -> KmpClassMethod {
         KmpClassMethod {
+            ffi_symbol: naming::method_ffi_name(class.id.as_str(), method.id.as_str())
+                .into_string(),
             name: NamingConvention::method_name(method.id.as_str()),
             params: method
                 .params

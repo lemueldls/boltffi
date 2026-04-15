@@ -72,12 +72,14 @@ pub struct KmpClass {
 
 #[derive(Debug, Clone)]
 pub struct KmpClassConstructor {
+    pub ffi_symbol: String,
     pub params: Vec<KmpParam>,
     pub doc: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct KmpClassMethod {
+    pub ffi_symbol: String,
     pub name: String,
     pub params: Vec<KmpParam>,
     pub return_type: Option<String>,

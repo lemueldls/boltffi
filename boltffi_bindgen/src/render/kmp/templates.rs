@@ -28,6 +28,7 @@ pub struct NativeMainTemplate<'a> {
     pub package_name: &'a str,
     pub module_name: &'a str,
     pub native_binding_package: &'a str,
+    pub class_imports: &'a [String],
     pub class_sources: &'a [String],
     pub functions: &'a [KmpFunction],
 }
@@ -164,13 +165,13 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
                 .constructors
                 .iter()
                 .map(|ctor| {
-                    render_kmp_constructor_signature(&ctor.params, ctor.doc.as_deref(), false)
+                    render_kmp_constructor_signature(&ctor.params, ctor.doc.as_deref(), false, None)
                 })
                 .collect::<Vec<_>>();
             let method_sources = class
                 .methods
                 .iter()
-                .map(|method| render_kmp_method_signature(method, false))
+                .map(|method| render_kmp_method_signature(method, false, None))
                 .collect::<Vec<_>>();
 
             ClassCommonTemplate {
@@ -183,6 +184,26 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             .expect("KMP class common template should render")
         })
         .collect::<Vec<_>>();
+    let class_imports = module
+        .classes
+        .iter()
+        .flat_map(|class| {
+            let ctor_imports = class.constructors.iter().map(|ctor| {
+                format!(
+                    "import {}.{} as __native_class_{}",
+                    options.native_binding_package, ctor.ffi_symbol, ctor.ffi_symbol
+                )
+            });
+            let method_imports = class.methods.iter().map(|method| {
+                format!(
+                    "import {}.{} as __native_class_{}",
+                    options.native_binding_package, method.ffi_symbol, method.ffi_symbol
+                )
+            });
+
+            ctor_imports.chain(method_imports)
+        })
+        .collect::<Vec<_>>();
     let class_actual_sources = module
         .classes
         .iter()
@@ -191,13 +212,18 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
                 .constructors
                 .iter()
                 .map(|ctor| {
-                    render_kmp_constructor_signature(&ctor.params, ctor.doc.as_deref(), true)
+                    render_kmp_constructor_signature(
+                        &ctor.params,
+                        ctor.doc.as_deref(),
+                        true,
+                        Some(&ctor.ffi_symbol),
+                    )
                 })
                 .collect::<Vec<_>>();
             let method_sources = class
                 .methods
                 .iter()
-                .map(|method| render_kmp_method_signature(method, true))
+                .map(|method| render_kmp_method_signature(method, true, Some(&method.ffi_symbol)))
                 .collect::<Vec<_>>();
 
             ClassActualTemplate {
@@ -234,6 +260,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             package_name: &options.package_name,
             module_name: &options.module_name,
             native_binding_package: &options.native_binding_package,
+            class_imports: &class_imports,
             class_sources: &class_actual_sources,
             functions: &module.functions,
         }
@@ -293,6 +320,7 @@ mod tests {
                 class_name: "Widget".to_string(),
                 doc: Some("A handle-backed widget.".to_string()),
                 constructors: vec![super::super::plan::KmpClassConstructor {
+                    ffi_symbol: "boltffi_widget_new".to_string(),
                     params: vec![KmpParam {
                         name: "name".to_string(),
                         kotlin_type: "String".to_string(),
@@ -300,6 +328,7 @@ mod tests {
                     doc: Some("Creates a widget.".to_string()),
                 }],
                 methods: vec![super::super::plan::KmpClassMethod {
+                    ffi_symbol: "boltffi_widget_rename".to_string(),
                     name: "rename".to_string(),
                     params: vec![KmpParam {
                         name: "name".to_string(),
@@ -378,9 +407,11 @@ mod tests {
             }],
             Some("Creates a widget."),
             false,
+            None,
         )];
         let method_sources = vec![render_kmp_method_signature(
             &super::super::plan::KmpClassMethod {
+                ffi_symbol: "boltffi_widget_rename".to_string(),
                 name: "rename".to_string(),
                 params: vec![KmpParam {
                     name: "name".to_string(),
@@ -391,6 +422,7 @@ mod tests {
                 doc: Some("Renames the widget.".to_string()),
             },
             false,
+            None,
         )];
         let class_common_sources = vec![
             ClassCommonTemplate {
@@ -436,6 +468,10 @@ mod tests {
     fn snapshot_native_main_template() {
         let module = test_module();
         let options = test_options();
+        let class_imports = vec![
+            "import com.example.demo.native.boltffi_widget_new as __native_class_boltffi_widget_new".to_string(),
+            "import com.example.demo.native.boltffi_widget_rename as __native_class_boltffi_widget_rename".to_string(),
+        ];
         let constructor_sources = vec![render_kmp_constructor_signature(
             &[KmpParam {
                 name: "name".to_string(),
@@ -443,9 +479,11 @@ mod tests {
             }],
             Some("Creates a widget."),
             true,
+            Some("boltffi_widget_new"),
         )];
         let method_sources = vec![render_kmp_method_signature(
             &super::super::plan::KmpClassMethod {
+                ffi_symbol: "boltffi_widget_rename".to_string(),
                 name: "rename".to_string(),
                 params: vec![KmpParam {
                     name: "name".to_string(),
@@ -456,6 +494,7 @@ mod tests {
                 doc: Some("Renames the widget.".to_string()),
             },
             true,
+            Some("boltffi_widget_rename"),
         )];
         let class_actual_sources = vec![
             ClassActualTemplate {
@@ -471,6 +510,7 @@ mod tests {
             package_name: &options.package_name,
             module_name: &options.module_name,
             native_binding_package: &options.native_binding_package,
+            class_imports: &class_imports,
             class_sources: &class_actual_sources,
             functions: &module.functions,
         }
@@ -515,9 +555,11 @@ mod tests {
             }],
             Some("Creates a widget."),
             false,
+            None,
         )];
         let method_sources = vec![render_kmp_method_signature(
             &super::super::plan::KmpClassMethod {
+                ffi_symbol: "boltffi_widget_rename".to_string(),
                 name: "rename".to_string(),
                 params: vec![KmpParam {
                     name: "name".to_string(),
@@ -528,6 +570,7 @@ mod tests {
                 doc: Some("Renames the widget.".to_string()),
             },
             false,
+            None,
         )];
         let rendered = ClassCommonTemplate {
             class_name: "Widget",
@@ -550,9 +593,11 @@ mod tests {
             }],
             Some("Creates a widget."),
             true,
+            Some("boltffi_widget_new"),
         )];
         let method_sources = vec![render_kmp_method_signature(
             &super::super::plan::KmpClassMethod {
+                ffi_symbol: "boltffi_widget_rename".to_string(),
                 name: "rename".to_string(),
                 params: vec![KmpParam {
                     name: "name".to_string(),
@@ -563,6 +608,7 @@ mod tests {
                 doc: Some("Renames the widget.".to_string()),
             },
             true,
+            Some("boltffi_widget_rename"),
         )];
         let rendered = ClassActualTemplate {
             class_name: "Widget",
@@ -629,10 +675,16 @@ fn render_kmp_constructor_signature(
     params: &[super::plan::KmpParam],
     doc: Option<&str>,
     actual: bool,
+    ffi_symbol: Option<&str>,
 ) -> String {
     let signature = params
         .iter()
         .map(|param| format!("{}: {}", param.name, param.kotlin_type))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let arg_list = params
+        .iter()
+        .map(|param| param.name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
     let mut rendered = String::new();
@@ -640,20 +692,38 @@ fn render_kmp_constructor_signature(
         rendered.push_str(&render_doc_block(doc, "    "));
     }
     if actual {
-        rendered.push_str(&format!("    constructor({signature}) : this(0L)\n"));
+        let ffi_symbol = ffi_symbol.expect("actual constructor requires ffi symbol");
+        rendered.push_str(&format!(
+            "    constructor({signature}) : this(__native_class_{ffi_symbol}({arg_list}))\n"
+        ));
     } else {
         rendered.push_str(&format!("    constructor({signature})\n"));
     }
     rendered
 }
 
-fn render_kmp_method_signature(method: &super::plan::KmpClassMethod, actual: bool) -> String {
+fn render_kmp_method_signature(
+    method: &super::plan::KmpClassMethod,
+    actual: bool,
+    ffi_symbol: Option<&str>,
+) -> String {
     let signature = method
         .params
         .iter()
         .map(|param| format!("{}: {}", param.name, param.kotlin_type))
         .collect::<Vec<_>>()
         .join(", ");
+    let arg_list = if method.params.is_empty() {
+        "handle".to_string()
+    } else {
+        let param_args = method
+            .params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("handle, {param_args}")
+    };
     let return_suffix = method
         .return_type
         .as_ref()
@@ -665,8 +735,9 @@ fn render_kmp_method_signature(method: &super::plan::KmpClassMethod, actual: boo
         rendered.push_str(&render_doc_block(doc, "    "));
     }
     if actual {
+        let ffi_symbol = ffi_symbol.expect("actual method requires ffi symbol");
         rendered.push_str(&format!(
-            "    {suspend_prefix}fun {}({signature}){return_suffix} = TODO(\"KMP class method not yet implemented\")\n",
+            "    {suspend_prefix}fun {}({signature}){return_suffix} = __native_class_{ffi_symbol}({arg_list})\n",
             method.name
         ));
     } else {
