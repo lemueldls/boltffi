@@ -128,16 +128,16 @@ private class boltffiWireReader(private val bytes: ByteArray) {
 
     fun readDuration(): java.time.Duration {
         val seconds = readI64()
-        val nanos = readI32().toLong()
+        val nanos = readU32().toLong()
         require(seconds >= 0L) { "Duration out of range" }
-        require(nanos >= 0L) { "Duration nanos out of range" }
+        require(nanos < 1_000_000_000L) { "Duration nanos out of range" }
         return java.time.Duration.ofSeconds(seconds, nanos)
     }
 
     fun readInstant(): java.time.Instant {
         val seconds = readI64()
-        val nanos = readI32().toLong()
-        require(nanos >= 0L) { "Instant nanos out of range" }
+        val nanos = readU32().toLong()
+        require(nanos < 1_000_000_000L) { "Instant nanos out of range" }
         if (seconds >= 0L) {
             return java.time.Instant.EPOCH.plus(java.time.Duration.ofSeconds(seconds, nanos))
         }
