@@ -1041,6 +1041,70 @@ mod tests {
     }
 
     #[test]
+    fn render_stream_signature_batch_mode_emits_subscription_contract() {
+        let rendered = render_kmp_stream_signature(
+            "Widget",
+            &super::super::plan::KmpClassStream {
+                name: "updates".to_string(),
+                item_type: "Int".to_string(),
+                mode: super::super::plan::KmpStreamMode::Batch,
+                pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
+                subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
+                poll_symbol: "boltffi_widget_updates_poll".to_string(),
+                pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
+                wait_symbol: "boltffi_widget_updates_wait".to_string(),
+                unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
+                free_symbol: "boltffi_widget_updates_free".to_string(),
+                doc: Some("Watches widget updates.".to_string()),
+            },
+            false,
+        );
+
+        assert!(
+            rendered
+                .member_source
+                .contains("fun updates(): WidgetUpdatesSubscription")
+        );
+        let support = rendered
+            .common_support_source
+            .expect("batch stream should render support type");
+        assert!(support.contains("interface WidgetUpdatesSubscription"));
+        assert!(support.contains("fun popBatch(maxCount: Long = 16L): List<Int>"));
+    }
+
+    #[test]
+    fn render_stream_signature_callback_mode_emits_cancellable_contract() {
+        let rendered = render_kmp_stream_signature(
+            "Widget",
+            &super::super::plan::KmpClassStream {
+                name: "updates".to_string(),
+                item_type: "Int".to_string(),
+                mode: super::super::plan::KmpStreamMode::Callback,
+                pop_batch_items_expr: "boltffiDecodeI32List(bytes)".to_string(),
+                subscribe_symbol: "boltffi_widget_updates_subscribe".to_string(),
+                poll_symbol: "boltffi_widget_updates_poll".to_string(),
+                pop_batch_symbol: "boltffi_widget_updates_pop_batch".to_string(),
+                wait_symbol: "boltffi_widget_updates_wait".to_string(),
+                unsubscribe_symbol: "boltffi_widget_updates_unsubscribe".to_string(),
+                free_symbol: "boltffi_widget_updates_free".to_string(),
+                doc: Some("Watches widget updates.".to_string()),
+            },
+            false,
+        );
+
+        assert!(
+            rendered
+                .member_source
+                .contains("fun updates(callback: (Int) -> Unit): WidgetUpdatesCancellable")
+        );
+        let support = rendered
+            .common_support_source
+            .expect("callback stream should render support type");
+        assert!(support.contains("interface WidgetUpdatesCancellable"));
+        assert!(support.contains("fun cancel()"));
+    }
+
+    #[test]
     fn snapshot_callback_trait_template() {
         let method_sources = vec![render_kmp_callback_method_signature(
             &super::super::plan::KmpCallbackMethod {
@@ -1100,6 +1164,38 @@ mod tests {
             variants: &variants,
             encode_source: "fun Result.wireEncodedSize(): Int = 4 + when (this) {\n    is Success -> 0\n    is Error -> 0\n}\n\nfun Result.wireEncodeTo(wire: boltffiWireWriter) {\n    when (this) {\n        is Success -> wire.writeI32(0)\n        is Error -> wire.writeI32(1)\n    }\n}",
             doc: Some("The result of an operation."),
+        }
+        .render()
+        .unwrap();
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn snapshot_enum_template_c_style() {
+        let variants = vec![
+            KmpEnumVariantView {
+                name: "Idle".to_string(),
+                tag: 0,
+                fields: vec![],
+                doc: Some("No work in progress.".to_string()),
+            },
+            KmpEnumVariantView {
+                name: "Running".to_string(),
+                tag: 1,
+                fields: vec![],
+                doc: Some("Work is in progress.".to_string()),
+            },
+        ];
+
+        let rendered = EnumTemplate {
+            class_name: "Status",
+            is_c_style: true,
+            is_error: false,
+            value_type: Some("Int"),
+            variants: &variants,
+            encode_source: "fun Status.wireEncodedSize(): Int = 4\n\nfun Status.wireEncodeTo(wire: boltffiWireWriter) {\n    wire.writeI32(this.value)\n}",
+            doc: Some("Current status."),
         }
         .render()
         .unwrap();

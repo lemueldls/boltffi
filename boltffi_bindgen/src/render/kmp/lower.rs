@@ -1444,8 +1444,8 @@ mod tests {
     use boltffi_ffi_rules::transport::EnumTagStrategy;
 
     use crate::ir::codec::{EnumLayout, VecLayout};
-    use crate::ir::ids::{EnumId, RecordId};
-    use crate::ir::ops::{SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq};
+    use crate::ir::ids::{BuiltinId, EnumId, RecordId};
+    use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq};
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use crate::ir::{Lowerer, build_contract};
     use crate::scan::scan_crate_with_pointer_width;
@@ -1611,5 +1611,57 @@ mod tests {
         let expr = KmpLowerer::kmp_emit_size_expr_for_write_seq(&seq);
         assert!(expr.contains("boltffiUnsafeCast<Int>(_r.value)"));
         assert!(expr.contains("boltffiUnsafeCast<Long>(_r.error)"));
+    }
+
+    #[test]
+    fn wire_builtin_read_expr_for_unmapped_builtin_uses_decode_hook() {
+        let expr = KmpLowerer::wire_builtin_read_expr(&BuiltinId::new("ip_addr"));
+        assert_eq!(expr, "IpAddr.decode(reader)");
+    }
+
+    #[test]
+    fn wire_read_expr_for_recursive_record_uses_decode_helper_call() {
+        let mut scanned_module =
+            scan_crate_with_pointer_width(&demo_source_directory(), "demo", None)
+                .expect("demo crate should scan");
+        let ffi_contract = build_contract(&mut scanned_module);
+        let abi_contract = Lowerer::new(&ffi_contract).to_abi_contract();
+        let lowerer = KmpLowerer::new(&ffi_contract, &abi_contract);
+
+        let seq = ReadSeq {
+            size: SizeExpr::Runtime,
+            ops: vec![ReadOp::Record {
+                id: RecordId::new("tree_node"),
+                offset: OffsetExpr::Base,
+                fields: vec![],
+            }],
+            shape: WireShape::Value,
+        };
+
+        let expr = lowerer.wire_read_expr(&seq);
+        assert_eq!(expr, "boltffiDecodeRecordTreeNode(reader)");
+    }
+
+    #[test]
+    fn wire_read_expr_for_recursive_enum_uses_decode_helper_call() {
+        let mut scanned_module =
+            scan_crate_with_pointer_width(&demo_source_directory(), "demo", None)
+                .expect("demo crate should scan");
+        let ffi_contract = build_contract(&mut scanned_module);
+        let abi_contract = Lowerer::new(&ffi_contract).to_abi_contract();
+        let lowerer = KmpLowerer::new(&ffi_contract, &abi_contract);
+
+        let seq = ReadSeq {
+            size: SizeExpr::Runtime,
+            ops: vec![ReadOp::Enum {
+                id: EnumId::new("expr_tree"),
+                offset: OffsetExpr::Base,
+                layout: EnumLayout::Recursive,
+            }],
+            shape: WireShape::Value,
+        };
+
+        let expr = lowerer.wire_read_expr(&seq);
+        assert_eq!(expr, "boltffiDecodeEnumExprTree(reader)");
     }
 }
