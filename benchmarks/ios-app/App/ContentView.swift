@@ -203,6 +203,34 @@ struct Bench {
     }
 }
 
+final class BoltFFIDataProviderImpl: BenchBoltFFI.DataProvider {
+    let points: [BenchBoltFFI.DataPoint]
+
+    init(count: Int) {
+        points = (0..<count).map { index in
+            BenchBoltFFI.DataPoint(x: Double(index), y: Double(index) * 2.0, timestamp: Int64(index))
+        }
+    }
+
+    func getCount() -> UInt32 { UInt32(points.count) }
+
+    func getItem(index: UInt32) -> BenchBoltFFI.DataPoint { points[Int(index)] }
+}
+
+final class UniffiDataProviderImpl: BenchUniffi.DataProvider {
+    let points: [BenchUniffi.DataPoint]
+
+    init(count: Int) {
+        points = (0..<count).map { index in
+            BenchUniffi.DataPoint(x: Double(index), y: Double(index) * 2.0, timestamp: Int64(index))
+        }
+    }
+
+    func getCount() -> UInt32 { UInt32(points.count) }
+
+    func getItem(index: UInt32) -> BenchUniffi.DataPoint { points[Int(index)] }
+}
+
 func getAllBenchmarks() -> [Bench] {
     let boltffiLocations1k = BenchBoltFFI.generateLocations(count: 1000)
     let boltffiLocations10k = BenchBoltFFI.generateLocations(count: 10000)
@@ -210,16 +238,31 @@ func getAllBenchmarks() -> [Bench] {
     let uniffiLocations10k = BenchUniffi.generateLocations(count: 10000)
     
     let boltffiTrades1k = BenchBoltFFI.generateTrades(count: 1000)
+    let boltffiTrades10k = BenchBoltFFI.generateTrades(count: 10000)
     let uniffiTrades1k = BenchUniffi.generateTrades(count: 1000)
+    let uniffiTrades10k = BenchUniffi.generateTrades(count: 10000)
     
     let boltffiParticles1k = BenchBoltFFI.generateParticles(count: 1000)
+    let boltffiParticles10k = BenchBoltFFI.generateParticles(count: 10000)
     let uniffiParticles1k = BenchUniffi.generateParticles(count: 1000)
+    let uniffiParticles10k = BenchUniffi.generateParticles(count: 10000)
     
     let boltffiSensors1k = BenchBoltFFI.generateSensorReadings(count: 1000)
+    let boltffiSensors10k = BenchBoltFFI.generateSensorReadings(count: 10000)
     let uniffiSensors1k = BenchUniffi.generateSensorReadings(count: 1000)
+    let uniffiSensors10k = BenchUniffi.generateSensorReadings(count: 10000)
+
+    let boltffiDirections1k = BenchBoltFFI.generateDirections(count: 1000)
+    let boltffiDirections10k = BenchBoltFFI.generateDirections(count: 10000)
+    let uniffiDirections1k = BenchUniffi.generateDirections(count: 1000)
+    let uniffiDirections10k = BenchUniffi.generateDirections(count: 10000)
     
     let boltffiI32Vec10k = BenchBoltFFI.generateI32Vec(count: 10000)
+    let boltffiI32Vec100k = BenchBoltFFI.generateI32Vec(count: 100_000)
     let uniffiI32Vec10k = BenchUniffi.generateI32Vec(count: 10000)
+    let uniffiI32Vec100k = BenchUniffi.generateI32Vec(count: 100_000)
+    let echoBytes64k = Data(repeating: 42, count: 65_536)
+    let echoVecI32Values10k = (0..<10_000).map(Int32.init)
     
     let boltffiF64Vec10k = BenchBoltFFI.generateF64Vec(count: 10000)
     let uniffiF64Vec10k = BenchUniffi.generateF64Vec(count: 10000)
@@ -228,15 +271,36 @@ func getAllBenchmarks() -> [Bench] {
     let boltffiUsers1k = BenchBoltFFI.generateUserProfiles(count: 1000)
     let uniffiUsers100 = BenchUniffi.generateUserProfiles(count: 100)
     let uniffiUsers1k = BenchUniffi.generateUserProfiles(count: 1000)
+
+    let boltffiProvider100 = BoltFFIDataProviderImpl(count: 100)
+    let boltffiProvider1k = BoltFFIDataProviderImpl(count: 1000)
+    let uniffiProvider100 = UniffiDataProviderImpl(count: 100)
+    let uniffiProvider1k = UniffiDataProviderImpl(count: 1000)
     
     return [
         Bench(name: "noop", category: "1. FFI Overhead", iterations: 10000,
               boltffiBlock: { BenchBoltFFI.noop() },
               uniffiBlock: { BenchUniffi.noop() }),
         
+        Bench(name: "echo_bool", category: "1. FFI Overhead", iterations: 10000,
+              boltffiBlock: { _ = BenchBoltFFI.echoBool(v: true) },
+              uniffiBlock: { _ = BenchUniffi.echoBool(v: true) }),
+        
+        Bench(name: "negate_bool", category: "1. FFI Overhead", iterations: 10000,
+              boltffiBlock: { _ = BenchBoltFFI.negateBool(v: true) },
+              uniffiBlock: { _ = BenchUniffi.negateBool(v: true) }),
+        
         Bench(name: "echo_i32", category: "1. FFI Overhead", iterations: 10000,
-              boltffiBlock: { _ = BenchBoltFFI.echoI32(value: 42) },
-              uniffiBlock: { _ = BenchUniffi.echoI32(value: 42) }),
+              boltffiBlock: { _ = BenchBoltFFI.echoI32(v: 42) },
+              uniffiBlock: { _ = BenchUniffi.echoI32(v: 42) }),
+
+        Bench(name: "echo_f64", category: "1. FFI Overhead", iterations: 10000,
+              boltffiBlock: { _ = BenchBoltFFI.echoF64(v: 3.14159) },
+              uniffiBlock: { _ = BenchUniffi.echoF64(v: 3.14159) }),
+
+        Bench(name: "add_f64", category: "1. FFI Overhead", iterations: 10000,
+              boltffiBlock: { _ = BenchBoltFFI.addF64(a: 1.25, b: 2.5) },
+              uniffiBlock: { _ = BenchUniffi.addF64(a: 1.25, b: 2.5) }),
         
         Bench(name: "add", category: "1. FFI Overhead", iterations: 10000,
               boltffiBlock: { _ = BenchBoltFFI.add(a: 100, b: 200) },
@@ -245,14 +309,37 @@ func getAllBenchmarks() -> [Bench] {
         Bench(name: "multiply", category: "1. FFI Overhead", iterations: 10000,
               boltffiBlock: { _ = BenchBoltFFI.multiply(a: 2.5, b: 4.0) },
               uniffiBlock: { _ = BenchUniffi.multiply(a: 2.5, b: 4.0) }),
+
+        Bench(name: "inc_u64", category: "1. FFI Overhead", iterations: 10000,
+              boltffiBlock: {
+                  var values: [UInt64] = [0]
+                  BenchBoltFFI.incU64(values: &values)
+              },
+              uniffiBlock: { _ = BenchUniffi.incU64Value(value: 0) }),
+
+        Bench(name: "inc_u64_value", category: "1. FFI Overhead", iterations: 10000,
+              boltffiBlock: { _ = BenchBoltFFI.incU64Value(value: 0) },
+              uniffiBlock: { _ = BenchUniffi.incU64Value(value: 0) }),
         
         Bench(name: "echo_string_small", category: "2. Strings", iterations: 5000,
-              boltffiBlock: { _ = BenchBoltFFI.echoString(value: "hello") },
-              uniffiBlock: { _ = BenchUniffi.echoString(value: "hello") }),
+              boltffiBlock: { _ = BenchBoltFFI.echoString(v: "hello") },
+              uniffiBlock: { _ = BenchUniffi.echoString(v: "hello") }),
         
         Bench(name: "echo_string_1k", category: "2. Strings", iterations: 2000,
-              boltffiBlock: { _ = BenchBoltFFI.echoString(value: String(repeating: "x", count: 1000)) },
-              uniffiBlock: { _ = BenchUniffi.echoString(value: String(repeating: "x", count: 1000)) }),
+              boltffiBlock: { _ = BenchBoltFFI.echoString(v: String(repeating: "x", count: 1000)) },
+              uniffiBlock: { _ = BenchUniffi.echoString(v: String(repeating: "x", count: 1000)) }),
+        
+        Bench(name: "generate_string_1k", category: "2. Strings", iterations: 2000,
+              boltffiBlock: { _ = BenchBoltFFI.generateString(size: 1000) },
+              uniffiBlock: { _ = BenchUniffi.generateString(size: 1000) }),
+        
+        Bench(name: "echo_bytes_64k", category: "2a. Bytes", iterations: 500,
+              boltffiBlock: { _ = BenchBoltFFI.echoBytes(data: echoBytes64k) },
+              uniffiBlock: { _ = BenchUniffi.echoBytes(data: echoBytes64k) }),
+        
+        Bench(name: "echo_vec_i32_10k", category: "2b. Primitive Vectors", iterations: 500,
+              boltffiBlock: { _ = BenchBoltFFI.echoVecI32(v: echoVecI32Values10k) },
+              uniffiBlock: { _ = BenchUniffi.echoVecI32(v: echoVecI32Values10k) }),
         
         Bench(name: "generate_locations_1k", category: "3. Rust→Swift Blittable", iterations: 500,
               boltffiBlock: { _ = BenchBoltFFI.generateLocations(count: 1000) },
@@ -265,18 +352,34 @@ func getAllBenchmarks() -> [Bench] {
         Bench(name: "generate_trades_1k", category: "3. Rust→Swift Blittable", iterations: 500,
               boltffiBlock: { _ = BenchBoltFFI.generateTrades(count: 1000) },
               uniffiBlock: { _ = BenchUniffi.generateTrades(count: 1000) }),
+
+        Bench(name: "generate_trades_10k", category: "3. Rust→Swift Blittable", iterations: 50,
+              boltffiBlock: { _ = BenchBoltFFI.generateTrades(count: 10000) },
+              uniffiBlock: { _ = BenchUniffi.generateTrades(count: 10000) }),
         
         Bench(name: "generate_particles_1k", category: "3. Rust→Swift Blittable", iterations: 500,
               boltffiBlock: { _ = BenchBoltFFI.generateParticles(count: 1000) },
               uniffiBlock: { _ = BenchUniffi.generateParticles(count: 1000) }),
+
+        Bench(name: "generate_particles_10k", category: "3. Rust→Swift Blittable", iterations: 50,
+              boltffiBlock: { _ = BenchBoltFFI.generateParticles(count: 10000) },
+              uniffiBlock: { _ = BenchUniffi.generateParticles(count: 10000) }),
         
-        Bench(name: "generate_sensors_1k", category: "3. Rust→Swift Blittable", iterations: 500,
+        Bench(name: "generate_sensor_readings_1k", category: "3. Rust→Swift Blittable", iterations: 500,
               boltffiBlock: { _ = BenchBoltFFI.generateSensorReadings(count: 1000) },
               uniffiBlock: { _ = BenchUniffi.generateSensorReadings(count: 1000) }),
+
+        Bench(name: "generate_sensor_readings_10k", category: "3. Rust→Swift Blittable", iterations: 50,
+              boltffiBlock: { _ = BenchBoltFFI.generateSensorReadings(count: 10000) },
+              uniffiBlock: { _ = BenchUniffi.generateSensorReadings(count: 10000) }),
         
         Bench(name: "generate_i32_vec_10k", category: "3. Rust→Swift Blittable", iterations: 500,
               boltffiBlock: { _ = BenchBoltFFI.generateI32Vec(count: 10000) },
               uniffiBlock: { _ = BenchUniffi.generateI32Vec(count: 10000) }),
+
+        Bench(name: "generate_i32_vec_100k", category: "3. Rust→Swift Blittable", iterations: 50,
+              boltffiBlock: { _ = BenchBoltFFI.generateI32Vec(count: 100_000) },
+              uniffiBlock: { _ = BenchUniffi.generateI32Vec(count: 100_000) }),
         
         Bench(name: "generate_f64_vec_10k", category: "3. Rust→Swift Blittable", iterations: 500,
               boltffiBlock: { _ = BenchBoltFFI.generateF64Vec(count: 10000) },
@@ -285,6 +388,14 @@ func getAllBenchmarks() -> [Bench] {
         Bench(name: "generate_bytes_64k", category: "3. Rust→Swift Blittable", iterations: 200,
               boltffiBlock: { _ = BenchBoltFFI.generateBytes(size: 65536) },
               uniffiBlock: { _ = BenchUniffi.generateBytes(size: 65536) }),
+
+        Bench(name: "generate_directions_1k", category: "3. Rust→Swift Blittable", iterations: 500,
+              boltffiBlock: { _ = BenchBoltFFI.generateDirections(count: 1000) },
+              uniffiBlock: { _ = BenchUniffi.generateDirections(count: 1000) }),
+
+        Bench(name: "generate_directions_10k", category: "3. Rust→Swift Blittable", iterations: 50,
+              boltffiBlock: { _ = BenchBoltFFI.generateDirections(count: 10000) },
+              uniffiBlock: { _ = BenchUniffi.generateDirections(count: 10000) }),
         
         Bench(name: "process_locations_1k", category: "4. Swift→Rust Blittable", iterations: 1000,
               boltffiBlock: { _ = BenchBoltFFI.processLocations(locations: boltffiLocations1k) },
@@ -305,22 +416,46 @@ func getAllBenchmarks() -> [Bench] {
         Bench(name: "sum_trade_volumes_1k", category: "4. Swift→Rust Blittable", iterations: 1000,
               boltffiBlock: { _ = BenchBoltFFI.sumTradeVolumes(trades: boltffiTrades1k) },
               uniffiBlock: { _ = BenchUniffi.sumTradeVolumes(trades: uniffiTrades1k) }),
+
+        Bench(name: "sum_trade_volumes_10k", category: "4. Swift→Rust Blittable", iterations: 100,
+              boltffiBlock: { _ = BenchBoltFFI.sumTradeVolumes(trades: boltffiTrades10k) },
+              uniffiBlock: { _ = BenchUniffi.sumTradeVolumes(trades: uniffiTrades10k) }),
         
         Bench(name: "sum_particle_masses_1k", category: "4. Swift→Rust Blittable", iterations: 1000,
               boltffiBlock: { _ = BenchBoltFFI.sumParticleMasses(particles: boltffiParticles1k) },
               uniffiBlock: { _ = BenchUniffi.sumParticleMasses(particles: uniffiParticles1k) }),
+
+        Bench(name: "sum_particle_masses_10k", category: "4. Swift→Rust Blittable", iterations: 100,
+              boltffiBlock: { _ = BenchBoltFFI.sumParticleMasses(particles: boltffiParticles10k) },
+              uniffiBlock: { _ = BenchUniffi.sumParticleMasses(particles: uniffiParticles10k) }),
         
         Bench(name: "avg_sensor_temp_1k", category: "4. Swift→Rust Blittable", iterations: 1000,
               boltffiBlock: { _ = BenchBoltFFI.avgSensorTemperature(readings: boltffiSensors1k) },
               uniffiBlock: { _ = BenchUniffi.avgSensorTemperature(readings: uniffiSensors1k) }),
+
+        Bench(name: "avg_sensor_temp_10k", category: "4. Swift→Rust Blittable", iterations: 100,
+              boltffiBlock: { _ = BenchBoltFFI.avgSensorTemperature(readings: boltffiSensors10k) },
+              uniffiBlock: { _ = BenchUniffi.avgSensorTemperature(readings: uniffiSensors10k) }),
         
         Bench(name: "sum_i32_vec_10k", category: "4. Swift→Rust Blittable", iterations: 500,
               boltffiBlock: { _ = BenchBoltFFI.sumI32Vec(values: boltffiI32Vec10k) },
               uniffiBlock: { _ = BenchUniffi.sumI32Vec(values: uniffiI32Vec10k) }),
+
+        Bench(name: "sum_i32_vec_100k", category: "4. Swift→Rust Blittable", iterations: 50,
+              boltffiBlock: { _ = BenchBoltFFI.sumI32Vec(values: boltffiI32Vec100k) },
+              uniffiBlock: { _ = BenchUniffi.sumI32Vec(values: uniffiI32Vec100k) }),
         
         Bench(name: "sum_f64_vec_10k", category: "4. Swift→Rust Blittable", iterations: 500,
               boltffiBlock: { _ = BenchBoltFFI.sumF64Vec(values: boltffiF64Vec10k) },
               uniffiBlock: { _ = BenchUniffi.sumF64Vec(values: uniffiF64Vec10k) }),
+
+        Bench(name: "count_north_1k", category: "4. Swift→Rust Blittable", iterations: 1000,
+              boltffiBlock: { _ = BenchBoltFFI.countNorth(directions: boltffiDirections1k) },
+              uniffiBlock: { _ = BenchUniffi.countNorth(directions: uniffiDirections1k) }),
+
+        Bench(name: "count_north_10k", category: "4. Swift→Rust Blittable", iterations: 100,
+              boltffiBlock: { _ = BenchBoltFFI.countNorth(directions: boltffiDirections10k) },
+              uniffiBlock: { _ = BenchUniffi.countNorth(directions: uniffiDirections10k) }),
         
         Bench(name: "generate_user_profiles_100", category: "5. Rust→Swift Complex", iterations: 200,
               boltffiBlock: { _ = BenchBoltFFI.generateUserProfiles(count: 100) },
@@ -345,18 +480,60 @@ func getAllBenchmarks() -> [Bench] {
         Bench(name: "count_active_users_1k", category: "6. Swift→Rust Complex", iterations: 50,
               boltffiBlock: { _ = BenchBoltFFI.countActiveUsers(users: boltffiUsers1k) },
               uniffiBlock: { _ = BenchUniffi.countActiveUsers(users: uniffiUsers1k) }),
-        
-        Bench(name: "counter_increment_1k (mutex)", category: "7. Classes", iterations: 100,
+
+        Bench(name: "async_add", category: "6a. Async", iterations: 1000,
               boltffiBlock: {
-                  let counter = BenchBoltFFI.Counter()
+                  let semaphore = DispatchSemaphore(value: 0)
+                  _Concurrency.Task {
+                      _ = try! await BenchBoltFFI.asyncAdd(a: 100, b: 200)
+                      semaphore.signal()
+                  }
+                  semaphore.wait()
+              },
+              uniffiBlock: {
+                  let semaphore = DispatchSemaphore(value: 0)
+                  _Concurrency.Task {
+                      _ = await BenchUniffi.asyncAdd(a: 100, b: 200)
+                      semaphore.signal()
+                  }
+                  semaphore.wait()
+              }),
+
+        Bench(name: "callback_100", category: "6b. Callbacks", iterations: 500,
+              boltffiBlock: {
+                  let consumer = BenchBoltFFI.DataConsumer()
+                  consumer.setProvider(provider: boltffiProvider100)
+                  _ = consumer.computeSum()
+              },
+              uniffiBlock: {
+                  let consumer = BenchUniffi.DataConsumer()
+                  consumer.setProvider(provider: uniffiProvider100)
+                  _ = consumer.computeSum()
+              }),
+
+        Bench(name: "callback_1k", category: "6b. Callbacks", iterations: 100,
+              boltffiBlock: {
+                  let consumer = BenchBoltFFI.DataConsumer()
+                  consumer.setProvider(provider: boltffiProvider1k)
+                  _ = consumer.computeSum()
+              },
+              uniffiBlock: {
+                  let consumer = BenchUniffi.DataConsumer()
+                  consumer.setProvider(provider: uniffiProvider1k)
+                  _ = consumer.computeSum()
+              }),
+        
+        Bench(name: "counter_increment_mutex", category: "7. Classes", iterations: 100,
+              boltffiBlock: {
+                  let counter = BenchBoltFFI.Counter(initial: 0)
                   for _ in 0..<1000 { counter.increment() }
               },
               uniffiBlock: {
-                  let counter = BenchUniffi.Counter()
+                  let counter = BenchUniffi.Counter(initial: 0)
                   for _ in 0..<1000 { counter.increment() }
               }),
         
-        Bench(name: "counter_increment_1k (single_threaded)", category: "7. Classes (BoltFFI-only)", iterations: 100,
+        Bench(name: "counter_increment_single_threaded", category: "7. Classes (BoltFFI-only)", iterations: 100,
               boltffiBlock: {
                   let counter = BenchBoltFFI.CounterSingleThreaded()
                   for _ in 0..<1000 { counter.increment() }
@@ -366,7 +543,7 @@ func getAllBenchmarks() -> [Bench] {
                   for _ in 0..<1000 { counter.increment() }
               }),
         
-        Bench(name: "datastore_add_1k", category: "7. Classes", iterations: 50,
+        Bench(name: "datastore_add_record_1k", category: "7. Classes", iterations: 50,
               boltffiBlock: {
                   let store = BenchBoltFFI.DataStore()
                   for i in 0..<1000 {
@@ -380,7 +557,7 @@ func getAllBenchmarks() -> [Bench] {
                   }
               }),
         
-        Bench(name: "accumulator_1k (mutex)", category: "7. Classes", iterations: 100,
+        Bench(name: "accumulator_mutex", category: "7. Classes", iterations: 100,
               boltffiBlock: {
                   let acc = BenchBoltFFI.Accumulator()
                   for i: Int64 in 0..<1000 { acc.add(amount: i) }
@@ -394,7 +571,7 @@ func getAllBenchmarks() -> [Bench] {
                   acc.reset()
               }),
         
-        Bench(name: "accumulator_1k (single_threaded)", category: "7. Classes (BoltFFI-only)", iterations: 100,
+        Bench(name: "accumulator_single_threaded", category: "7. Classes (BoltFFI-only)", iterations: 100,
               boltffiBlock: {
                   let acc = BenchBoltFFI.AccumulatorSingleThreaded()
                   for i: Int64 in 0..<1000 { acc.add(amount: i) }
@@ -410,13 +587,21 @@ func getAllBenchmarks() -> [Bench] {
         
         Bench(name: "simple_enum", category: "8. Enums", iterations: 5000,
               boltffiBlock: {
-                  _ = BenchBoltFFI.oppositeDirection(dir: .north)
-                  _ = BenchBoltFFI.directionToDegrees(dir: .east)
+                  _ = BenchBoltFFI.oppositeDirection(d: .north)
+                  _ = BenchBoltFFI.directionToDegrees(direction: .east)
               },
               uniffiBlock: {
-                  _ = BenchUniffi.oppositeDirection(dir: .north)
-                  _ = BenchUniffi.directionToDegrees(dir: .east)
+                  _ = BenchUniffi.oppositeDirection(d: .north)
+                  _ = BenchUniffi.directionToDegrees(direction: .east)
               }),
+        
+        Bench(name: "echo_direction", category: "8. Enums", iterations: 5000,
+              boltffiBlock: { _ = BenchBoltFFI.echoDirection(d: .north) },
+              uniffiBlock: { _ = BenchUniffi.echoDirection(d: .north) }),
+        
+        Bench(name: "find_direction", category: "8. Enums", iterations: 5000,
+              boltffiBlock: { _ = BenchBoltFFI.findDirection(id: 0) },
+              uniffiBlock: { _ = BenchUniffi.findDirection(id: 0) }),
         
         Bench(name: "data_enum_input", category: "8. Enums", iterations: 5000,
               boltffiBlock: {
@@ -424,13 +609,33 @@ func getAllBenchmarks() -> [Bench] {
                   _ = BenchBoltFFI.isStatusComplete(status: .completed(result: 100))
               },
               uniffiBlock: {
-                  _ = BenchBoltFFI.getStatusProgress(status: .inProgress(progress: 50))
-                  _ = BenchBoltFFI.isStatusComplete(status: .completed(result: 100))
+                  _ = BenchUniffi.getStatusProgress(status: .inProgress(progress: 50))
+                  _ = BenchUniffi.isStatusComplete(status: .completed(result: 100))
               }),
         
         Bench(name: "find_even_100", category: "9. Options", iterations: 1000,
               boltffiBlock: { for i: Int32 in 0..<100 { _ = BenchBoltFFI.findEven(value: i) } },
               uniffiBlock: { for i: Int32 in 0..<100 { _ = BenchUniffi.findEven(value: i) } }),
+        
+        Bench(name: "find_positive_f64", category: "9. Options", iterations: 5000,
+              boltffiBlock: { _ = BenchBoltFFI.findPositiveF64(value: 3.14) },
+              uniffiBlock: { _ = BenchUniffi.findPositiveF64(value: 3.14) }),
+        
+        Bench(name: "find_name", category: "9. Options", iterations: 5000,
+              boltffiBlock: { _ = BenchBoltFFI.findName(id: 1) },
+              uniffiBlock: { _ = BenchUniffi.findName(id: 1) }),
+        
+        Bench(name: "find_names_100", category: "9. Options", iterations: 500,
+              boltffiBlock: { _ = BenchBoltFFI.findNames(count: 100) },
+              uniffiBlock: { _ = BenchUniffi.findNames(count: 100) }),
+        
+        Bench(name: "find_numbers_100", category: "9. Options", iterations: 500,
+              boltffiBlock: { _ = BenchBoltFFI.findNumbers(count: 100) },
+              uniffiBlock: { _ = BenchUniffi.findNumbers(count: 100) }),
+        
+        Bench(name: "find_locations_100", category: "9. Options", iterations: 500,
+              boltffiBlock: { _ = BenchBoltFFI.findLocations(count: 100) },
+              uniffiBlock: { _ = BenchUniffi.findLocations(count: 100) }),
     ]
 }
 

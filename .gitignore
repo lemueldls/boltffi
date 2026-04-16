@@ -14,3 +14,9 @@ examples/platforms/kotlin/build/
 examples/platforms/kotlin/generated/
 examples/platforms/apple/ffi
 examples/platforms/apple/.build
+benchmarks/android-app/.gradle
+benchmarks/android-app/app/build
+benchmarks/android-app/build
+benchmarks/scripts/__pycache__
+benchmarks/swift-macos-bench/build/results
+benchmarks/wasm-bench/build

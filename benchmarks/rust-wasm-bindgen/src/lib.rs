@@ -1,4 +1,7 @@
+use demo as demo_api;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 #[wasm_bindgen]
 pub struct Location {
@@ -13,8 +16,41 @@ pub struct Location {
 #[wasm_bindgen]
 impl Location {
     #[wasm_bindgen(constructor)]
-    pub fn new(id: i64, lat: f64, lng: f64, rating: f64, review_count: i32, is_open: bool) -> Location {
-        Location { id, lat, lng, rating, review_count, is_open }
+    pub fn new(id: i64, lat: f64, lng: f64, rating: f64, review_count: i32, is_open: bool) -> Self {
+        Self {
+            id,
+            lat,
+            lng,
+            rating,
+            review_count,
+            is_open,
+        }
+    }
+}
+
+impl From<demo_api::Location> for Location {
+    fn from(location: demo_api::Location) -> Self {
+        Self {
+            id: location.id,
+            lat: location.lat,
+            lng: location.lng,
+            rating: location.rating,
+            review_count: location.review_count,
+            is_open: location.is_open,
+        }
+    }
+}
+
+impl From<Location> for demo_api::Location {
+    fn from(location: Location) -> Self {
+        Self {
+            id: location.id,
+            lat: location.lat,
+            lng: location.lng,
+            rating: location.rating,
+            review_count: location.review_count,
+            is_open: location.is_open,
+        }
     }
 }
 
@@ -35,10 +71,59 @@ pub struct Trade {
 impl Trade {
     #[wasm_bindgen(constructor)]
     pub fn new(
-        id: i64, symbol_id: i32, price: f64, quantity: i64,
-        bid: f64, ask: f64, volume: i64, timestamp: i64, is_buy: bool
-    ) -> Trade {
-        Trade { id, symbol_id, price, quantity, bid, ask, volume, timestamp, is_buy }
+        id: i64,
+        symbol_id: i32,
+        price: f64,
+        quantity: i64,
+        bid: f64,
+        ask: f64,
+        volume: i64,
+        timestamp: i64,
+        is_buy: bool,
+    ) -> Self {
+        Self {
+            id,
+            symbol_id,
+            price,
+            quantity,
+            bid,
+            ask,
+            volume,
+            timestamp,
+            is_buy,
+        }
+    }
+}
+
+impl From<demo_api::Trade> for Trade {
+    fn from(trade: demo_api::Trade) -> Self {
+        Self {
+            id: trade.id,
+            symbol_id: trade.symbol_id,
+            price: trade.price,
+            quantity: trade.quantity,
+            bid: trade.bid,
+            ask: trade.ask,
+            volume: trade.volume,
+            timestamp: trade.timestamp,
+            is_buy: trade.is_buy,
+        }
+    }
+}
+
+impl From<Trade> for demo_api::Trade {
+    fn from(trade: Trade) -> Self {
+        Self {
+            id: trade.id,
+            symbol_id: trade.symbol_id,
+            price: trade.price,
+            quantity: trade.quantity,
+            bid: trade.bid,
+            ask: trade.ask,
+            volume: trade.volume,
+            timestamp: trade.timestamp,
+            is_buy: trade.is_buy,
+        }
     }
 }
 
@@ -60,11 +145,63 @@ pub struct Particle {
 impl Particle {
     #[wasm_bindgen(constructor)]
     pub fn new(
-        id: i64, x: f64, y: f64, z: f64,
-        vx: f64, vy: f64, vz: f64,
-        mass: f64, charge: f64, active: bool
-    ) -> Particle {
-        Particle { id, x, y, z, vx, vy, vz, mass, charge, active }
+        id: i64,
+        x: f64,
+        y: f64,
+        z: f64,
+        vx: f64,
+        vy: f64,
+        vz: f64,
+        mass: f64,
+        charge: f64,
+        active: bool,
+    ) -> Self {
+        Self {
+            id,
+            x,
+            y,
+            z,
+            vx,
+            vy,
+            vz,
+            mass,
+            charge,
+            active,
+        }
+    }
+}
+
+impl From<demo_api::Particle> for Particle {
+    fn from(particle: demo_api::Particle) -> Self {
+        Self {
+            id: particle.id,
+            x: particle.x,
+            y: particle.y,
+            z: particle.z,
+            vx: particle.vx,
+            vy: particle.vy,
+            vz: particle.vz,
+            mass: particle.mass,
+            charge: particle.charge,
+            active: particle.active,
+        }
+    }
+}
+
+impl From<Particle> for demo_api::Particle {
+    fn from(particle: Particle) -> Self {
+        Self {
+            id: particle.id,
+            x: particle.x,
+            y: particle.y,
+            z: particle.z,
+            vx: particle.vx,
+            vy: particle.vy,
+            vz: particle.vz,
+            mass: particle.mass,
+            charge: particle.charge,
+            active: particle.active,
+        }
     }
 }
 
@@ -85,10 +222,59 @@ pub struct SensorReading {
 impl SensorReading {
     #[wasm_bindgen(constructor)]
     pub fn new(
-        sensor_id: i64, timestamp: i64, temperature: f64, humidity: f64,
-        pressure: f64, light: f64, battery: f64, signal_strength: i32, is_valid: bool
-    ) -> SensorReading {
-        SensorReading { sensor_id, timestamp, temperature, humidity, pressure, light, battery, signal_strength, is_valid }
+        sensor_id: i64,
+        timestamp: i64,
+        temperature: f64,
+        humidity: f64,
+        pressure: f64,
+        light: f64,
+        battery: f64,
+        signal_strength: i32,
+        is_valid: bool,
+    ) -> Self {
+        Self {
+            sensor_id,
+            timestamp,
+            temperature,
+            humidity,
+            pressure,
+            light,
+            battery,
+            signal_strength,
+            is_valid,
+        }
+    }
+}
+
+impl From<demo_api::SensorReading> for SensorReading {
+    fn from(reading: demo_api::SensorReading) -> Self {
+        Self {
+            sensor_id: reading.sensor_id,
+            timestamp: reading.timestamp,
+            temperature: reading.temperature,
+            humidity: reading.humidity,
+            pressure: reading.pressure,
+            light: reading.light,
+            battery: reading.battery,
+            signal_strength: reading.signal_strength,
+            is_valid: reading.is_valid,
+        }
+    }
+}
+
+impl From<SensorReading> for demo_api::SensorReading {
+    fn from(reading: SensorReading) -> Self {
+        Self {
+            sensor_id: reading.sensor_id,
+            timestamp: reading.timestamp,
+            temperature: reading.temperature,
+            humidity: reading.humidity,
+            pressure: reading.pressure,
+            light: reading.light,
+            battery: reading.battery,
+            signal_strength: reading.signal_strength,
+            is_valid: reading.is_valid,
+        }
     }
 }
 
@@ -102,241 +288,676 @@ pub struct DataPoint {
 #[wasm_bindgen]
 impl DataPoint {
     #[wasm_bindgen(constructor)]
-    pub fn new(x: f64, y: f64, timestamp: i64) -> DataPoint {
-        DataPoint { x, y, timestamp }
+    pub fn new(x: f64, y: f64, timestamp: i64) -> Self {
+        Self { x, y, timestamp }
+    }
+}
+
+impl From<demo_api::DataPoint> for DataPoint {
+    fn from(point: demo_api::DataPoint) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+            timestamp: point.timestamp,
+        }
+    }
+}
+
+impl From<DataPoint> for demo_api::DataPoint {
+    fn from(point: DataPoint) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+            timestamp: point.timestamp,
+        }
     }
 }
 
 #[wasm_bindgen]
-pub fn noop() {}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+impl From<demo_api::Direction> for Direction {
+    fn from(direction: demo_api::Direction) -> Self {
+        match direction {
+            demo_api::Direction::North => Self::North,
+            demo_api::Direction::South => Self::South,
+            demo_api::Direction::East => Self::East,
+            demo_api::Direction::West => Self::West,
+        }
+    }
+}
+
+impl From<Direction> for demo_api::Direction {
+    fn from(direction: Direction) -> Self {
+        match direction {
+            Direction::North => Self::North,
+            Direction::South => Self::South,
+            Direction::East => Self::East,
+            Direction::West => Self::West,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProfilePayload {
+    id: i64,
+    name: String,
+    email: String,
+    bio: String,
+    age: i32,
+    score: f64,
+    tags: Vec<String>,
+    scores: Vec<i32>,
+    is_active: bool,
+}
+
+impl From<demo_api::BenchmarkUserProfile> for UserProfilePayload {
+    fn from(profile: demo_api::BenchmarkUserProfile) -> Self {
+        Self {
+            id: profile.id,
+            name: profile.name,
+            email: profile.email,
+            bio: profile.bio,
+            age: profile.age,
+            score: profile.score,
+            tags: profile.tags,
+            scores: profile.scores,
+            is_active: profile.is_active,
+        }
+    }
+}
+
+impl From<UserProfilePayload> for demo_api::BenchmarkUserProfile {
+    fn from(profile: UserProfilePayload) -> Self {
+        Self {
+            id: profile.id,
+            name: profile.name,
+            email: profile.email,
+            bio: profile.bio,
+            age: profile.age,
+            score: profile.score,
+            tags: profile.tags,
+            scores: profile.scores,
+            is_active: profile.is_active,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "tag")]
+enum TaskStatusPayload {
+    Pending,
+    InProgress {
+        progress: i32,
+    },
+    Completed {
+        result: i32,
+    },
+    Failed {
+        #[serde(rename = "errorCode")]
+        error_code: i32,
+        #[serde(rename = "retryCount")]
+        retry_count: i32,
+    },
+}
+
+impl From<TaskStatusPayload> for demo_api::TaskStatus {
+    fn from(status: TaskStatusPayload) -> Self {
+        match status {
+            TaskStatusPayload::Pending => Self::Pending,
+            TaskStatusPayload::InProgress { progress } => Self::InProgress { progress },
+            TaskStatusPayload::Completed { result } => Self::Completed { result },
+            TaskStatusPayload::Failed {
+                error_code,
+                retry_count,
+            } => Self::Failed {
+                error_code,
+                retry_count,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DataPointPayload {
+    x: f64,
+    y: f64,
+    timestamp: i64,
+}
+
+impl From<DataPointPayload> for demo_api::DataPoint {
+    fn from(point: DataPointPayload) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+            timestamp: point.timestamp,
+        }
+    }
+}
+
+fn deserialize_js<T>(value: JsValue, label: &str) -> T
+where
+    T: DeserializeOwned,
+{
+    serde_wasm_bindgen::from_value(value).unwrap_or_else(|error| panic!("invalid {label}: {error}"))
+}
+
+fn serialize_js<T>(value: &T, label: &str) -> JsValue
+where
+    T: Serialize,
+{
+    serde_wasm_bindgen::to_value(value)
+        .unwrap_or_else(|error| panic!("failed to serialize {label}: {error}"))
+}
+
+#[wasm_bindgen]
+extern "C" {
+    pub type JsDataProvider;
+
+    #[wasm_bindgen(method, js_name = getCount)]
+    fn get_count(this: &JsDataProvider) -> u32;
+
+    #[wasm_bindgen(method, js_name = getItem)]
+    fn get_item(this: &JsDataProvider, index: u32) -> JsValue;
+}
+
+struct DataProviderBridge {
+    provider: JsValue,
+}
+
+impl DataProviderBridge {
+    fn new(provider: JsValue) -> Self {
+        Self { provider }
+    }
+}
+
+unsafe impl Send for DataProviderBridge {}
+unsafe impl Sync for DataProviderBridge {}
+
+impl demo_api::DataProvider for DataProviderBridge {
+    fn get_count(&self) -> u32 {
+        self.provider.unchecked_ref::<JsDataProvider>().get_count()
+    }
+
+    fn get_item(&self, index: u32) -> demo_api::DataPoint {
+        let item = self
+            .provider
+            .unchecked_ref::<JsDataProvider>()
+            .get_item(index);
+        let point: DataPointPayload = deserialize_js(item, "data point");
+        point.into()
+    }
+}
+
+#[wasm_bindgen]
+pub fn noop() {
+    demo_api::noop()
+}
 
 #[wasm_bindgen]
 pub fn echo_i32(value: i32) -> i32 {
-    value
+    demo_api::echo_i32(value)
+}
+
+#[wasm_bindgen]
+pub fn echo_bool(value: bool) -> bool {
+    demo_api::echo_bool(value)
 }
 
 #[wasm_bindgen]
 pub fn echo_f64(value: f64) -> f64 {
-    value
+    demo_api::echo_f64(value)
+}
+
+#[wasm_bindgen]
+pub fn negate_bool(value: bool) -> bool {
+    demo_api::negate_bool(value)
 }
 
 #[wasm_bindgen]
 pub fn echo_string(value: &str) -> String {
-    value.to_string()
+    demo_api::echo_string(value.to_owned())
+}
+
+#[wasm_bindgen]
+pub fn echo_bytes(data: Vec<u8>) -> Vec<u8> {
+    demo_api::echo_bytes(data)
 }
 
 #[wasm_bindgen]
 pub fn add(a: i32, b: i32) -> i32 {
-    a + b
+    demo_api::add(a, b)
+}
+
+#[wasm_bindgen]
+pub fn add_f64(a: f64, b: f64) -> f64 {
+    demo_api::add_f64(a, b)
 }
 
 #[wasm_bindgen]
 pub fn multiply(a: f64, b: f64) -> f64 {
-    a * b
+    demo_api::multiply(a, b)
 }
 
 #[wasm_bindgen]
 pub fn generate_string(size: i32) -> String {
-    "x".repeat(size as usize)
+    demo_api::generate_string(size)
+}
+
+#[wasm_bindgen]
+pub fn echo_vec_i32(values: Vec<i32>) -> Vec<i32> {
+    demo_api::echo_vec_i32(values)
 }
 
 #[wasm_bindgen]
 pub fn generate_locations(count: i32) -> Vec<Location> {
-    (0..count)
-        .map(|i| Location {
-            id: i as i64,
-            lat: 37.7749 + (i as f64 * 0.001),
-            lng: -122.4194 + (i as f64 * 0.001),
-            rating: 3.0 + ((i % 20) as f64 * 0.1),
-            review_count: 10 + (i * 5),
-            is_open: i % 2 == 0,
-        })
+    demo_api::generate_locations(count)
+        .into_iter()
+        .map(Location::from)
+        .collect()
+}
+
+#[wasm_bindgen]
+pub fn find_locations(count: i32) -> Vec<Location> {
+    demo_api::find_locations(count)
+        .unwrap_or_default()
+        .into_iter()
+        .map(Location::from)
         .collect()
 }
 
 #[wasm_bindgen]
 pub fn sum_location_ratings(locations: Vec<Location>) -> f64 {
-    locations.iter().map(|l| l.rating).sum()
+    demo_api::sum_ratings(
+        locations
+            .into_iter()
+            .map(demo_api::Location::from)
+            .collect(),
+    )
+}
+
+#[wasm_bindgen]
+pub fn sum_ratings(locations: Vec<Location>) -> f64 {
+    sum_location_ratings(locations)
+}
+
+#[wasm_bindgen]
+pub fn process_locations(locations: Vec<Location>) -> i32 {
+    demo_api::process_locations(
+        locations
+            .into_iter()
+            .map(demo_api::Location::from)
+            .collect(),
+    )
 }
 
 #[wasm_bindgen]
 pub fn generate_trades(count: i32) -> Vec<Trade> {
-    (0..count)
-        .map(|i| Trade {
-            id: i as i64,
-            symbol_id: i % 500,
-            price: 100.0 + (i as f64 * 0.01),
-            quantity: (i as i64 % 1000) + 1,
-            bid: 99.95 + (i as f64 * 0.01),
-            ask: 100.05 + (i as f64 * 0.01),
-            volume: (i as i64) * 1000,
-            timestamp: 1700000000000 + (i as i64 * 1000),
-            is_buy: i % 2 == 0,
-        })
+    demo_api::generate_trades(count)
+        .into_iter()
+        .map(Trade::from)
         .collect()
 }
 
 #[wasm_bindgen]
 pub fn sum_trade_volumes(trades: Vec<Trade>) -> i64 {
-    trades.iter().map(|t| t.volume).sum()
+    demo_api::sum_trade_volumes(trades.into_iter().map(demo_api::Trade::from).collect())
 }
 
 #[wasm_bindgen]
 pub fn generate_particles(count: i32) -> Vec<Particle> {
-    (0..count)
-        .map(|i| Particle {
-            id: i as i64,
-            x: (i as f64) * 0.1,
-            y: (i as f64) * 0.2,
-            z: (i as f64) * 0.3,
-            vx: (i as f64) * 0.01,
-            vy: (i as f64) * 0.02,
-            vz: (i as f64) * 0.03,
-            mass: 1.0 + (i as f64 * 0.001),
-            charge: if i % 2 == 0 { 1.0 } else { -1.0 },
-            active: i % 10 != 0,
-        })
+    demo_api::generate_particles(count)
+        .into_iter()
+        .map(Particle::from)
         .collect()
 }
 
 #[wasm_bindgen]
 pub fn sum_particle_masses(particles: Vec<Particle>) -> f64 {
-    particles.iter().map(|p| p.mass).sum()
+    demo_api::sum_particle_masses(
+        particles
+            .into_iter()
+            .map(demo_api::Particle::from)
+            .collect(),
+    )
 }
 
 #[wasm_bindgen]
 pub fn generate_sensor_readings(count: i32) -> Vec<SensorReading> {
-    (0..count)
-        .map(|i| SensorReading {
-            sensor_id: (i % 100) as i64,
-            timestamp: 1700000000000 + (i as i64 * 100),
-            temperature: 20.0 + ((i % 30) as f64),
-            humidity: 40.0 + ((i % 40) as f64),
-            pressure: 1013.25 + ((i % 20) as f64),
-            light: (i % 1000) as f64,
-            battery: 100.0 - ((i % 100) as f64),
-            signal_strength: -50 - (i % 50),
-            is_valid: i % 20 != 0,
-        })
+    demo_api::generate_sensor_readings(count)
+        .into_iter()
+        .map(SensorReading::from)
         .collect()
 }
 
 #[wasm_bindgen]
 pub fn avg_sensor_temperature(readings: Vec<SensorReading>) -> f64 {
-    let sum: f64 = readings.iter().map(|r| r.temperature).sum();
-    sum / readings.len() as f64
+    demo_api::avg_sensor_temperature(
+        readings
+            .into_iter()
+            .map(demo_api::SensorReading::from)
+            .collect(),
+    )
 }
 
 #[wasm_bindgen]
 pub fn generate_bytes(size: i32) -> Vec<u8> {
-    vec![42u8; size as usize]
+    demo_api::generate_bytes(size)
 }
 
 #[wasm_bindgen]
 pub fn generate_i32_vec(count: i32) -> Vec<i32> {
-    (0..count).collect()
+    demo_api::generate_i32_vec(count)
 }
 
 #[wasm_bindgen]
 pub fn sum_i32_vec(values: Vec<i32>) -> i64 {
-    values.iter().map(|&v| v as i64).sum()
+    demo_api::sum_i32_vec(values)
 }
 
 #[wasm_bindgen]
 pub fn generate_f64_vec(count: i32) -> Vec<f64> {
-    (0..count).map(|i| i as f64 * 0.1).collect()
+    demo_api::generate_f64_vec(count)
 }
 
 #[wasm_bindgen]
 pub fn sum_f64_vec(values: Vec<f64>) -> f64 {
-    values.iter().sum()
+    demo_api::sum_f64_vec(values)
+}
+
+#[wasm_bindgen]
+pub fn inc_u64(mut values: Vec<u64>) -> Vec<u64> {
+    demo_api::inc_u64(&mut values);
+    values
+}
+
+#[wasm_bindgen]
+pub fn inc_u64_value(value: u64) -> u64 {
+    demo_api::inc_u64_value(value)
+}
+
+#[wasm_bindgen]
+pub fn opposite_direction(direction: Direction) -> Direction {
+    demo_api::opposite_direction(direction.into()).into()
+}
+
+#[wasm_bindgen]
+pub fn direction_to_degrees(direction: Direction) -> i32 {
+    demo_api::direction_to_degrees(direction.into())
+}
+
+#[wasm_bindgen]
+pub fn generate_directions(count: i32) -> Vec<Direction> {
+    demo_api::generate_directions(count)
+        .into_iter()
+        .map(Direction::from)
+        .collect()
+}
+
+#[wasm_bindgen]
+pub fn count_north(directions: Vec<Direction>) -> i32 {
+    demo_api::count_north(
+        directions
+            .into_iter()
+            .map(demo_api::Direction::from)
+            .collect(),
+    )
+}
+
+#[wasm_bindgen]
+pub fn echo_direction(direction: Direction) -> Direction {
+    demo_api::echo_direction(direction.into()).into()
+}
+
+#[wasm_bindgen]
+pub fn find_direction(id: i32) -> Option<Direction> {
+    demo_api::find_direction(id).map(Direction::from)
 }
 
 #[wasm_bindgen]
 pub struct Counter {
-    value: u64,
+    inner: demo_api::Counter,
 }
 
 #[wasm_bindgen]
 impl Counter {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Counter {
-        Counter { value: 0 }
+    pub fn new(initial: i32) -> Self {
+        Self {
+            inner: demo_api::Counter::new(initial),
+        }
+    }
+
+    pub fn increment(&self) {
+        self.inner.increment();
+    }
+
+    pub fn get(&self) -> i32 {
+        self.inner.get()
+    }
+
+    pub fn add(&self, amount: i32) {
+        self.inner.add(amount);
+    }
+
+    pub fn reset(&self) {
+        self.inner.reset();
+    }
+}
+
+#[wasm_bindgen]
+pub struct CounterSingleThreaded {
+    inner: demo_api::CounterSingleThreaded,
+}
+
+#[wasm_bindgen]
+impl CounterSingleThreaded {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: demo_api::CounterSingleThreaded::new(),
+        }
     }
 
     pub fn increment(&mut self) {
-        self.value += 1;
+        self.inner.increment();
     }
 
-    pub fn get(&self) -> u64 {
-        self.value
+    pub fn get(&self) -> i32 {
+        self.inner.get()
     }
 
-    pub fn set(&mut self, value: u64) {
-        self.value = value;
+    pub fn set(&mut self, value: i32) {
+        self.inner.set(value);
     }
 }
 
 #[wasm_bindgen]
 pub struct DataStore {
-    items: Vec<DataPoint>,
+    inner: demo_api::DataStore,
 }
 
 #[wasm_bindgen]
 impl DataStore {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> DataStore {
-        DataStore { items: Vec::new() }
+    pub fn new() -> Self {
+        Self {
+            inner: demo_api::DataStore::new(),
+        }
     }
 
-    pub fn add(&mut self, point: DataPoint) {
-        self.items.push(point);
+    pub fn add(&self, point: DataPoint) {
+        self.inner.add(point.into());
     }
 
-    pub fn add_parts(&mut self, x: f64, y: f64, timestamp: i64) {
-        self.items.push(DataPoint { x, y, timestamp });
+    pub fn add_parts(&self, x: f64, y: f64, timestamp: i64) {
+        self.inner.add_parts(x, y, timestamp);
     }
 
     pub fn len(&self) -> usize {
-        self.items.len()
+        self.inner.len()
     }
 
     pub fn sum(&self) -> f64 {
-        self.items.iter().map(|p| p.x + p.y).sum()
+        self.inner.sum()
     }
 }
 
 #[wasm_bindgen]
 pub struct Accumulator {
-    value: i64,
+    inner: demo_api::Accumulator,
 }
 
 #[wasm_bindgen]
 impl Accumulator {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Accumulator {
-        Accumulator { value: 0 }
+    pub fn new() -> Self {
+        Self {
+            inner: demo_api::Accumulator::new(),
+        }
     }
 
-    pub fn add(&mut self, amount: i64) {
-        self.value += amount;
+    pub fn add(&self, amount: i64) {
+        self.inner.add(amount);
     }
 
     pub fn get(&self) -> i64 {
-        self.value
+        self.inner.get()
+    }
+
+    pub fn reset(&self) {
+        self.inner.reset();
+    }
+}
+
+#[wasm_bindgen]
+pub struct AccumulatorSingleThreaded {
+    inner: demo_api::AccumulatorSingleThreaded,
+}
+
+#[wasm_bindgen]
+impl AccumulatorSingleThreaded {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: demo_api::AccumulatorSingleThreaded::new(),
+        }
+    }
+
+    pub fn add(&mut self, amount: i64) {
+        self.inner.add(amount);
+    }
+
+    pub fn get(&self) -> i64 {
+        self.inner.get()
     }
 
     pub fn reset(&mut self) {
-        self.value = 0;
+        self.inner.reset();
     }
+}
+
+#[wasm_bindgen]
+pub struct DataConsumer {
+    inner: demo_api::DataConsumer,
+}
+
+#[wasm_bindgen]
+impl DataConsumer {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: demo_api::DataConsumer::new(),
+        }
+    }
+
+    pub fn set_provider(&self, provider: JsValue) {
+        self.inner
+            .set_provider(Box::new(DataProviderBridge::new(provider)));
+    }
+
+    pub fn compute_sum(&self) -> u64 {
+        self.inner.compute_sum()
+    }
+}
+
+#[wasm_bindgen]
+pub fn generate_user_profiles(count: i32) -> JsValue {
+    let profiles: Vec<UserProfilePayload> = demo_api::generate_user_profiles(count)
+        .into_iter()
+        .map(UserProfilePayload::from)
+        .collect();
+    serialize_js(&profiles, "user profiles")
+}
+
+#[wasm_bindgen]
+pub fn sum_user_scores(users: JsValue) -> f64 {
+    let profiles: Vec<UserProfilePayload> = deserialize_js(users, "user profiles");
+    demo_api::sum_user_scores(
+        profiles
+            .into_iter()
+            .map(demo_api::BenchmarkUserProfile::from)
+            .collect(),
+    )
+}
+
+#[wasm_bindgen]
+pub fn count_active_users(users: JsValue) -> i32 {
+    let profiles: Vec<UserProfilePayload> = deserialize_js(users, "user profiles");
+    demo_api::count_active_users(
+        profiles
+            .into_iter()
+            .map(demo_api::BenchmarkUserProfile::from)
+            .collect(),
+    )
+}
+
+#[wasm_bindgen]
+pub fn get_status_progress(status: JsValue) -> i32 {
+    let status: TaskStatusPayload = deserialize_js(status, "task status");
+    demo_api::get_status_progress(status.into())
+}
+
+#[wasm_bindgen]
+pub fn is_status_complete(status: JsValue) -> bool {
+    let status: TaskStatusPayload = deserialize_js(status, "task status");
+    demo_api::is_status_complete(status.into())
 }
 
 #[wasm_bindgen]
 pub async fn async_add(a: i32, b: i32) -> i32 {
-    a + b
+    demo_api::async_add(a, b).await
+}
+
+#[wasm_bindgen]
+pub fn find_name(id: i32) -> Option<String> {
+    demo_api::find_name(id)
+}
+
+#[wasm_bindgen]
+pub fn find_names(count: i32) -> Vec<String> {
+    demo_api::find_names(count).unwrap_or_default()
+}
+
+#[wasm_bindgen]
+pub fn find_numbers(count: i32) -> Vec<i32> {
+    demo_api::find_numbers(count).unwrap_or_default()
 }
 
 #[wasm_bindgen]
 pub fn find_even(value: i32) -> Option<i32> {
-    if value % 2 == 0 { Some(value) } else { None }
+    demo_api::find_even(value)
+}
+
+#[wasm_bindgen]
+pub fn find_positive_f64(value: f64) -> Option<f64> {
+    demo_api::find_positive_f64(value)
 }

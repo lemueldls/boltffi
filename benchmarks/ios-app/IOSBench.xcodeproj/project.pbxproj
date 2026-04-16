@@ -3,23 +3,23 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
 		1FE14C1DAD9625BC48BFE11D /* IOSBenchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E86B4821568D83B97C55FC /* IOSBenchApp.swift */; };
 		4F1488A57922E60C229FA2E3 /* BenchUniffi in Frameworks */ = {isa = PBXBuildFile; productRef = 96FD1B915C550506B2979773 /* BenchUniffi */; };
-		6CC1DF49B012FC906770E3B7 /* BenchRiff in Frameworks */ = {isa = PBXBuildFile; productRef = 411A53A294FF9C3EFC284BD4 /* BenchRiff */; };
+		6CC1DF49B012FC906770E3B7 /* BenchBoltFFI in Frameworks */ = {isa = PBXBuildFile; productRef = 3F8AA48C2EA5472624A14A6B /* BenchBoltFFI */; };
 		BE2C382B4B3D47DC7EAC70FC /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FEC1F6D93CFC8AF1C67217E /* ContentView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		0B4D50E62082561E4E16C0A5 /* RiffPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RiffPackage; path = "../rust-riff/RiffPackage"; sourceTree = SOURCE_ROOT; };
 		0FEC1F6D93CFC8AF1C67217E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		16E86B4821568D83B97C55FC /* IOSBenchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSBenchApp.swift; sourceTree = "<group>"; };
 		27747111A7CD287CF8D98D9C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		294318DCD3AD91ABF2422870 /* UniffiPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = UniffiPackage; path = "../rust-uniffi/UniffiPackage"; sourceTree = SOURCE_ROOT; };
-		52FBEB00215417CB7836791F /* IOSBench.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = IOSBench.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		52FBEB00215417CB7836791F /* IOSBench.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IOSBench.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		ABE23F64F2E10B2B251BE54E /* BoltFFIPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = BoltFFIPackage; path = "../rust-boltffi/BoltFFIPackage"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -27,7 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				6CC1DF49B012FC906770E3B7 /* BenchRiff in Frameworks */,
+				6CC1DF49B012FC906770E3B7 /* BenchBoltFFI in Frameworks */,
 				4F1488A57922E60C229FA2E3 /* BenchUniffi in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -48,7 +48,7 @@
 		2D7342043916728BD6B52FFB /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				0B4D50E62082561E4E16C0A5 /* RiffPackage */,
+				ABE23F64F2E10B2B251BE54E /* BoltFFIPackage */,
 				294318DCD3AD91ABF2422870 /* UniffiPackage */,
 			);
 			name = Packages;
@@ -87,7 +87,7 @@
 			);
 			name = IOSBench;
 			packageProductDependencies = (
-				411A53A294FF9C3EFC284BD4 /* BenchRiff */,
+				3F8AA48C2EA5472624A14A6B /* BenchBoltFFI */,
 				96FD1B915C550506B2979773 /* BenchUniffi */,
 			);
 			productName = IOSBench;
@@ -119,9 +119,10 @@
 			mainGroup = 9E09B1EF54857D93D56A87F9;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				79137531D4259343444C8B95 /* XCLocalSwiftPackageReference "../rust-riff/RiffPackage" */,
+				BB563CA3E56C66DDD7B64316 /* XCLocalSwiftPackageReference "../rust-boltffi/BoltFFIPackage" */,
 				FAC4B70864B26A1917F5A586 /* XCLocalSwiftPackageReference "../rust-uniffi/UniffiPackage" */,
 			);
+			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -149,13 +150,12 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = YDDMUSGGM6;
 				INFOPLIST_FILE = App/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.riff.bench.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.boltffi.bench.ios;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -223,13 +223,12 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = YDDMUSGGM6;
 				INFOPLIST_FILE = App/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.riff.bench.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.boltffi.bench.ios;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -322,9 +321,9 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		79137531D4259343444C8B95 /* XCLocalSwiftPackageReference "../rust-riff/RiffPackage" */ = {
+		BB563CA3E56C66DDD7B64316 /* XCLocalSwiftPackageReference "../rust-boltffi/BoltFFIPackage" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "../rust-riff/RiffPackage";
+			relativePath = "../rust-boltffi/BoltFFIPackage";
 		};
 		FAC4B70864B26A1917F5A586 /* XCLocalSwiftPackageReference "../rust-uniffi/UniffiPackage" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -333,9 +332,9 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		411A53A294FF9C3EFC284BD4 /* BenchRiff */ = {
+		3F8AA48C2EA5472624A14A6B /* BenchBoltFFI */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = BenchRiff;
+			productName = BenchBoltFFI;
 		};
 		96FD1B915C550506B2979773 /* BenchUniffi */ = {
 			isa = XCSwiftPackageProductDependency;

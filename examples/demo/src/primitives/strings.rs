@@ -1,5 +1,6 @@
 use boltffi::*;
 
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 #[export]
 pub fn echo_string(v: String) -> String {
     v
@@ -24,4 +25,11 @@ pub fn string_is_empty(v: String) -> bool {
 #[export]
 pub fn repeat_string(v: String, count: u32) -> String {
     v.repeat(count as usize)
+}
+
+/// Generates a string filled with `x` characters.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn generate_string(size: i32) -> String {
+    "x".repeat(size.max(0) as usize)
 }

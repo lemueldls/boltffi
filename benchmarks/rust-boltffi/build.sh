@@ -3,6 +3,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$SCRIPT_DIR/../.."
+DEMO_DIR="$ROOT_DIR/examples/demo"
+BENCH_OVERLAY="$DEMO_DIR/boltffi.benchmark.toml"
 
 usage() {
     echo "Usage: $0 [--platform <apple|android>] [--skip-bench] [--release|--debug]"
@@ -61,9 +63,11 @@ if [[ "$PLATFORM" != "apple" && "$PLATFORM" != "android" ]]; then
     exit 1
 fi
 
-BOLTFFI_CLI="$ROOT_DIR/target/$BUILD_MODE/boltffi"
+BOLTFFI_CLI="$SCRIPT_DIR/target/$BUILD_MODE/boltffi"
 
-cd "$SCRIPT_DIR"
+export CARGO_TARGET_DIR="$SCRIPT_DIR/target"
+
+cd "$DEMO_DIR"
 
 echo "=== Building riff CLI ($BUILD_MODE) ==="
 if [[ "$BUILD_MODE" == "release" ]]; then
@@ -75,17 +79,16 @@ fi
 if [[ "$PLATFORM" == "apple" ]]; then
     echo "=== Building for Apple ==="
     if [[ "$BUILD_MODE" == "release" ]]; then
-        "$BOLTFFI_CLI" build apple --release
+        "$BOLTFFI_CLI" --overlay "$BENCH_OVERLAY" build apple --release
     else
-        "$BOLTFFI_CLI" build apple
+        "$BOLTFFI_CLI" --overlay "$BENCH_OVERLAY" build apple
     fi
 
     echo "=== Packaging Apple artifacts ==="
-    rm -rf ./BoltFFIPackage/Sources
     if [[ "$BUILD_MODE" == "release" ]]; then
-        "$BOLTFFI_CLI" pack apple --release --regenerate
+        "$BOLTFFI_CLI" --overlay "$BENCH_OVERLAY" pack apple --release --regenerate
     else
-        "$BOLTFFI_CLI" pack apple --regenerate
+        "$BOLTFFI_CLI" --overlay "$BENCH_OVERLAY" pack apple --regenerate
     fi
 
     if [[ "$SKIP_BENCH" == false ]]; then
@@ -106,26 +109,22 @@ if [[ "$PLATFORM" == "apple" ]]; then
     fi
 
 elif [[ "$PLATFORM" == "android" ]]; then
-    echo "=== Building Rust for host ==="
-    if [[ "$BUILD_MODE" == "release" ]]; then
-        cargo build --release --manifest-path "$SCRIPT_DIR/Cargo.toml"
-    else
-        cargo build --manifest-path "$SCRIPT_DIR/Cargo.toml"
-    fi
-
     echo "=== Building for Android targets ==="
     if [[ "$BUILD_MODE" == "release" ]]; then
-        "$BOLTFFI_CLI" build android --release
+        "$BOLTFFI_CLI" --overlay "$BENCH_OVERLAY" build android --release
     else
-        "$BOLTFFI_CLI" build android
+        "$BOLTFFI_CLI" --overlay "$BENCH_OVERLAY" build android
     fi
 
     echo "=== Packaging Android jniLibs ==="
     if [[ "$BUILD_MODE" == "release" ]]; then
-        "$BOLTFFI_CLI" pack android --release --regenerate
+        "$BOLTFFI_CLI" --overlay "$BENCH_OVERLAY" pack android --release --regenerate
     else
-        "$BOLTFFI_CLI" pack android --regenerate
+        "$BOLTFFI_CLI" --overlay "$BENCH_OVERLAY" pack android --regenerate
     fi
+
+    perl -0pi -e 's/DataPointReader\.read\(buffer, 0\)/DataPoint.decode(WireReader(buffer))/g' \
+        "$SCRIPT_DIR/dist/android/kotlin/com/example/bench_boltffi/Demo.kt"
 
     if [[ "$SKIP_BENCH" == false ]]; then
         echo "=== Running Kotlin bench ==="

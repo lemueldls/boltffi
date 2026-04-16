@@ -13,13 +13,28 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "SwiftBench",
+            name: "SwiftBenchBoltFFI",
             dependencies: [
                 .product(name: "Benchmark", package: "swift-benchmark"),
                 .product(name: "BenchBoltFFI", package: "BenchBoltFFI"),
+            ],
+            path: "Sources/BoltFFI"
+        ),
+        .executableTarget(
+            name: "SwiftBenchUniffi",
+            dependencies: [
+                .product(name: "Benchmark", package: "swift-benchmark"),
                 .product(name: "BenchUniffi", package: "BenchUniffi"),
             ],
-            path: "Sources"
+            path: "Sources/Uniffi"
+        ),
+        .executableTarget(
+            name: "SwiftBenchAsync",
+            dependencies: [
+                .product(name: "BenchBoltFFI", package: "BenchBoltFFI"),
+                .product(name: "BenchUniffi", package: "BenchUniffi"),
+            ],
+            path: "Sources/AsyncRunner"
         ),
     ]
 )

@@ -2,6 +2,7 @@ use boltffi::*;
 
 use crate::enums::c_style::Status;
 use crate::records::blittable::Point;
+use crate::results::ApiResult;
 
 #[export]
 pub fn echo_optional_string(v: Option<String>) -> Option<String> {
@@ -42,4 +43,47 @@ pub fn echo_optional_vec(v: Option<Vec<i32>>) -> Option<Vec<i32>> {
 #[export]
 pub fn optional_vec_length(v: Option<Vec<i32>>) -> Option<u32> {
     v.map(|vec| vec.len() as u32)
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn find_name(id: i32) -> Option<String> {
+    if id > 0 {
+        Some(format!("Name_{}", id))
+    } else {
+        None
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn find_numbers(count: i32) -> Option<Vec<i32>> {
+    if count > 0 {
+        Some((0..count).collect())
+    } else {
+        None
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn find_names(count: i32) -> Option<Vec<String>> {
+    if count > 0 {
+        Some((0..count).map(|index| format!("Name_{}", index)).collect())
+    } else {
+        None
+    }
+}
+
+#[export]
+pub fn find_api_result(code: i32) -> Option<ApiResult> {
+    match code {
+        0 => Some(ApiResult::Success),
+        1 => Some(ApiResult::ErrorCode(-1)),
+        2 => Some(ApiResult::ErrorWithData {
+            code: -1,
+            detail: -2,
+        }),
+        _ => None,
+    }
 }

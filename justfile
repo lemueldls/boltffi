@@ -104,6 +104,18 @@ check: fmt-check lint test
 # Benchmarks
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Audit benchmark harness names against the shared catalog
+bench-audit:
+    python3 benchmarks/scripts/audit_benchmark_catalog.py
+
+# Audit benchmark coverage against the callable exports in examples/demo
+bench-demo-audit:
+    python3 benchmarks/scripts/audit_demo_export_coverage.py
+
+# Render the machine-readable demo benchmark family plan
+bench-demo-plan:
+    python3 benchmarks/scripts/render_demo_benchmark_policy.py
+
 # Swift benchmark (macOS CLI) - builds xcframework and runs benchmark
 bench-swift:
     #!/usr/bin/env bash
@@ -167,10 +179,10 @@ bench-wasm:
     #!/usr/bin/env bash
     set -e
     echo "=== Building BoltFFI WASM ==="
-    cd benchmarks/rust-boltffi && cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- pack wasm --release --regenerate
+    cd examples/demo && CARGO_TARGET_DIR=../../benchmarks/rust-boltffi/target cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- --overlay boltffi.benchmark.toml pack wasm --release --regenerate
     
     echo "=== Building wasm-bindgen baseline ==="
-    cd ../rust-wasm-bindgen && cargo build --target wasm32-unknown-unknown --release
+    cd ../../benchmarks/rust-wasm-bindgen && cargo build --target wasm32-unknown-unknown --release
     wasm-bindgen --target experimental-nodejs-module --out-dir dist target/wasm32-unknown-unknown/release/bench_wasm_bindgen.wasm
     
     echo "=== Copying to benchmark runner ==="

@@ -35,6 +35,7 @@ pub fn echo_vec_status(values: Vec<Status>) -> Vec<Status> {
 }
 
 #[data]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Direction {
     #[default]
@@ -100,11 +101,13 @@ impl Direction {
     }
 }
 
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 #[export]
 pub fn echo_direction(d: Direction) -> Direction {
     d
 }
 
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 #[export]
 pub fn opposite_direction(d: Direction) -> Direction {
     match d {
@@ -112,5 +115,61 @@ pub fn opposite_direction(d: Direction) -> Direction {
         Direction::South => Direction::North,
         Direction::East => Direction::West,
         Direction::West => Direction::East,
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn direction_to_degrees(direction: Direction) -> i32 {
+    match direction {
+        Direction::North => 0,
+        Direction::East => 90,
+        Direction::South => 180,
+        Direction::West => 270,
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn generate_directions(count: i32) -> Vec<Direction> {
+    let directions = [
+        Direction::North,
+        Direction::East,
+        Direction::South,
+        Direction::West,
+    ];
+    (0..count as usize)
+        .map(|index| directions[index % directions.len()])
+        .collect()
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn count_north(directions: Vec<Direction>) -> i32 {
+    directions
+        .iter()
+        .filter(|direction| matches!(direction, Direction::North))
+        .count() as i32
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn find_direction(id: i32) -> Option<Direction> {
+    match id {
+        0 => Some(Direction::North),
+        1 => Some(Direction::East),
+        2 => Some(Direction::South),
+        3 => Some(Direction::West),
+        _ => None,
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn find_directions(count: i32) -> Option<Vec<Direction>> {
+    if count > 0 {
+        Some(generate_directions(count))
+    } else {
+        None
     }
 }

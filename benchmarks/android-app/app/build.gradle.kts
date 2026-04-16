@@ -35,8 +35,8 @@ android {
 
     sourceSets {
         named("main") {
-            java.srcDir("${projectDir}/../../rust-boltffi/dist/android/kotlin")
-            java.srcDir("${projectDir}/../../rust-uniffi/dist/kotlin")
+            kotlin.srcDir("${projectDir}/../../rust-boltffi/dist/android/kotlin")
+            kotlin.srcDir("${projectDir}/../../rust-uniffi/dist/kotlin")
         }
     }
 }

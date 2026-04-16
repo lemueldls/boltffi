@@ -25,12 +25,12 @@ fi
 if [ "$(uname)" == "Darwin" ]; then
     # Mac
     PLATFORM_INCLUDE="$JAVA_HOME/include/darwin"
-    LIBRARY_FILE=libbench_boltffi_jni.dylib
+    LIBRARY_FILE=libdemo_jni.dylib
     RPATH=-Wl,-rpath,@loader_path
 elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
     # Linux
     PLATFORM_INCLUDE="$JAVA_HOME/include/linux"
-    LIBRARY_FILE=libbench_boltffi_jni.so
+    LIBRARY_FILE=libdemo_jni.so
     RPATH=-Wl,-rpath,'$ORIGIN'
 else 
     echo "Can't determine system platform"
@@ -50,7 +50,7 @@ echo "Linking final library..."
 cc -shared \
     -o "$LIBRARY_FILE" \
     jni_glue.o \
-    -L. -lbench_boltffi \
+    -L. -ldemo \
     $RPATH
 
 rm -f jni_glue.o

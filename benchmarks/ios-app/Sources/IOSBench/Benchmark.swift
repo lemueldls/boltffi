@@ -61,8 +61,8 @@ public class Benchmarks {
     }
     
     public static func benchmarkCounterIncrement(iterations: Int) -> BenchmarkResult {
-        let boltffiCounter = BenchBoltFFI.Counter()
-        let uniffiCounter = BenchUniffi.Counter()
+        let boltffiCounter = BenchBoltFFI.Counter(initial: 0)
+        let uniffiCounter = BenchUniffi.Counter(initial: 0)
         
         let boltffiTime = measure(iterations: iterations) {
             boltffiCounter.increment()
@@ -70,7 +70,7 @@ public class Benchmarks {
         let uniffiTime = measure(iterations: iterations) {
             uniffiCounter.increment()
         }
-        return BenchmarkResult(name: "counter_increment (mutex)", boltffiTimeNs: boltffiTime, uniffiTimeNs: uniffiTime)
+        return BenchmarkResult(name: "counter_increment_mutex", boltffiTimeNs: boltffiTime, uniffiTimeNs: uniffiTime)
     }
     
     public static func benchmarkCounterIncrementSingleThreaded(iterations: Int) -> BenchmarkResult {
@@ -80,7 +80,7 @@ public class Benchmarks {
             counter.increment()
         }
         // No UniFFI equivalent - report same time to show it's BoltFFI-only
-        return BenchmarkResult(name: "counter_increment (single_threaded, BoltFFI-only)", boltffiTimeNs: boltffiTime, uniffiTimeNs: boltffiTime)
+        return BenchmarkResult(name: "counter_increment_single_threaded", boltffiTimeNs: boltffiTime, uniffiTimeNs: boltffiTime)
     }
     
     public static func benchmarkSumRatings1k(iterations: Int) -> BenchmarkResult {
@@ -143,11 +143,15 @@ public class Benchmarks {
     }
     
     public static func benchmarkDataEnumInput(iterations: Int) -> BenchmarkResult {
-        let status = BenchBoltFFI.TaskStatus.inProgress(progress: 50)
+        let boltffiStatus = BenchBoltFFI.TaskStatus.inProgress(progress: 50)
+        let uniffiStatus = BenchUniffi.TaskStatus.inProgress(progress: 50)
         let boltffiTime = measure(iterations: iterations) {
-            _ = BenchBoltFFI.getStatusProgress(status: status)
+            _ = BenchBoltFFI.getStatusProgress(status: boltffiStatus)
         }
-        return BenchmarkResult(name: "data_enum_input", boltffiTimeNs: boltffiTime, uniffiTimeNs: boltffiTime)
+        let uniffiTime = measure(iterations: iterations) {
+            _ = BenchUniffi.getStatusProgress(status: uniffiStatus)
+        }
+        return BenchmarkResult(name: "data_enum_input", boltffiTimeNs: boltffiTime, uniffiTimeNs: uniffiTime)
     }
     
     private static func measure(iterations: Int, _ block: () -> Void) -> UInt64 {

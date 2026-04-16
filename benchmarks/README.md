@@ -7,6 +7,11 @@ Performance comparison across platforms:
 
 All libraries wrap the exact same Rust code with identical public APIs, so the only variable is FFI overhead.
 
+The Rust source of truth is [`examples/demo`](/Users/alihilal/Documents/Per/mobiFFI/examples/demo). The current benchmark case catalog lives in [`benchmarks/scripts/benchmark_catalog.py`](/Users/alihilal/Documents/Per/mobiFFI/benchmarks/scripts/benchmark_catalog.py), but that catalog is now audited against the callable export inventory from [`benchmarks/scripts/demo_export_inventory.py`](/Users/alihilal/Documents/Per/mobiFFI/benchmarks/scripts/demo_export_inventory.py). Use:
+- `just bench-audit` to check harness names against the shared case catalog
+- `just bench-demo-audit` to check how much of the demo export surface is actually benchmarked
+- `just bench-demo-plan` to render the machine-readable benchmark family policy from [`benchmarks/scripts/demo_benchmark_policy.py`](/Users/alihilal/Documents/Per/mobiFFI/benchmarks/scripts/demo_benchmark_policy.py)
+
 ## Prerequisites
 
 ```bash

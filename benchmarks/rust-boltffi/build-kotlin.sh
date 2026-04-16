@@ -3,16 +3,22 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$SCRIPT_DIR/../.."
+DEMO_DIR="$ROOT_DIR/examples/demo"
 
-cd "$SCRIPT_DIR"
+export CARGO_TARGET_DIR="$SCRIPT_DIR/target"
 
-cargo build --lib --release
+cargo build --manifest-path "$DEMO_DIR/Cargo.toml" --lib --release
 
-rm -rf dist/android/kotlin dist/android/include dist/apple/include
+rm -rf "$SCRIPT_DIR/dist/android/kotlin" "$SCRIPT_DIR/dist/android/include"
 
-cargo run --manifest-path "$ROOT_DIR/Cargo.toml" -p boltffi_cli -- generate header
-cargo run --manifest-path "$ROOT_DIR/Cargo.toml" -p boltffi_cli -- generate kotlin
+cd "$DEMO_DIR"
+cargo run --manifest-path "$ROOT_DIR/Cargo.toml" -p boltffi_cli -- \
+    --overlay boltffi.benchmark.toml \
+    generate header \
+    --output ../../benchmarks/rust-boltffi/dist/android/include
+cargo run --manifest-path "$ROOT_DIR/Cargo.toml" -p boltffi_cli -- \
+    --overlay boltffi.benchmark.toml \
+    generate kotlin
 
-# Keep the Android include layout used by pack android and benchmark scripts.
-mkdir -p dist/android/include
-cp dist/apple/include/bench_boltffi.h dist/android/include/bench_boltffi.h
+perl -0pi -e 's/DataPointReader\.read\(buffer, 0\)/DataPoint.decode(WireReader(buffer))/g' \
+    "$SCRIPT_DIR/dist/android/kotlin/com/example/bench_boltffi/Demo.kt"

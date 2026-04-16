@@ -89,8 +89,13 @@ jmh {
 kotlin {
     sourceSets {
         named("main") {
-            kotlin.srcDir("${projectDir}/../rust-boltffi/dist/android/kotlin")
-            kotlin.srcDir("${projectDir}/../rust-uniffi/dist/kotlin")
+            kotlin.setSrcDirs(
+                listOf(
+                    "src/main/kotlin/com/example/bench_compare",
+                    "${projectDir}/../rust-boltffi/dist/android/kotlin",
+                    "${projectDir}/../rust-uniffi/dist/kotlin",
+                )
+            )
         }
     }
     jvmToolchain(25)

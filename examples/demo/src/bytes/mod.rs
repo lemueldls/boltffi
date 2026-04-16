@@ -1,6 +1,7 @@
 use boltffi::*;
 
 /// Returns the byte buffer unchanged.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 #[export]
 pub fn echo_bytes(data: Vec<u8>) -> Vec<u8> {
     data
@@ -24,4 +25,11 @@ pub fn make_bytes(len: u32) -> Vec<u8> {
 #[export]
 pub fn reverse_bytes(data: Vec<u8>) -> Vec<u8> {
     data.into_iter().rev().collect()
+}
+
+/// Benchmark helper that produces a fixed byte payload.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn generate_bytes(size: i32) -> Vec<u8> {
+    vec![42u8; size.max(0) as usize]
 }

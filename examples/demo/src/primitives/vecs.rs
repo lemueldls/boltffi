@@ -1,5 +1,6 @@
 use boltffi::*;
 
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 #[export]
 pub fn echo_vec_i32(v: Vec<i32>) -> Vec<i32> {
     v
@@ -57,6 +58,7 @@ pub fn echo_vec_f32(v: Vec<f32>) -> Vec<f32> {
 
 /// Sums all elements in the vector. Uses i64 to avoid overflow
 /// on large inputs.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 #[export]
 pub fn sum_vec_i32(v: Vec<i32>) -> i64 {
     v.iter().map(|&x| x as i64).sum()
@@ -90,4 +92,42 @@ pub fn make_range(start: i32, end: i32) -> Vec<i32> {
 #[export]
 pub fn reverse_vec_i32(v: Vec<i32>) -> Vec<i32> {
     v.into_iter().rev().collect()
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn generate_i32_vec(count: i32) -> Vec<i32> {
+    (0..count).collect()
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn sum_i32_vec(values: Vec<i32>) -> i64 {
+    values.iter().map(|&value| i64::from(value)).sum()
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn generate_f64_vec(count: i32) -> Vec<f64> {
+    (0..count).map(|index| f64::from(index) * 0.1).collect()
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn sum_f64_vec(values: Vec<f64>) -> f64 {
+    values.iter().sum()
+}
+
+/// BoltFFI benchmarks use the in-place slice form; UniFFI benchmarks use `inc_u64_value`.
+#[export]
+pub fn inc_u64(values: &mut [u64]) {
+    if let Some(first) = values.first_mut() {
+        *first += 1;
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[export]
+pub fn inc_u64_value(value: u64) -> u64 {
+    value + 1
 }

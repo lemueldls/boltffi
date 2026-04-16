@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     java
     id("me.champeau.jmh") version "0.7.2"
@@ -7,7 +9,8 @@ group = "com.example"
 version = "1.0-SNAPSHOT"
 
 val uniffiDir = "${projectDir}/../rust-uniffi/target/release"
-val nativePath = uniffiDir
+val boltffiJvmDir = "${projectDir}/../rust-boltffi/dist/java"
+val nativePath = listOf(uniffiDir, boltffiJvmDir).joinToString(File.pathSeparator)
 
 repositories {
     mavenCentral()
@@ -18,12 +21,19 @@ val buildUniffiJava by tasks.registering(Exec::class) {
     commandLine("../rust-uniffi/build-java.sh")
 }
 
+val buildBoltffiJava by tasks.registering(Exec::class) {
+    workingDir = projectDir
+    commandLine("../rust-boltffi/build-java.sh")
+}
+
 tasks.named("compileJava") {
     dependsOn(buildUniffiJava)
+    dependsOn(buildBoltffiJava)
 }
 
 tasks.matching { it.name.startsWith("jmh") }.configureEach {
     dependsOn(buildUniffiJava)
+    dependsOn(buildBoltffiJava)
 }
 
 tasks.named("jmh") {
@@ -64,6 +74,7 @@ java {
     sourceSets {
         named("main") {
             java.srcDir("${projectDir}/../rust-uniffi/dist/java")
+            java.srcDir("${projectDir}/../rust-boltffi/dist/java")
         }
     }
 }
