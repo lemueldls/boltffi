@@ -59,6 +59,11 @@ fn kotlin_type_for_type_expr(ty: &TypeExpr) -> String {
             },
             _ => format!("List<{}>", kotlin_type_for_type_expr(inner)),
         },
+        TypeExpr::Map { key, value } => format!(
+            "Map<{}, {}>",
+            kotlin_type_for_type_expr(key),
+            kotlin_type_for_type_expr(value)
+        ),
         TypeExpr::Option(inner) => format!("{}?", kotlin_type_for_type_expr(inner)),
         TypeExpr::Result { ok, err } => format!(
             "BoltFFIResult<{}, {}>",
@@ -137,6 +142,20 @@ pub fn emit_size_expr(size: &SizeExpr) -> String {
             inner,
             layout,
         } => emit_vec_size(&render_value(value), inner, layout),
+        SizeExpr::MapSize {
+            value,
+            key,
+            value_size,
+            ..
+        } => {
+            let v = render_value(value);
+            let key_expr = emit_size_expr(key);
+            let value_expr = emit_size_expr(value_size);
+            format!(
+                "(4 + {}.entries.sumOf {{ (key, value) -> (({}) + ({})).toInt() }})",
+                v, key_expr, value_expr
+            )
+        }
         SizeExpr::ResultSize { value, ok, err } => {
             let v = render_value(value);
             let ok_expr = emit_size_expr(ok);
@@ -227,6 +246,14 @@ pub fn emit_reader_read(seq: &ReadSeq) -> String {
             layout,
             ..
         } => emit_reader_vec(element_type, element, layout),
+        ReadOp::Map { key, value, .. } => {
+            let key_expr = emit_reader_read(key);
+            let value_expr = emit_reader_read(value);
+            format!(
+                "run {{ val len = reader.readI32(); buildMap(len) {{ repeat(len) {{ put({}, {}) }} }} }}",
+                key_expr, value_expr
+            )
+        }
         ReadOp::Result { ok, err, .. } => {
             let ok_expr = emit_reader_read(ok);
             let err_expr = emit_reader_read(err);
@@ -323,6 +350,20 @@ pub fn emit_write_expr(seq: &WriteSeq) -> String {
             element,
             layout,
         } => emit_write_vec(&render_value(value), element_type, element, layout),
+        WriteOp::Map {
+            value,
+            key,
+            value_seq,
+            ..
+        } => {
+            let v = render_value(value);
+            let key_expr = emit_write_expr(key);
+            let value_expr = emit_write_expr(value_seq);
+            format!(
+                "wire.writeU32({}.size.toUInt()); {}.forEach {{ (key, value) -> {}; {} }}",
+                v, v, key_expr, value_expr
+            )
+        }
         WriteOp::Record { value, .. } => {
             format!("{}.wireEncodeTo(wire)", render_value(value))
         }

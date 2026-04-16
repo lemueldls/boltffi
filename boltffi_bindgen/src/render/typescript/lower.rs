@@ -2092,6 +2092,15 @@ fn infer_ts_type_from_read_ops(seq: &ReadSeq) -> String {
                     format!("{}[]", emit::ts_type(element_type))
                 }
             }
+            ReadOp::Map {
+                key_type,
+                value_type,
+                ..
+            } => format!(
+                "Map<{}, {}>",
+                emit::ts_type(key_type),
+                emit::ts_type(value_type)
+            ),
             ReadOp::Record { id, .. } => naming::to_upper_camel_case(id.as_str()),
             ReadOp::Enum { id, .. } => naming::to_upper_camel_case(id.as_str()),
             ReadOp::Result { ok, .. } => infer_ts_type_from_read_ops(ok),
@@ -2182,6 +2191,17 @@ fn remap_named_in_size(size: &SizeExpr) -> SizeExpr {
             inner: Box::new(remap_named_in_size(inner)),
             layout: layout.clone(),
         },
+        SizeExpr::MapSize {
+            value,
+            key,
+            value_size,
+            layout,
+        } => SizeExpr::MapSize {
+            value: remap_named_in_value(value),
+            key: Box::new(remap_named_in_size(key)),
+            value_size: Box::new(remap_named_in_size(value_size)),
+            layout: layout.clone(),
+        },
         SizeExpr::ResultSize { value, ok, err } => SizeExpr::ResultSize {
             value: remap_named_in_value(value),
             ok: Box::new(remap_named_in_size(ok)),
@@ -2216,6 +2236,21 @@ fn remap_named_in_write_op(op: &WriteOp) -> WriteOp {
             value: remap_named_in_value(value),
             element_type: element_type.clone(),
             element: Box::new(remap_named_to_field(element)),
+            layout: layout.clone(),
+        },
+        WriteOp::Map {
+            value,
+            key_type,
+            value_type,
+            key,
+            value_seq,
+            layout,
+        } => WriteOp::Map {
+            value: remap_named_in_value(value),
+            key_type: key_type.clone(),
+            value_type: value_type.clone(),
+            key: Box::new(remap_named_to_field(key)),
+            value_seq: Box::new(remap_named_to_field(value_seq)),
             layout: layout.clone(),
         },
         WriteOp::Record { id, value, fields } => WriteOp::Record {

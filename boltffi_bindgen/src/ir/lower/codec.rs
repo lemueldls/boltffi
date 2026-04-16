@@ -13,6 +13,11 @@ impl<'c> Lowerer<'c> {
                 element: Box::new(self.build_codec(inner)),
                 layout: self.vec_layout(inner),
             },
+            TypeExpr::Map { key, value } => CodecPlan::Map {
+                key: Box::new(self.build_codec(key)),
+                value: Box::new(self.build_codec(value)),
+                layout: self.map_layout(key, value),
+            },
             TypeExpr::Result { ok, err } => CodecPlan::Result {
                 ok: Box::new(self.build_codec(ok)),
                 err: Box::new(self.build_codec(err)),
@@ -180,6 +185,10 @@ impl<'c> Lowerer<'c> {
             },
             _ => VecLayout::Encoded,
         }
+    }
+
+    pub(super) fn map_layout(&self, _key: &TypeExpr, _value: &TypeExpr) -> MapLayout {
+        MapLayout::Encoded
     }
 
     pub(super) fn blittable_record_size(&self, definition: &RecordDef) -> usize {

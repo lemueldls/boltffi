@@ -204,6 +204,7 @@ pub enum Type {
     Slice(Box<Type>),
     MutSlice(Box<Type>),
     Vec(Box<Type>),
+    Map { key: Box<Type>, value: Box<Type> },
     Option(Box<Type>),
     Result { ok: Box<Type>, err: Box<Type> },
     Closure(ClosureSignature),
@@ -330,6 +331,7 @@ impl Type {
             Self::Bytes => "Bytes".into(),
             Self::Builtin(id) => id.type_id().into(),
             Self::Vec(inner) => format!("Vec{}", inner.type_id()),
+            Self::Map { key, value } => format!("Map{}To{}", key.type_id(), value.type_id()),
             Self::Option(inner) => format!("Opt{}", inner.type_id()),
             Self::Slice(inner) => format!("Slice{}", inner.type_id()),
             Self::MutSlice(inner) => format!("MutSlice{}", inner.type_id()),
@@ -350,9 +352,12 @@ impl CLayout for Type {
     fn c_layout(&self) -> Layout {
         match self {
             Self::Primitive(primitive) => primitive.c_layout(),
-            Self::String | Self::Bytes | Self::Vec(_) | Self::Slice(_) | Self::MutSlice(_) => {
-                Layout::new(24, 8)
-            }
+            Self::String
+            | Self::Bytes
+            | Self::Vec(_)
+            | Self::Map { .. }
+            | Self::Slice(_)
+            | Self::MutSlice(_) => Layout::new(24, 8),
             Self::Object(_) | Self::BoxedTrait(_) | Self::Closure(_) => Layout::new(8, 8),
             Self::Builtin(_) | Self::Record(_) | Self::Enum(_) | Self::Custom { .. } => {
                 Layout::new(8, 8)

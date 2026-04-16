@@ -2412,6 +2412,37 @@ fn rust_type_to_ffi_type(
                 return None;
             }
 
+            if ident == "HashMap" || ident == "BTreeMap" {
+                if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
+                    let mut args_iter = args.args.iter();
+                    if let (
+                        Some(syn::GenericArgument::Type(key_ty)),
+                        Some(syn::GenericArgument::Type(value_ty)),
+                    ) = (args_iter.next(), args_iter.next())
+                    {
+                        let key = rust_type_to_ffi_type(
+                            key_ty,
+                            registry,
+                            alias_resolver,
+                            compiler_canonical_types,
+                            self_type_name,
+                        )?;
+                        let value = rust_type_to_ffi_type(
+                            value_ty,
+                            registry,
+                            alias_resolver,
+                            compiler_canonical_types,
+                            self_type_name,
+                        )?;
+                        return Some(MType::Map {
+                            key: Box::new(key),
+                            value: Box::new(value),
+                        });
+                    }
+                }
+                return None;
+            }
+
             if ident == "Option" {
                 if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
                     && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
@@ -2610,6 +2641,24 @@ fn string_to_ffi_type(
                 compiler_canonical_types,
             )?)))
         }
+        s if is_map_type_name(s) => {
+            let inner = &s[s.find('<')? + 1..s.len() - 1];
+            let (key_inner, value_inner) = split_top_level_two_args(inner)?;
+            Some(MType::Map {
+                key: Box::new(string_to_ffi_type(
+                    key_inner.as_str(),
+                    registry,
+                    alias_resolver,
+                    compiler_canonical_types,
+                )?),
+                value: Box::new(string_to_ffi_type(
+                    value_inner.as_str(),
+                    registry,
+                    alias_resolver,
+                    compiler_canonical_types,
+                )?),
+            })
+        }
         s if s.starts_with("Option<") => {
             let inner = &s[7..s.len() - 1];
             Some(MType::Option(Box::new(string_to_ffi_type(
@@ -2660,6 +2709,38 @@ fn string_to_ffi_type(
                         .and_then(|name| registry.classify_type_spelling(name))
                 })
         }
+    }
+}
+
+fn is_map_type_name(s: &str) -> bool {
+    s.starts_with("HashMap<")
+        || s.starts_with("BTreeMap<")
+        || s.starts_with("std::collections::HashMap<")
+        || s.starts_with("std::collections::BTreeMap<")
+        || s.starts_with("alloc::collections::BTreeMap<")
+}
+
+fn split_top_level_two_args(input: &str) -> Option<(String, String)> {
+    let mut depth = 0usize;
+    let mut split_at = None;
+    for (index, ch) in input.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                split_at = Some(index);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let split_at = split_at?;
+    let left = input[..split_at].trim().to_string();
+    let right = input[split_at + 1..].trim().to_string();
+    if left.is_empty() || right.is_empty() {
+        None
+    } else {
+        Some((left, right))
     }
 }
 

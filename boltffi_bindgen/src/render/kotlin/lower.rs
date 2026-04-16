@@ -631,6 +631,17 @@ impl<'a> KotlinLowerer<'a> {
                 inner: Box::new(Self::strip_field_access_in_size(inner)),
                 layout: layout.clone(),
             },
+            SizeExpr::MapSize {
+                value,
+                key,
+                value_size,
+                layout,
+            } => SizeExpr::MapSize {
+                value: Self::strip_field_access_in_value(value),
+                key: Box::new(Self::strip_field_access_in_size(key)),
+                value_size: Box::new(Self::strip_field_access_in_size(value_size)),
+                layout: layout.clone(),
+            },
             SizeExpr::ResultSize { value, ok, err } => SizeExpr::ResultSize {
                 value: Self::strip_field_access_in_value(value),
                 ok: Box::new(Self::strip_field_access_in_size(ok)),
@@ -668,6 +679,21 @@ impl<'a> KotlinLowerer<'a> {
                 value: Self::strip_field_access_in_value(value),
                 element_type: element_type.clone(),
                 element: Box::new(self.strip_field_access_in_write_seq(element)),
+                layout: layout.clone(),
+            },
+            WriteOp::Map {
+                value,
+                key_type,
+                value_type,
+                key,
+                value_seq,
+                layout,
+            } => WriteOp::Map {
+                value: Self::strip_field_access_in_value(value),
+                key_type: key_type.clone(),
+                value_type: value_type.clone(),
+                key: Box::new(self.strip_field_access_in_write_seq(key)),
+                value_seq: Box::new(self.strip_field_access_in_write_seq(value_seq)),
                 layout: layout.clone(),
             },
             WriteOp::Record { id, value, fields } => WriteOp::Record {
@@ -1681,6 +1707,21 @@ impl<'a> KotlinLowerer<'a> {
                 len_offset: self.rebase_offset_expr(len_offset, old_base, new_base),
                 element_type: element_type.clone(),
                 element: Box::new(self.rebase_read_seq(element, old_base, new_base)),
+                layout: layout.clone(),
+            },
+            ReadOp::Map {
+                len_offset,
+                key_type,
+                value_type,
+                key,
+                value,
+                layout,
+            } => ReadOp::Map {
+                len_offset: self.rebase_offset_expr(len_offset, old_base, new_base),
+                key_type: key_type.clone(),
+                value_type: value_type.clone(),
+                key: Box::new(self.rebase_read_seq(key, old_base, new_base)),
+                value: Box::new(self.rebase_read_seq(value, old_base, new_base)),
                 layout: layout.clone(),
             },
             ReadOp::Record { id, offset, fields } => ReadOp::Record {
@@ -2843,6 +2884,13 @@ impl<'a> KotlinLowerer<'a> {
             }
             TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
             TypeExpr::Vec(inner) => self.kotlin_vec_type(inner),
+            TypeExpr::Map { key, value } => {
+                format!(
+                    "Map<{}, {}>",
+                    self.kotlin_type(key),
+                    self.kotlin_type(value)
+                )
+            }
             TypeExpr::Option(inner) => format!("{}?", self.kotlin_type(inner)),
             TypeExpr::Result { ok, err } => {
                 format!(
@@ -3046,6 +3094,15 @@ impl<'a> KotlinLowerer<'a> {
             ReadOp::Record { id, .. } => NamingConvention::class_name(id.as_str()),
             ReadOp::Enum { id, .. } => NamingConvention::class_name(id.as_str()),
             ReadOp::Vec { element_type, .. } => self.kotlin_vec_type(element_type),
+            ReadOp::Map {
+                key_type,
+                value_type,
+                ..
+            } => format!(
+                "Map<{}, {}>",
+                self.kotlin_type(key_type),
+                self.kotlin_type(value_type)
+            ),
             ReadOp::Option { some, .. } => format!("{}?", self.return_type_from_decode_ops(some)),
             ReadOp::Result { ok, .. } => self.return_type_from_decode_ops(ok),
             ReadOp::Custom { id, .. } => NamingConvention::class_name(id.as_str()),

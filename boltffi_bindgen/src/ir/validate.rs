@@ -183,6 +183,16 @@ fn reject_non_encodable_in_param(expr: &TypeExpr, context: &str) -> Result<(), V
                 reject_non_encodable_nested(inner, context)
             }
         }
+        TypeExpr::Map { key, value } => {
+            if !is_supported_map_key(key) {
+                return Err(ValidationError::NonEncodableInData {
+                    context: context.to_string(),
+                    message: "Map keys must be String or primitive scalars".to_string(),
+                });
+            }
+            reject_non_encodable_nested(key, context)?;
+            reject_non_encodable_nested(value, context)
+        }
         TypeExpr::Result { ok, err } => {
             reject_non_encodable_in_param(ok, context)?;
             reject_non_encodable_in_param(err, context)
@@ -203,6 +213,10 @@ fn reject_non_encodable_nested(expr: &TypeExpr, context: &str) -> Result<(), Val
         }),
         TypeExpr::Vec(inner) | TypeExpr::Option(inner) => {
             reject_non_encodable_nested(inner, context)
+        }
+        TypeExpr::Map { key, value } => {
+            reject_non_encodable_nested(key, context)?;
+            reject_non_encodable_nested(value, context)
         }
         TypeExpr::Result { ok, err } => {
             reject_non_encodable_nested(ok, context)?;
@@ -334,6 +348,10 @@ fn validate_type_expr(expr: &TypeExpr, catalog: &TypeCatalog) -> Result<(), Stri
             .resolve_class(id)
             .map(|_| ())
             .ok_or_else(|| format!("unresolved class handle: {}", id)),
+        TypeExpr::Map { key, value } => {
+            validate_type_expr(key, catalog)?;
+            validate_type_expr(value, catalog)
+        }
         TypeExpr::Vec(inner) | TypeExpr::Option(inner) => validate_type_expr(inner, catalog),
         TypeExpr::Result { ok, err } => {
             validate_type_expr(ok, catalog)?;
@@ -354,6 +372,16 @@ fn reject_non_encodable_in_data(expr: &TypeExpr, context: &str) -> Result<(), Va
         }),
         TypeExpr::Vec(inner) | TypeExpr::Option(inner) => {
             reject_non_encodable_in_data(inner, context)
+        }
+        TypeExpr::Map { key, value } => {
+            if !is_supported_map_key(key) {
+                return Err(ValidationError::NonEncodableInData {
+                    context: context.to_string(),
+                    message: "Map keys must be String or primitive scalars".to_string(),
+                });
+            }
+            reject_non_encodable_in_data(key, context)?;
+            reject_non_encodable_in_data(value, context)
         }
         TypeExpr::Result { ok, err } => {
             reject_non_encodable_in_data(ok, context)?;
@@ -413,8 +441,13 @@ fn is_wire_encodable(ty: &TypeExpr) -> bool {
         | TypeExpr::Enum(_)
         | TypeExpr::Custom(_)
         | TypeExpr::Builtin(_) => true,
+        TypeExpr::Map { key, value } => is_supported_map_key(key) && is_wire_encodable(value),
         TypeExpr::Option(inner) | TypeExpr::Vec(inner) => is_wire_encodable(inner),
         TypeExpr::Result { ok, err } => is_wire_encodable(ok) && is_wire_encodable(err),
         TypeExpr::Handle(_) | TypeExpr::Callback(_) => false,
     }
+}
+
+fn is_supported_map_key(ty: &TypeExpr) -> bool {
+    matches!(ty, TypeExpr::String | TypeExpr::Primitive(_))
 }

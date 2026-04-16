@@ -1279,6 +1279,9 @@ impl<'a> SwiftLowerer<'a> {
             CodecPlan::Record { id, .. } => self.swift_name_for_record(id),
             CodecPlan::Enum { id, .. } => self.swift_name_for_enum(id),
             CodecPlan::Vec { element, .. } => format!("[{}]", self.swift_type_from_codec(element)),
+            CodecPlan::Map { .. } => {
+                unimplemented!("Map codec lowering is not implemented in the Swift backend yet")
+            }
             CodecPlan::Option(inner) => format!("{}?", self.swift_type_from_codec(inner)),
             CodecPlan::Result { ok, err } => format!(
                 "Result<{}, {}>",
@@ -1717,6 +1720,21 @@ impl<'a> SwiftLowerer<'a> {
                 len_offset: self.rebase_offset_expr(len_offset, old_base, new_base),
                 element_type: element_type.clone(),
                 element: Box::new(self.rebase_read_seq(element, old_base, new_base)),
+                layout: layout.clone(),
+            },
+            ReadOp::Map {
+                len_offset,
+                key_type,
+                value_type,
+                key,
+                value,
+                layout,
+            } => ReadOp::Map {
+                len_offset: self.rebase_offset_expr(len_offset, old_base, new_base),
+                key_type: key_type.clone(),
+                value_type: value_type.clone(),
+                key: Box::new(self.rebase_read_seq(key, old_base, new_base)),
+                value: Box::new(self.rebase_read_seq(value, old_base, new_base)),
                 layout: layout.clone(),
             },
             ReadOp::Record { id, offset, fields } => ReadOp::Record {

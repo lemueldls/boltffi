@@ -12,6 +12,10 @@ pub enum TypeExpr {
     Bytes,
 
     Vec(Box<TypeExpr>),
+    Map {
+        key: Box<TypeExpr>,
+        value: Box<TypeExpr>,
+    },
     Option(Box<TypeExpr>),
     Result {
         ok: Box<TypeExpr>,

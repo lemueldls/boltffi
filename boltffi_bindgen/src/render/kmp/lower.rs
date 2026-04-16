@@ -8,7 +8,7 @@ use crate::ir::{
         AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiEnum, AbiEnumField, AbiEnumPayload,
         AbiStream, CallId, CallMode, StreamItemTransport,
     },
-    codec::{CodecPlan, EnumLayout, VariantPayloadLayout, VecLayout},
+    codec::{CodecPlan, EnumLayout, MapLayout, VariantPayloadLayout, VecLayout},
     contract::FfiContract,
     definitions::{
         CallbackMethodDef, CallbackTraitDef, ClassDef, DefaultValue, EnumDef, FieldDef,
@@ -132,6 +132,9 @@ impl<'a> KmpLowerer<'a> {
             TypeExpr::String => "String".to_string(),
             TypeExpr::Bytes => "ByteArray".to_string(),
             TypeExpr::Vec(inner) => format!("List<{}>", self.kotlin_type(inner)),
+            TypeExpr::Map { key, value } => {
+                format!("Map<{}, {}>", self.kotlin_type(key), self.kotlin_type(value))
+            }
             TypeExpr::Option(inner) => format!("{}?", self.kotlin_type(inner)),
             TypeExpr::Result { ok, err } => format!(
                 "BoltFFIResult<{}, {}>",
@@ -439,6 +442,13 @@ impl<'a> KmpLowerer<'a> {
                 let element_expr = self.wire_read_expr(element);
                 format!("run {{ val len = reader.readI32(); List(len) {{ {element_expr} }} }}")
             }
+            ReadOp::Map { key, value, .. } => {
+                let key_expr = self.wire_read_expr(key);
+                let value_expr = self.wire_read_expr(value);
+                format!(
+                    "run {{ val len = reader.readI32(); buildMap(len) {{ repeat(len) {{ put({key_expr}, {value_expr}) }} }} }}"
+                )
+            }
             ReadOp::Record { id, .. } => {
                 format!("{}(reader)", Self::record_decode_helper_name(id.as_str()))
             }
@@ -486,6 +496,13 @@ impl<'a> KmpLowerer<'a> {
             CodecPlan::Vec { element, .. } => {
                 let item_expr = self.wire_read_codec_expr(element);
                 format!("run {{ val len = reader.readI32(); List(len) {{ {item_expr} }} }}")
+            }
+            CodecPlan::Map { key, value, .. } => {
+                let key_expr = self.wire_read_codec_expr(key);
+                let value_expr = self.wire_read_codec_expr(value);
+                format!(
+                    "run {{ val len = reader.readI32(); buildMap(len) {{ repeat(len) {{ put({key_expr}, {value_expr}) }} }} }}"
+                )
             }
             CodecPlan::Result { ok, err } => {
                 let ok_expr = self.wire_read_codec_expr(ok);
@@ -856,6 +873,15 @@ impl<'a> KmpLowerer<'a> {
             Some(WriteOp::Vec { element_type, .. }) => {
                 format!("List<{}>", Self::kmp_type_for_type_expr(element_type))
             }
+            Some(WriteOp::Map {
+                key_type,
+                value_type,
+                ..
+            }) => format!(
+                "Map<{}, {}>",
+                Self::kmp_type_for_type_expr(key_type),
+                Self::kmp_type_for_type_expr(value_type)
+            ),
             Some(WriteOp::Option { some, .. }) => {
                 format!("{}?", Self::kmp_type_for_write_seq(some))
             }
@@ -874,6 +900,11 @@ impl<'a> KmpLowerer<'a> {
             TypeExpr::String => "String".to_string(),
             TypeExpr::Bytes => "ByteArray".to_string(),
             TypeExpr::Vec(inner) => format!("List<{}>", Self::kmp_type_for_type_expr(inner)),
+            TypeExpr::Map { key, value } => format!(
+                "Map<{}, {}>",
+                Self::kmp_type_for_type_expr(key),
+                Self::kmp_type_for_type_expr(value)
+            ),
             TypeExpr::Option(inner) => format!("{}?", Self::kmp_type_for_type_expr(inner)),
             TypeExpr::Result { ok, err } => format!(
                 "BoltFFIResult<{}, {}>",
@@ -936,6 +967,17 @@ impl<'a> KmpLowerer<'a> {
                 inner,
                 layout,
             } => Self::kmp_emit_vec_size(&Self::kmp_render_value(value), inner, layout),
+            SizeExpr::MapSize {
+                value,
+                key,
+                value_size,
+                layout,
+            } => Self::kmp_emit_map_size(
+                &Self::kmp_render_value(value),
+                key,
+                value_size,
+                layout,
+            ),
             SizeExpr::ResultSize { value, ok, err } => {
                 let v = Self::kmp_render_value(value);
                 let ok_expr = Self::kmp_emit_size_expr(ok);
@@ -1000,6 +1042,18 @@ impl<'a> KmpLowerer<'a> {
                 element,
                 layout,
             ),
+            WriteOp::Map {
+                value,
+                key,
+                value_seq,
+                layout,
+                ..
+            } => Self::kmp_emit_write_map(
+                &Self::kmp_render_value(value),
+                key,
+                value_seq,
+                layout,
+            ),
             WriteOp::Record { value, .. } => {
                 format!("{}.wireEncodeTo(wire)", Self::kmp_render_value(value))
             }
@@ -1056,6 +1110,19 @@ impl<'a> KmpLowerer<'a> {
         }
     }
 
+    fn kmp_emit_map_size(
+        value: &str,
+        key: &SizeExpr,
+        value_size: &SizeExpr,
+        _layout: &MapLayout,
+    ) -> String {
+        let key_expr = Self::kmp_emit_size_expr(key);
+        let value_expr = Self::kmp_emit_size_expr(value_size);
+        format!(
+            "(4 + {value}.entries.sumOf {{ (key, value) -> (({key_expr}) + ({value_expr})).toLong() }}.toInt())"
+        )
+    }
+
     fn kmp_emit_write_vec(
         value: &str,
         element_type: &TypeExpr,
@@ -1085,6 +1152,19 @@ impl<'a> KmpLowerer<'a> {
                 )
             }
         }
+    }
+
+    fn kmp_emit_write_map(
+        value: &str,
+        key_seq: &WriteSeq,
+        value_seq: &WriteSeq,
+        _layout: &MapLayout,
+    ) -> String {
+        let key_write = Self::kmp_emit_write_expr(key_seq);
+        let value_write = Self::kmp_emit_write_expr(value_seq);
+        format!(
+            "wire.writeU32({value}.size.toUInt()); {value}.forEach {{ (key, value) -> {key_write}; {value_write} }}"
+        )
     }
 
     fn wire_primitive_read_expr(primitive: PrimitiveType) -> String {

@@ -330,6 +330,7 @@ impl<'c> Lowerer<'c> {
                 },
                 _ => ParamValueStrategy::WireEncoded(WireParamStrategy::Vec),
             },
+            TypeExpr::Map { .. } => ParamValueStrategy::WireEncoded(WireParamStrategy::SingleValue),
             TypeExpr::Handle(_) => ParamValueStrategy::ObjectHandle { nullable: false },
             TypeExpr::Option(inner) => match inner.as_ref() {
                 TypeExpr::Handle(_) => ParamValueStrategy::ObjectHandle { nullable: true },
@@ -396,6 +397,9 @@ impl<'c> Lowerer<'c> {
                 },
                 _ => Transport::Span(SpanContent::Encoded(self.build_codec(type_expr))),
             },
+            TypeExpr::Map { .. } => {
+                Transport::Span(SpanContent::Encoded(self.build_codec(type_expr)))
+            }
             TypeExpr::Handle(class_id) => Transport::Handle {
                 class_id: class_id.clone(),
                 nullable: false,

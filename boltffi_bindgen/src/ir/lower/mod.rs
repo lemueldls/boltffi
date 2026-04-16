@@ -15,7 +15,7 @@ use crate::ir::abi::{
     ErrorTransport, ParamRole, ReturnShape, StreamItemTransport,
 };
 use crate::ir::codec::{
-    BlittableField, CodecPlan, EncodedField, EnumLayout, RecordLayout, VariantLayout,
+    BlittableField, CodecPlan, EncodedField, EnumLayout, MapLayout, RecordLayout, VariantLayout,
     VariantPayloadLayout, VecLayout,
 };
 use crate::ir::contract::FfiContract;

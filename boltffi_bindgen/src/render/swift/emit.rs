@@ -109,6 +109,9 @@ pub fn swift_type(type_expr: &TypeExpr) -> String {
                 format!("[{}]", swift_type(inner))
             }
         }
+        TypeExpr::Map { .. } => {
+            unimplemented!("Map is not implemented in the Swift backend yet")
+        }
         TypeExpr::Result { ok, err } => {
             format!(
                 "Result<{}, {}>",
@@ -360,6 +363,9 @@ pub fn emit_size_expr(size: &SizeExpr) -> String {
                 }
             }
         }
+        SizeExpr::MapSize { .. } => {
+            unimplemented!("Map size is not implemented in the Swift backend yet")
+        }
         SizeExpr::ResultSize { value, ok, err } => {
             let v = render_value(value);
             let ok_size = emit_size_expr(ok);
@@ -512,6 +518,9 @@ fn emit_read_op(op: &ReadOp, base_name: &str, base_expr: &str) -> (String, ReadR
                 }
             }
         }
+        ReadOp::Map { .. } => {
+            unimplemented!("Map decoding is not implemented in the Swift backend yet")
+        }
         ReadOp::Result {
             tag_offset,
             ok,
@@ -633,6 +642,9 @@ fn emit_write_data_op(op: &WriteOp) -> String {
                 }
             }
         }
+        WriteOp::Map { .. } => {
+            unimplemented!("Map encoding is not implemented in the Swift backend yet")
+        }
         WriteOp::Record { value, .. } => format!("{}.wireEncodeTo(&data)", render_value(value)),
         WriteOp::Enum { value, layout, .. } => {
             let v = render_value(value);
@@ -735,6 +747,9 @@ fn emit_write_bytes_op(op: &WriteOp) -> String {
                     )
                 }
             }
+        }
+        WriteOp::Map { .. } => {
+            unimplemented!("Map encoding is not implemented in the Swift backend yet")
         }
         WriteOp::Record { value, .. } => {
             format!("{}.wireEncodeToBytes(&bytes)", render_value(value))
@@ -881,6 +896,9 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
                 }
             }
         }
+        ReadOp::Map { .. } => {
+            unimplemented!("Map decoding is not implemented in the Swift backend yet")
+        }
         ReadOp::Record { id, .. } => {
             format!("{}.decode(from: &reader)", pascal_case(id.as_str()))
         }
@@ -982,6 +1000,9 @@ fn emit_writer_write_op(op: &WriteOp) -> String {
                     format!("writer.writeArray({}) {{ writer, item in {} }}", v, inner)
                 }
             }
+        }
+        WriteOp::Map { .. } => {
+            unimplemented!("Map encoding is not implemented in the Swift backend yet")
         }
         WriteOp::Record { value, .. } => format!("{}.encode(to: &writer)", render_value(value)),
         WriteOp::Enum { value, layout, .. } => {

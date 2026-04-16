@@ -128,6 +128,9 @@ pub fn type_expr_dart_type(ty: &TypeExpr) -> String {
             },
             _ => format!("List<{}>", type_expr_dart_type(inner)),
         },
+        TypeExpr::Map { key, value } => {
+            format!("Map<{}, {}>", type_expr_dart_type(key), type_expr_dart_type(value))
+        }
         TypeExpr::Option(inner) => format!("{}?", type_expr_dart_type(inner)),
         TypeExpr::Result { ok, err } => format!(
             "BoltFFIResult<{}, {}>",
@@ -401,6 +404,9 @@ pub fn emit_reader_read(seq: &ReadSeq) -> String {
             layout,
             ..
         } => emit_reader_vec(element_type, element, layout),
+        ReadOp::Map { .. } => {
+            unimplemented!("Map decoding is not implemented for the Dart backend yet")
+        }
         ReadOp::Result { ok, err, .. } => {
             let _ok_expr = emit_reader_read(ok);
             let _err_expr = emit_reader_read(err);

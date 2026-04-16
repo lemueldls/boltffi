@@ -159,6 +159,9 @@ pub fn ts_type(type_expr: &TypeExpr) -> String {
                 format!("{}[]", ts_type(inner))
             }
         }
+        TypeExpr::Map { key, value } => {
+            format!("Map<{}, {}>", ts_type(key), ts_type(value))
+        }
         TypeExpr::Result { ok, .. } => ts_type(ok),
         TypeExpr::Record(id) => to_pascal_case(id.as_str()),
         TypeExpr::Enum(id) => to_pascal_case(id.as_str()),
@@ -272,6 +275,11 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
                 format!("reader.readArray(() => {inner})")
             }
         },
+        ReadOp::Map { key, value, .. } => {
+            let key_read = emit_reader_read(key);
+            let value_read = emit_reader_read(value);
+            format!("reader.readMap(() => {key_read}, () => {value_read})")
+        }
         ReadOp::Record { id, .. } => {
             format!("{}Codec.decode(reader)", to_pascal_case(id.as_str()))
         }
@@ -373,6 +381,19 @@ fn emit_writer_write_op(op: &WriteOp, w: &str, root_value: &str) -> String {
             let inner = emit_writer_write(element, w, "item");
             format!("{w}.writeArray({val}, (item) => {{ {inner} }})")
         }
+        WriteOp::Map {
+            value,
+            key,
+            value_seq,
+            ..
+        } => {
+            let val = render_value(value, root_value);
+            let key_write = emit_writer_write(key, w, "key");
+            let value_write = emit_writer_write(value_seq, w, "value");
+            format!(
+                "{w}.writeMap({val}, (key) => {{ {key_write} }}, (value) => {{ {value_write} }})"
+            )
+        }
         WriteOp::Record { id, value, .. } => {
             format!(
                 "{}Codec.encode({w}, {})",
@@ -463,6 +484,25 @@ pub fn emit_size_expr(size: &SizeExpr, root_value: &str) -> String {
                 }
             }
         }
+        SizeExpr::MapSize {
+            value,
+            key,
+            value_size,
+            layout: _,
+        } => {
+            let val = render_value(value, root_value);
+            let key_size = emit_size_expr(
+                &remap_size_root(key, ValueExpr::Var("value".into())),
+                "key",
+            );
+            let value_payload_size = emit_size_expr(
+                &remap_size_root(value_size, ValueExpr::Var("value".into())),
+                "value",
+            );
+            format!(
+                "(4 + Array.from({val}.entries()).reduce((acc, [key, value]) => acc + {key_size} + {value_payload_size}, 0))"
+            )
+        }
         SizeExpr::ResultSize { value, ok, err } => {
             let val = render_value(value, root_value);
             let ok_payload = format!(
@@ -516,6 +556,17 @@ fn remap_size_root(size: &SizeExpr, new_root: ValueExpr) -> SizeExpr {
         } => SizeExpr::VecSize {
             value: value.remap_root(new_root.clone()),
             inner: Box::new(remap_size_root(inner, new_root)),
+            layout: layout.clone(),
+        },
+        SizeExpr::MapSize {
+            value,
+            key,
+            value_size,
+            layout,
+        } => SizeExpr::MapSize {
+            value: value.remap_root(new_root.clone()),
+            key: Box::new(remap_size_root(key, new_root.clone())),
+            value_size: Box::new(remap_size_root(value_size, new_root)),
             layout: layout.clone(),
         },
         SizeExpr::ResultSize { value, ok, err } => SizeExpr::ResultSize {

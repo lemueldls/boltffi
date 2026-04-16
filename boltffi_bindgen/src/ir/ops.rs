@@ -8,7 +8,7 @@
 //! Backends walk these sequences and emit target-language code for each operation.
 //! They do not restructure or reinterpret the operations.
 
-use crate::ir::codec::{EnumLayout, VecLayout};
+use crate::ir::codec::{EnumLayout, MapLayout, VecLayout};
 use crate::ir::ids::{BuiltinId, CustomTypeId, EnumId, FieldName, RecordId};
 use crate::ir::types::{PrimitiveType, TypeExpr};
 
@@ -113,6 +113,13 @@ pub enum SizeExpr {
         inner: Box<SizeExpr>,
         layout: VecLayout,
     },
+    /// 4 bytes for entry count, plus the total size of all key/value pairs.
+    MapSize {
+        value: ValueExpr,
+        key: Box<SizeExpr>,
+        value_size: Box<SizeExpr>,
+        layout: MapLayout,
+    },
     /// 1 byte for the ok/err tag, plus the size of whichever branch is present.
     ResultSize {
         value: ValueExpr,
@@ -177,6 +184,14 @@ pub enum ReadOp {
         element: Box<ReadSeq>,
         layout: VecLayout,
     },
+    Map {
+        len_offset: OffsetExpr,
+        key_type: TypeExpr,
+        value_type: TypeExpr,
+        key: Box<ReadSeq>,
+        value: Box<ReadSeq>,
+        layout: MapLayout,
+    },
     Record {
         id: RecordId,
         offset: OffsetExpr,
@@ -223,6 +238,14 @@ pub enum WriteOp {
         element_type: TypeExpr,
         element: Box<WriteSeq>,
         layout: VecLayout,
+    },
+    Map {
+        value: ValueExpr,
+        key_type: TypeExpr,
+        value_type: TypeExpr,
+        key: Box<WriteSeq>,
+        value_seq: Box<WriteSeq>,
+        layout: MapLayout,
     },
     Record {
         id: RecordId,
@@ -315,6 +338,17 @@ fn remap_root_in_size(size: &SizeExpr, new_root: &ValueExpr) -> SizeExpr {
             inner: inner.clone(),
             layout: layout.clone(),
         },
+        SizeExpr::MapSize {
+            value,
+            key,
+            value_size,
+            layout,
+        } => SizeExpr::MapSize {
+            value: value.remap_root(new_root.clone()),
+            key: key.clone(),
+            value_size: value_size.clone(),
+            layout: layout.clone(),
+        },
         SizeExpr::ResultSize { value, ok, err } => SizeExpr::ResultSize {
             value: value.remap_root(new_root.clone()),
             ok: ok.clone(),
@@ -348,6 +382,21 @@ fn remap_root_in_op(op: &WriteOp, new_root: &ValueExpr) -> WriteOp {
             value: value.remap_root(new_root.clone()),
             element_type: element_type.clone(),
             element: element.clone(),
+            layout: layout.clone(),
+        },
+        WriteOp::Map {
+            value,
+            key_type,
+            value_type,
+            key,
+            value_seq,
+            layout,
+        } => WriteOp::Map {
+            value: value.remap_root(new_root.clone()),
+            key_type: key_type.clone(),
+            value_type: value_type.clone(),
+            key: key.clone(),
+            value_seq: value_seq.clone(),
             layout: layout.clone(),
         },
         WriteOp::Record { id, value, fields } => WriteOp::Record {

@@ -22,6 +22,11 @@ pub enum CodecPlan {
         element: Box<CodecPlan>,
         layout: VecLayout,
     },
+    Map {
+        key: Box<CodecPlan>,
+        value: Box<CodecPlan>,
+        layout: MapLayout,
+    },
     Result {
         ok: Box<CodecPlan>,
         err: Box<CodecPlan>,
@@ -53,6 +58,10 @@ impl From<&CodecPlan> for TypeExpr {
             CodecPlan::Vec { element, .. } => {
                 TypeExpr::Vec(Box::new(TypeExpr::from(element.as_ref())))
             }
+            CodecPlan::Map { key, value, .. } => TypeExpr::Map {
+                key: Box::new(TypeExpr::from(key.as_ref())),
+                value: Box::new(TypeExpr::from(value.as_ref())),
+            },
             CodecPlan::Result { ok, err } => TypeExpr::Result {
                 ok: Box::new(TypeExpr::from(ok.as_ref())),
                 err: Box::new(TypeExpr::from(err.as_ref())),
@@ -67,6 +76,11 @@ impl From<&CodecPlan> for TypeExpr {
 #[derive(Debug, Clone)]
 pub enum VecLayout {
     Blittable { element_size: usize },
+    Encoded,
+}
+
+#[derive(Debug, Clone)]
+pub enum MapLayout {
     Encoded,
 }
 

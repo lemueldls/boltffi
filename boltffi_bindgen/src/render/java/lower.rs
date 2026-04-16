@@ -2333,6 +2333,21 @@ impl<'a> JavaLowerer<'a> {
                 element: element.clone(),
                 layout: layout.clone(),
             },
+            WriteOp::Map {
+                value,
+                key_type,
+                value_type,
+                key,
+                value_seq,
+                layout,
+            } => WriteOp::Map {
+                value: Self::prefix_value(value, binding),
+                key_type: key_type.clone(),
+                value_type: value_type.clone(),
+                key: key.clone(),
+                value_seq: value_seq.clone(),
+                layout: layout.clone(),
+            },
         }
     }
 
@@ -2361,6 +2376,17 @@ impl<'a> JavaLowerer<'a> {
             } => SizeExpr::VecSize {
                 value: Self::prefix_value(value, binding),
                 inner: Box::new(Self::prefix_size_expr(inner, binding)),
+                layout: layout.clone(),
+            },
+            SizeExpr::MapSize {
+                value,
+                key,
+                value_size,
+                layout,
+            } => SizeExpr::MapSize {
+                value: Self::prefix_value(value, binding),
+                key: Box::new(Self::prefix_size_expr(key, binding)),
+                value_size: Box::new(Self::prefix_size_expr(value_size, binding)),
                 layout: layout.clone(),
             },
             SizeExpr::ResultSize { value, ok, err } => SizeExpr::ResultSize {

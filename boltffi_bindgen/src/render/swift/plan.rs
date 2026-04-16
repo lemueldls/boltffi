@@ -578,6 +578,14 @@ fn uses_offset_in_read_op(op: &ReadOp) -> bool {
             element,
             ..
         } => offset_uses(len_offset) || uses_offset_in_read_seq(element),
+        ReadOp::Map {
+            len_offset,
+            key,
+            value,
+            ..
+        } => {
+            offset_uses(len_offset) || uses_offset_in_read_seq(key) || uses_offset_in_read_seq(value)
+        }
         ReadOp::Record { offset, .. } => offset_uses(offset),
         ReadOp::Enum { offset, .. } => offset_uses(offset),
         ReadOp::Result {

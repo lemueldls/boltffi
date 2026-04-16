@@ -254,6 +254,10 @@ impl DerivedTypeCollector {
             Type::Vec(inner) | Type::Option(inner) | Type::Slice(inner) | Type::MutSlice(inner) => {
                 self.visit(inner);
             }
+            Type::Map { key, value } => {
+                self.visit(key);
+                self.visit(value);
+            }
             Type::Result { ok, err } => {
                 self.visit(ok);
                 self.visit(err);

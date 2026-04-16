@@ -66,6 +66,18 @@ impl<'c> Lowerer<'c> {
                 }],
                 shape: WireShape::Sequence,
             },
+            CodecPlan::Map { key, value, layout } => ReadSeq {
+                size: SizeExpr::Runtime,
+                ops: vec![ReadOp::Map {
+                    len_offset: offset,
+                    key_type: TypeExpr::from(key.as_ref()),
+                    value_type: TypeExpr::from(value.as_ref()),
+                    key: Box::new(self.expand_decode_with_offset(key, "pos")),
+                    value: Box::new(self.expand_decode_with_offset(value, "pos")),
+                    layout: layout.clone(),
+                }],
+                shape: WireShape::Sequence,
+            },
             CodecPlan::Result { ok, err } => ReadSeq {
                 size: SizeExpr::Runtime,
                 ops: vec![ReadOp::Result {
@@ -236,6 +248,31 @@ impl<'c> Lowerer<'c> {
                         value: value.clone(),
                         element_type: TypeExpr::from(element.as_ref()),
                         element: Box::new(element_seq),
+                        layout: layout.clone(),
+                    }],
+                    shape: WireShape::Sequence,
+                }
+            }
+            CodecPlan::Map {
+                key,
+                value: value_codec,
+                layout,
+            } => {
+                let key_seq = self.expand_encode(key, ValueExpr::Var("key".into()));
+                let value_seq = self.expand_encode(value_codec, ValueExpr::Var("value".into()));
+                WriteSeq {
+                    size: SizeExpr::MapSize {
+                        value: value.clone(),
+                        key: Box::new(key_seq.size.clone()),
+                        value_size: Box::new(value_seq.size.clone()),
+                        layout: layout.clone(),
+                    },
+                    ops: vec![WriteOp::Map {
+                        value: value.clone(),
+                        key_type: TypeExpr::from(key.as_ref()),
+                        value_type: TypeExpr::from(value_codec.as_ref()),
+                        key: Box::new(key_seq),
+                        value_seq: Box::new(value_seq),
                         layout: layout.clone(),
                     }],
                     shape: WireShape::Sequence,
