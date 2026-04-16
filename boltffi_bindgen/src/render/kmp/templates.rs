@@ -468,6 +468,11 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
 
 #[cfg(all(test, not(miri)))]
 mod tests {
+    use std::env;
+    use std::fs;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
     use crate::render::kmp::plan::KmpParam;
 
@@ -1182,6 +1187,197 @@ mod tests {
         .unwrap();
 
         insta::assert_snapshot!(rendered);
+    }
+
+    fn compile_kotlin_sources_when_available(files: &[(&str, String)]) {
+        if Command::new("kotlinc").arg("-version").output().is_err() {
+            return;
+        }
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be monotonic")
+            .as_nanos();
+        let tmp_root = env::temp_dir().join(format!("boltffi-kmp-compile-{nanos}"));
+        fs::create_dir_all(&tmp_root).expect("should create temp kotlin directory");
+
+        let source_paths = files
+            .iter()
+            .map(|(name, source)| {
+                let path = tmp_root.join(name);
+                fs::write(&path, source).expect("should write generated kotlin source");
+                path
+            })
+            .collect::<Vec<_>>();
+
+        let out_jar = tmp_root.join("out.jar");
+        let status = Command::new("kotlinc")
+            .args(&source_paths)
+            .arg("-d")
+            .arg(&out_jar)
+            .status()
+            .expect("kotlinc should execute");
+
+        if !status.success() {
+            for (name, source) in files {
+                eprintln!("=== {name} ===\n{source}");
+            }
+        }
+
+        assert!(status.success(), "generated kotlin sources should compile");
+        let _ = fs::remove_dir_all(tmp_root);
+    }
+
+    #[test]
+    fn generated_kmp_common_sources_compile_with_kotlinc_when_available() {
+        let mut module = test_module();
+        if let Some(enumeration) = module.enums.first_mut() {
+            enumeration.encode_source = "fun Result.wireEncodedSize(): Int = 4 + when (this) {\n    is Result.Success -> 0\n}\n\nfun Result.wireEncodeTo(wire: boltffiWireWriter) {\n    when (this) {\n        is Result.Success -> wire.writeI32(0)\n    }\n}".to_string();
+        }
+        module.functions.push(KmpFunction {
+            public_name: "resultFn".to_string(),
+            ffi_symbol: "boltffi_result_fn".to_string(),
+            params: vec![KmpParam {
+                name: "value".to_string(),
+                kotlin_type: "Int".to_string(),
+            }],
+            return_type: Some("BoltFFIResult<Int, String>".to_string()),
+            is_async: false,
+        });
+        if let Some(class) = module.classes.first_mut() {
+            if let Some(stream) = class.streams.first_mut() {
+                stream.mode = KmpStreamMode::Batch;
+            }
+        }
+
+        let options = test_options();
+        let record_sources = module
+            .records
+            .iter()
+            .map(|record| {
+                let fields = record
+                    .fields
+                    .iter()
+                    .map(|field| KmpRecordFieldView {
+                        name: &field.name,
+                        kotlin_type: &field.kotlin_type,
+                        default_value: field.default_value.as_deref(),
+                    })
+                    .collect::<Vec<_>>();
+
+                RecordTemplate {
+                    class_name: &record.class_name,
+                    fields: &fields,
+                    encode_source: &record.encode_source,
+                    doc: record.doc.as_deref(),
+                }
+                .render()
+                .expect("record template should render")
+            })
+            .collect::<Vec<_>>();
+
+        let enum_sources = module
+            .enums
+            .iter()
+            .map(|enumeration| {
+                let variants = enumeration
+                    .variants
+                    .iter()
+                    .map(|variant| KmpEnumVariantView {
+                        name: variant.name.clone(),
+                        tag: variant.tag,
+                        fields: variant
+                            .fields
+                            .iter()
+                            .map(|field| KmpEnumFieldView {
+                                name: field.name.clone(),
+                                kotlin_type: field.kotlin_type.clone(),
+                            })
+                            .collect(),
+                        doc: variant.doc.clone(),
+                    })
+                    .collect::<Vec<_>>();
+
+                EnumTemplate {
+                    class_name: &enumeration.class_name,
+                    is_c_style: enumeration.is_c_style,
+                    is_error: enumeration.is_error,
+                    value_type: enumeration.value_type.as_deref(),
+                    variants: &variants,
+                    encode_source: &enumeration.encode_source,
+                    doc: enumeration.doc.as_deref(),
+                }
+                .render()
+                .expect("enum template should render")
+            })
+            .collect::<Vec<_>>();
+
+        let callback_sources = module
+            .callbacks
+            .iter()
+            .map(|callback| {
+                let method_sources = callback
+                    .methods
+                    .iter()
+                    .map(render_kmp_callback_method_signature)
+                    .collect::<Vec<_>>();
+
+                CallbackTraitTemplate {
+                    interface_name: &callback.interface_name,
+                    is_closure: callback.is_closure,
+                    doc: callback.doc.as_deref(),
+                    method_sources: &method_sources,
+                }
+                .render()
+                .expect("callback trait template should render")
+            })
+            .collect::<Vec<_>>();
+
+        let mut compile_common_source = CommonMainTemplate {
+            package_name: &options.package_name,
+            module_name: &options.module_name,
+            record_sources: &record_sources,
+            enum_sources: &enum_sources,
+            class_sources: &[],
+            callback_sources: &callback_sources,
+            uses_wire_writer: true,
+            uses_flow: false,
+            functions: &[],
+        }
+        .render()
+        .expect("compile common template should render");
+
+        if let Some(idx) =
+            compile_common_source.find(&format!("expect object {}", options.module_name))
+        {
+            compile_common_source.truncate(idx);
+        }
+
+        let stream_support = module
+            .classes
+            .iter()
+            .flat_map(|class| {
+                class
+                    .streams
+                    .iter()
+                    .filter_map(|stream| {
+                        render_kmp_stream_signature(&class.class_name, stream, false)
+                            .common_support_source
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let stream_support_source = format!(
+            "package {}\n\n{}\n",
+            options.package_name,
+            stream_support.join("\n\n")
+        );
+
+        compile_kotlin_sources_when_available(&[
+            ("CommonMain.kt", compile_common_source),
+            ("StreamSupport.kt", stream_support_source),
+        ]);
     }
 }
 

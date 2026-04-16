@@ -31,7 +31,7 @@ private object Utf8Codec {
 }
 
 {% if uses_wire_writer %}
-private class boltffiWireWriter(initialCapacity: Int = 256) {
+class boltffiWireWriter(initialCapacity: Int = 256) {
     private var buffer: ByteArray = ByteArray(initialCapacity)
     private var pos: Int = 0
 
@@ -256,6 +256,6 @@ private class boltffiWireWriter(initialCapacity: Int = 256) {
 {% endfor %}
 expect object {{ module_name }} {
 {% for function in functions -%}
-    expect {% if function.is_async %}suspend {% endif %}fun {{ function.public_name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {% match function.return_type %}{% when Some with (return_type) %}{{ return_type }}{% when None %}Unit{% endmatch %}
+    {% if function.is_async %}suspend {% endif %}fun {{ function.public_name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {% match function.return_type %}{% when Some with (return_type) %}{{ return_type }}{% when None %}Unit{% endmatch %}
 {% endfor %}
 }

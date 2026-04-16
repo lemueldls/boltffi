@@ -580,7 +580,10 @@ impl<'a> KmpLowerer<'a> {
             "SystemTime" => "reader.readInstant()".to_string(),
             "Uuid" => "reader.readUuid()".to_string(),
             "Url" => "reader.readUri()".to_string(),
-            _ => "reader.readString()".to_string(),
+            _ => format!(
+                "{}.decode(reader)",
+                NamingConvention::class_name(builtin_id.as_str())
+            ),
         }
     }
 
@@ -845,7 +848,7 @@ impl<'a> KmpLowerer<'a> {
                 "SystemTime" => "Instant".to_string(),
                 "Uuid" => "UUID".to_string(),
                 "Url" => "URI".to_string(),
-                _ => "String".to_string(),
+                _ => NamingConvention::class_name(id.as_str()),
             },
             Some(WriteOp::Record { id, .. }) => NamingConvention::class_name(id.as_str()),
             Some(WriteOp::Enum { id, .. }) => NamingConvention::class_name(id.as_str()),
@@ -887,7 +890,7 @@ impl<'a> KmpLowerer<'a> {
                 "SystemTime" => "Instant".to_string(),
                 "Uuid" => "UUID".to_string(),
                 "Url" => "URI".to_string(),
-                _ => "String".to_string(),
+                _ => NamingConvention::class_name(id.as_str()),
             },
             TypeExpr::Void => "Unit".to_string(),
         }
@@ -1033,7 +1036,7 @@ impl<'a> KmpLowerer<'a> {
                 "SystemTime" => format!("wire.writeInstant({})", Self::kmp_render_value(value)),
                 "Uuid" => format!("wire.writeUuid({})", Self::kmp_render_value(value)),
                 "Url" => format!("wire.writeUri({})", Self::kmp_render_value(value)),
-                _ => format!("wire.writeString({})", Self::kmp_render_value(value)),
+                _ => format!("{}.wireEncodeTo(wire)", Self::kmp_render_value(value)),
             },
             WriteOp::Custom { underlying, .. } => Self::kmp_emit_write_expr(underlying),
         }
