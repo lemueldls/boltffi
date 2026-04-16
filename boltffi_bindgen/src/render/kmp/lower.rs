@@ -8,17 +8,17 @@ use crate::ir::{
         AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiEnum, AbiEnumField, AbiEnumPayload,
         AbiStream, CallId, CallMode, StreamItemTransport,
     },
-    codec::{CodecPlan, EnumLayout, VariantPayloadLayout},
+    codec::{CodecPlan, EnumLayout, VariantPayloadLayout, VecLayout},
     contract::FfiContract,
     definitions::{
         CallbackMethodDef, CallbackTraitDef, ClassDef, DefaultValue, EnumDef, FieldDef,
         FunctionDef, MethodDef, RecordDef, ReturnDef, StreamDef, StreamMode,
     },
     ids::BuiltinId,
-    ops::{ReadOp, ReadSeq, WriteOp},
+    ops::{ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq},
     types::{PrimitiveType, TypeExpr},
 };
-use crate::render::kotlin::{NamingConvention, emit_size_expr_for_write_seq, emit_write_expr};
+use crate::render::kotlin::NamingConvention;
 use boltffi_ffi_rules::naming;
 use boltffi_ffi_rules::transport::EnumTagStrategy;
 
@@ -712,13 +712,13 @@ impl<'a> KmpLowerer<'a> {
         } else {
             fields
                 .iter()
-                .map(|field| emit_size_expr_for_write_seq(&field.seq))
+                .map(|field| Self::kmp_emit_size_expr_for_write_seq(&field.seq))
                 .collect::<Vec<_>>()
                 .join(" + ")
         };
         let encode_lines = fields
             .iter()
-            .map(|field| format!("        {}", emit_write_expr(&field.seq)))
+            .map(|field| format!("        {}", Self::kmp_emit_write_expr(&field.seq)))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -752,7 +752,7 @@ impl<'a> KmpLowerer<'a> {
                         AbiEnumPayload::Tuple(fields) | AbiEnumPayload::Struct(fields) => {
                             let field_sizes = fields
                                 .iter()
-                                .map(|field| emit_size_expr_for_write_seq(&field.encode))
+                                .map(|field| Self::kmp_emit_size_expr_for_write_seq(&field.encode))
                                 .collect::<Vec<_>>()
                                 .join(" + ");
                             format!(
@@ -778,7 +778,12 @@ impl<'a> KmpLowerer<'a> {
                             AbiEnumPayload::Unit => String::new(),
                             AbiEnumPayload::Tuple(fields) | AbiEnumPayload::Struct(fields) => fields
                                 .iter()
-                                .map(|field| format!("            {}", emit_write_expr(&field.encode)))
+                                .map(|field| {
+                                    format!(
+                                        "            {}",
+                                        Self::kmp_emit_write_expr(&field.encode)
+                                    )
+                                })
                                 .collect::<Vec<_>>()
                                 .join("\n"),
                         };
@@ -810,6 +815,272 @@ impl<'a> KmpLowerer<'a> {
             PrimitiveType::U64 | PrimitiveType::USize => format!("wire.writeU64({value_expr})"),
             PrimitiveType::F32 => format!("wire.writeF32({value_expr})"),
             PrimitiveType::F64 => format!("wire.writeF64({value_expr})"),
+        }
+    }
+
+    fn kmp_render_value(expr: &ValueExpr) -> String {
+        match expr {
+            ValueExpr::Instance => "this".to_string(),
+            ValueExpr::Var(name) => name.clone(),
+            ValueExpr::Named(name) => NamingConvention::property_name(name),
+            ValueExpr::Field(parent, field) => {
+                let parent_str = Self::kmp_render_value(parent);
+                let field_str = NamingConvention::property_name(field.as_str());
+                if parent_str.is_empty() {
+                    field_str
+                } else {
+                    format!("{}.{}", parent_str, field_str)
+                }
+            }
+        }
+    }
+
+    fn kmp_type_for_write_seq(seq: &WriteSeq) -> String {
+        match seq.ops.first() {
+            Some(WriteOp::Primitive { primitive, .. }) => Self::kotlin_primitive_type(*primitive),
+            Some(WriteOp::String { .. }) => "String".to_string(),
+            Some(WriteOp::Bytes { .. }) => "ByteArray".to_string(),
+            Some(WriteOp::Builtin { id, .. }) => match id.as_str() {
+                "Duration" => "Duration".to_string(),
+                "SystemTime" => "Instant".to_string(),
+                "Uuid" => "UUID".to_string(),
+                "Url" => "URI".to_string(),
+                _ => "String".to_string(),
+            },
+            Some(WriteOp::Record { id, .. }) => NamingConvention::class_name(id.as_str()),
+            Some(WriteOp::Enum { id, .. }) => NamingConvention::class_name(id.as_str()),
+            Some(WriteOp::Custom { id, .. }) => NamingConvention::class_name(id.as_str()),
+            Some(WriteOp::Vec { element_type, .. }) => {
+                format!("List<{}>", Self::kmp_type_for_type_expr(element_type))
+            }
+            Some(WriteOp::Option { some, .. }) => {
+                format!("{}?", Self::kmp_type_for_write_seq(some))
+            }
+            Some(WriteOp::Result { ok, err, .. }) => format!(
+                "BoltFFIResult<{}, {}>",
+                Self::kmp_type_for_write_seq(ok),
+                Self::kmp_type_for_write_seq(err)
+            ),
+            _ => "Any".to_string(),
+        }
+    }
+
+    fn kmp_type_for_type_expr(ty: &TypeExpr) -> String {
+        match ty {
+            TypeExpr::Primitive(p) => Self::kotlin_primitive_type(*p),
+            TypeExpr::String => "String".to_string(),
+            TypeExpr::Bytes => "ByteArray".to_string(),
+            TypeExpr::Vec(inner) => format!("List<{}>", Self::kmp_type_for_type_expr(inner)),
+            TypeExpr::Option(inner) => format!("{}?", Self::kmp_type_for_type_expr(inner)),
+            TypeExpr::Result { ok, err } => format!(
+                "BoltFFIResult<{}, {}>",
+                Self::kmp_type_for_type_expr(ok),
+                Self::kmp_type_for_type_expr(err)
+            ),
+            TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Custom(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Handle(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Callback(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Builtin(id) => match id.as_str() {
+                "Duration" => "Duration".to_string(),
+                "SystemTime" => "Instant".to_string(),
+                "Uuid" => "UUID".to_string(),
+                "Url" => "URI".to_string(),
+                _ => "String".to_string(),
+            },
+            TypeExpr::Void => "Unit".to_string(),
+        }
+    }
+
+    fn kmp_emit_size_expr(size: &SizeExpr) -> String {
+        match size {
+            SizeExpr::Fixed(value) => value.to_string(),
+            SizeExpr::Runtime => "0".to_string(),
+            SizeExpr::StringLen(value) => {
+                format!("Utf8Codec.maxBytes({})", Self::kmp_render_value(value))
+            }
+            SizeExpr::BytesLen(value) => format!("{}.size", Self::kmp_render_value(value)),
+            SizeExpr::ValueSize(value) => Self::kmp_render_value(value),
+            SizeExpr::WireSize { value, .. } => {
+                format!("{}.wireEncodedSize()", Self::kmp_render_value(value))
+            }
+            SizeExpr::BuiltinSize { id, value } => match id.as_str() {
+                "Url" => format!(
+                    "Utf8Codec.maxBytes({}.toString())",
+                    Self::kmp_render_value(value)
+                ),
+                _ => format!("{}.wireEncodedSize()", Self::kmp_render_value(value)),
+            },
+            SizeExpr::Sum(parts) => {
+                let rendered = parts
+                    .iter()
+                    .map(Self::kmp_emit_size_expr)
+                    .collect::<Vec<_>>()
+                    .join(" + ");
+                format!("({rendered})")
+            }
+            SizeExpr::OptionSize { value, inner } => {
+                let inner_expr = Self::kmp_emit_size_expr(inner);
+                format!(
+                    "({}?.let {{ v -> 1 + {} }} ?: 1)",
+                    Self::kmp_render_value(value),
+                    inner_expr
+                )
+            }
+            SizeExpr::VecSize {
+                value,
+                inner,
+                layout,
+            } => Self::kmp_emit_vec_size(&Self::kmp_render_value(value), inner, layout),
+            SizeExpr::ResultSize { value, ok, err } => {
+                let v = Self::kmp_render_value(value);
+                let ok_expr = Self::kmp_emit_size_expr(ok);
+                let err_expr = Self::kmp_emit_size_expr(err);
+                format!(
+                    "(when (val _r = {v}) {{ is BoltFFIResult.Ok<*> -> {{ val okVal = _r.value; 1 + {ok_expr} }}; is BoltFFIResult.Err<*> -> {{ val errVal = _r.error; 1 + {err_expr} }} }})"
+                )
+            }
+        }
+    }
+
+    fn kmp_emit_size_expr_for_write_seq(seq: &WriteSeq) -> String {
+        match seq.ops.first() {
+            Some(WriteOp::Custom { underlying, .. }) => Self::kmp_emit_size_expr(&underlying.size),
+            Some(WriteOp::Result { ok, err, .. }) => {
+                let ok_type = Self::kmp_type_for_write_seq(ok);
+                let err_type = Self::kmp_type_for_write_seq(err);
+                match &seq.size {
+                    SizeExpr::ResultSize { value, ok, err } => {
+                        let v = Self::kmp_render_value(value);
+                        let ok_expr = Self::kmp_emit_size_expr(ok);
+                        let err_expr = Self::kmp_emit_size_expr(err);
+                        format!(
+                            "(when (val _r = {v}) {{ is BoltFFIResult.Ok<*> -> {{ val okVal = boltffiUnsafeCast<{ok_type}>(_r.value); 1 + {ok_expr} }}; is BoltFFIResult.Err<*> -> {{ val errVal = boltffiUnsafeCast<{err_type}>(_r.error); 1 + {err_expr} }} }})"
+                        )
+                    }
+                    _ => Self::kmp_emit_size_expr(&seq.size),
+                }
+            }
+            _ => Self::kmp_emit_size_expr(&seq.size),
+        }
+    }
+
+    fn kmp_emit_write_expr(seq: &WriteSeq) -> String {
+        let op = seq.ops.first().expect("write ops");
+        match op {
+            WriteOp::Primitive { primitive, value } => {
+                Self::wire_primitive_write_expr(*primitive, &Self::kmp_render_value(value))
+            }
+            WriteOp::String { value } => {
+                format!("wire.writeString({})", Self::kmp_render_value(value))
+            }
+            WriteOp::Bytes { value } => {
+                format!("wire.writeBytes({})", Self::kmp_render_value(value))
+            }
+            WriteOp::Option { value, some } => {
+                let inner = Self::kmp_emit_write_expr(some);
+                format!(
+                    "{}?.let {{ v -> wire.writeU8(1u); {} }} ?: wire.writeU8(0u)",
+                    Self::kmp_render_value(value),
+                    inner
+                )
+            }
+            WriteOp::Vec {
+                value,
+                element_type,
+                element,
+                layout,
+            } => Self::kmp_emit_write_vec(
+                &Self::kmp_render_value(value),
+                element_type,
+                element,
+                layout,
+            ),
+            WriteOp::Record { value, .. } => {
+                format!("{}.wireEncodeTo(wire)", Self::kmp_render_value(value))
+            }
+            WriteOp::Enum { value, layout, .. } => match layout {
+                EnumLayout::CStyle {
+                    tag_type,
+                    tag_strategy,
+                    ..
+                } => match tag_strategy {
+                    EnumTagStrategy::Discriminant => {
+                        let value_expr = Self::kmp_render_value(value);
+                        Self::wire_primitive_write_expr(*tag_type, &format!("{value_expr}.value"))
+                    }
+                    EnumTagStrategy::OrdinalIndex => {
+                        format!("{}.wireEncodeTo(wire)", Self::kmp_render_value(value))
+                    }
+                },
+                EnumLayout::Data { .. } | EnumLayout::Recursive => {
+                    format!("{}.wireEncodeTo(wire)", Self::kmp_render_value(value))
+                }
+            },
+            WriteOp::Result { value, ok, err } => {
+                let v = Self::kmp_render_value(value);
+                let ok_expr = Self::kmp_emit_write_expr(ok);
+                let err_expr = Self::kmp_emit_write_expr(err);
+                let ok_type = Self::kmp_type_for_write_seq(ok);
+                let err_type = Self::kmp_type_for_write_seq(err);
+                format!(
+                    "when ({v}) {{ is BoltFFIResult.Ok<*> -> {{ wire.writeU8(0u); val okVal = boltffiUnsafeCast<{ok_type}>({v}.value); {ok_expr} }} is BoltFFIResult.Err<*> -> {{ wire.writeU8(1u); val errVal = boltffiUnsafeCast<{err_type}>({v}.error); {err_expr} }} }}"
+                )
+            }
+            WriteOp::Builtin { id, value } => match id.as_str() {
+                "Duration" => format!("wire.writeDuration({})", Self::kmp_render_value(value)),
+                "SystemTime" => format!("wire.writeInstant({})", Self::kmp_render_value(value)),
+                "Uuid" => format!("wire.writeUuid({})", Self::kmp_render_value(value)),
+                "Url" => format!("wire.writeUri({})", Self::kmp_render_value(value)),
+                _ => format!("wire.writeString({})", Self::kmp_render_value(value)),
+            },
+            WriteOp::Custom { underlying, .. } => Self::kmp_emit_write_expr(underlying),
+        }
+    }
+
+    fn kmp_emit_vec_size(value: &str, inner: &SizeExpr, layout: &VecLayout) -> String {
+        match layout {
+            VecLayout::Blittable { .. } => {
+                format!("(4 + {value}.size * {})", Self::kmp_emit_size_expr(inner))
+            }
+            VecLayout::Encoded => {
+                format!(
+                    "(4 + {value}.sumOf {{ item -> ({}) .toInt() }})",
+                    Self::kmp_emit_size_expr(inner)
+                )
+            }
+        }
+    }
+
+    fn kmp_emit_write_vec(
+        value: &str,
+        element_type: &TypeExpr,
+        element: &WriteSeq,
+        layout: &VecLayout,
+    ) -> String {
+        match layout {
+            VecLayout::Blittable { .. } => match element_type {
+                TypeExpr::Primitive(_) => format!("wire.writePrimitiveList({value})"),
+                TypeExpr::Record(id) => {
+                    let class_name = NamingConvention::class_name(id.as_str());
+                    format!(
+                        "wire.writeU32({value}.size.toUInt()); {class_name}Writer.writeAllToWire(wire, {value})"
+                    )
+                }
+                _ => {
+                    let inner = Self::kmp_emit_write_expr(element);
+                    format!(
+                        "wire.writeU32({value}.size.toUInt()); {value}.forEach {{ item -> {inner} }}"
+                    )
+                }
+            },
+            VecLayout::Encoded => {
+                let inner = Self::kmp_emit_write_expr(element);
+                format!(
+                    "wire.writeU32({value}.size.toUInt()); {value}.forEach {{ item -> {inner} }}"
+                )
+            }
         }
     }
 
@@ -1167,6 +1438,12 @@ impl<'a> KmpLowerer<'a> {
 mod tests {
     use std::path::PathBuf;
 
+    use boltffi_ffi_rules::transport::EnumTagStrategy;
+
+    use crate::ir::codec::{EnumLayout, VecLayout};
+    use crate::ir::ids::{EnumId, RecordId};
+    use crate::ir::ops::{SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq};
+    use crate::ir::types::{PrimitiveType, TypeExpr};
     use crate::ir::{Lowerer, build_contract};
     use crate::scan::scan_crate_with_pointer_width;
 
@@ -1203,5 +1480,133 @@ mod tests {
                 .iter()
                 .all(|function| !function.public_name.is_empty())
         );
+    }
+
+    #[test]
+    fn kmp_emit_write_expr_for_result_uses_casts_and_tags() {
+        let ok_seq = WriteSeq {
+            size: SizeExpr::Fixed(4),
+            ops: vec![WriteOp::Primitive {
+                primitive: PrimitiveType::I32,
+                value: ValueExpr::Var("okVal".to_string()),
+            }],
+            shape: WireShape::Value,
+        };
+        let err_seq = WriteSeq {
+            size: SizeExpr::Fixed(8),
+            ops: vec![WriteOp::Primitive {
+                primitive: PrimitiveType::I64,
+                value: ValueExpr::Var("errVal".to_string()),
+            }],
+            shape: WireShape::Value,
+        };
+        let seq = WriteSeq {
+            size: SizeExpr::ResultSize {
+                value: ValueExpr::Named("result".into()),
+                ok: Box::new(SizeExpr::Fixed(4)),
+                err: Box::new(SizeExpr::Fixed(8)),
+            },
+            ops: vec![WriteOp::Result {
+                value: ValueExpr::Named("result".into()),
+                ok: Box::new(ok_seq),
+                err: Box::new(err_seq),
+            }],
+            shape: WireShape::Value,
+        };
+
+        let expr = KmpLowerer::kmp_emit_write_expr(&seq);
+        assert!(expr.contains("wire.writeU8(0u)"));
+        assert!(expr.contains("wire.writeU8(1u)"));
+        assert!(expr.contains("boltffiUnsafeCast<Int>(result.value)"));
+        assert!(expr.contains("boltffiUnsafeCast<Long>(result.error)"));
+    }
+
+    #[test]
+    fn kmp_emit_write_expr_for_vec_record_uses_generated_writer_bridge() {
+        let record_id = RecordId::new("my_record");
+        let record_seq = WriteSeq {
+            size: SizeExpr::Fixed(8),
+            ops: vec![WriteOp::Record {
+                id: record_id.clone(),
+                value: ValueExpr::Var("item".to_string()),
+                fields: vec![],
+            }],
+            shape: WireShape::Value,
+        };
+        let seq = WriteSeq {
+            size: SizeExpr::VecSize {
+                value: ValueExpr::Named("items".into()),
+                inner: Box::new(SizeExpr::Fixed(8)),
+                layout: VecLayout::Blittable { element_size: 8 },
+            },
+            ops: vec![WriteOp::Vec {
+                value: ValueExpr::Named("items".into()),
+                element_type: TypeExpr::Record(record_id),
+                element: Box::new(record_seq),
+                layout: VecLayout::Blittable { element_size: 8 },
+            }],
+            shape: WireShape::Sequence,
+        };
+
+        let expr = KmpLowerer::kmp_emit_write_expr(&seq);
+        assert!(expr.contains("wire.writeU32(items.size.toUInt())"));
+        assert!(expr.contains("MyRecordWriter.writeAllToWire(wire, items)"));
+    }
+
+    #[test]
+    fn kmp_emit_write_expr_for_cstyle_enum_discriminant_writes_tag_value() {
+        let seq = WriteSeq {
+            size: SizeExpr::Fixed(2),
+            ops: vec![WriteOp::Enum {
+                id: EnumId::new("status"),
+                value: ValueExpr::Named("status".into()),
+                layout: EnumLayout::CStyle {
+                    tag_type: PrimitiveType::I16,
+                    tag_strategy: EnumTagStrategy::Discriminant,
+                    is_error: false,
+                },
+            }],
+            shape: WireShape::Value,
+        };
+
+        let expr = KmpLowerer::kmp_emit_write_expr(&seq);
+        assert_eq!(expr, "wire.writeI16(status.value)");
+    }
+
+    #[test]
+    fn kmp_emit_size_expr_for_result_uses_typed_cast_branches() {
+        let ok_seq = WriteSeq {
+            size: SizeExpr::Fixed(4),
+            ops: vec![WriteOp::Primitive {
+                primitive: PrimitiveType::I32,
+                value: ValueExpr::Var("okVal".to_string()),
+            }],
+            shape: WireShape::Value,
+        };
+        let err_seq = WriteSeq {
+            size: SizeExpr::Fixed(8),
+            ops: vec![WriteOp::Primitive {
+                primitive: PrimitiveType::I64,
+                value: ValueExpr::Var("errVal".to_string()),
+            }],
+            shape: WireShape::Value,
+        };
+        let seq = WriteSeq {
+            size: SizeExpr::ResultSize {
+                value: ValueExpr::Named("result".into()),
+                ok: Box::new(SizeExpr::Fixed(4)),
+                err: Box::new(SizeExpr::Fixed(8)),
+            },
+            ops: vec![WriteOp::Result {
+                value: ValueExpr::Named("result".into()),
+                ok: Box::new(ok_seq),
+                err: Box::new(err_seq),
+            }],
+            shape: WireShape::Value,
+        };
+
+        let expr = KmpLowerer::kmp_emit_size_expr_for_write_seq(&seq);
+        assert!(expr.contains("boltffiUnsafeCast<Int>(_r.value)"));
+        assert!(expr.contains("boltffiUnsafeCast<Long>(_r.error)"));
     }
 }
