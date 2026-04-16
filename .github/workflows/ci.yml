@@ -119,8 +119,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri
-      - run: cargo miri setup
-      - run: cargo miri test -p boltffi -p boltffi_tests
+      - run: cargo +nightly miri setup
+      - run: cargo +nightly miri test -p boltffi -p boltffi_tests
 
   cross-build:
     name: Cross Build (${{ matrix.os }})
