@@ -4,11 +4,6 @@ package {{ package_name }}
 {% if uses_flow %}import kotlinx.coroutines.flow.Flow
 
 {% endif %}
-{% if uses_wire_writer %}import java.nio.ByteBuffer
-import java.nio.ByteOrder
-
-{% endif %}
-
 data class Duration(val seconds: Long, val nano: Int)
 
 data class Instant(val epochSeconds: Long, val nano: Int)
@@ -37,21 +32,41 @@ private object Utf8Codec {
 
 {% if uses_wire_writer %}
 private class boltffiWireWriter(initialCapacity: Int = 256) {
-    private var buffer: ByteBuffer = ByteBuffer.allocateDirect(initialCapacity).order(ByteOrder.LITTLE_ENDIAN)
+    private var buffer: ByteArray = ByteArray(initialCapacity)
     private var pos: Int = 0
 
     private fun ensureCapacity(needed: Int) {
         val required = pos + needed
-        if (required <= buffer.capacity()) return
-        val next = ByteBuffer.allocateDirect(maxOf(buffer.capacity() * 2, required)).order(ByteOrder.LITTLE_ENDIAN)
-        val source = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-        source.position(0)
-        source.limit(pos)
-        next.put(source)
+        if (required <= buffer.size) return
+        val next = ByteArray(maxOf(buffer.size * 2, required))
+        buffer.copyInto(next, endIndex = pos)
         buffer = next
     }
 
-    internal fun writeRawBytes(byteCount: Int, writer: (ByteBuffer, Int) -> Unit) {
+    private fun writeLeI16(offset: Int, value: Short) {
+        val v = value.toInt()
+        buffer[offset] = (v and 0xFF).toByte()
+        buffer[offset + 1] = ((v ushr 8) and 0xFF).toByte()
+    }
+
+    private fun writeLeI32(offset: Int, value: Int) {
+        buffer[offset] = (value and 0xFF).toByte()
+        buffer[offset + 1] = ((value ushr 8) and 0xFF).toByte()
+        buffer[offset + 2] = ((value ushr 16) and 0xFF).toByte()
+        buffer[offset + 3] = ((value ushr 24) and 0xFF).toByte()
+    }
+
+    private fun writeLeI64(offset: Int, value: Long) {
+        var shift = 0
+        var index = 0
+        while (index < 8) {
+            buffer[offset + index] = ((value ushr shift) and 0xFF).toByte()
+            shift += 8
+            index += 1
+        }
+    }
+
+    internal fun writeRawBytes(byteCount: Int, writer: (ByteArray, Int) -> Unit) {
         ensureCapacity(byteCount)
         val baseOffset = pos
         writer(buffer, baseOffset)
@@ -60,40 +75,38 @@ private class boltffiWireWriter(initialCapacity: Int = 256) {
 
     fun writePadding(count: Int) {
         ensureCapacity(count)
-        val view = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-        view.position(pos)
-        repeat(count) { view.put(0) }
+        var i = 0
+        while (i < count) {
+            buffer[pos + i] = 0
+            i += 1
+        }
         pos += count
     }
 
-    fun writeBool(v: Boolean) { ensureCapacity(1); buffer.put(pos, if (v) 1 else 0); pos += 1 }
-    fun writeI8(v: Byte) { ensureCapacity(1); buffer.put(pos, v); pos += 1 }
-    fun writeU8(v: UByte) { ensureCapacity(1); buffer.put(pos, v.toByte()); pos += 1 }
-    fun writeI16(v: Short) { ensureCapacity(2); buffer.putShort(pos, v); pos += 2 }
+    fun writeBool(v: Boolean) { ensureCapacity(1); buffer[pos] = if (v) 1 else 0; pos += 1 }
+    fun writeI8(v: Byte) { ensureCapacity(1); buffer[pos] = v; pos += 1 }
+    fun writeU8(v: UByte) { ensureCapacity(1); buffer[pos] = v.toByte(); pos += 1 }
+    fun writeI16(v: Short) { ensureCapacity(2); writeLeI16(pos, v); pos += 2 }
     fun writeU16(v: UShort) = writeI16(v.toShort())
-    fun writeI32(v: Int) { ensureCapacity(4); buffer.putInt(pos, v); pos += 4 }
+    fun writeI32(v: Int) { ensureCapacity(4); writeLeI32(pos, v); pos += 4 }
     fun writeU32(v: UInt) = writeI32(v.toInt())
-    fun writeI64(v: Long) { ensureCapacity(8); buffer.putLong(pos, v); pos += 8 }
+    fun writeI64(v: Long) { ensureCapacity(8); writeLeI64(pos, v); pos += 8 }
     fun writeU64(v: ULong) = writeI64(v.toLong())
-    fun writeF32(v: Float) = writeI32(java.lang.Float.floatToRawIntBits(v))
-    fun writeF64(v: Double) = writeI64(java.lang.Double.doubleToRawLongBits(v))
+    fun writeF32(v: Float) = writeI32(v.toRawBits())
+    fun writeF64(v: Double) = writeI64(v.toRawBits())
 
     fun writeString(v: String) {
         val bytes = v.toByteArray(Charsets.UTF_8)
         writeU32(bytes.size.toUInt())
         ensureCapacity(bytes.size)
-        val view = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-        view.position(pos)
-        view.put(bytes)
+        bytes.copyInto(buffer, destinationOffset = pos)
         pos += bytes.size
     }
 
     fun writeBytes(v: ByteArray) {
         writeU32(v.size.toUInt())
         ensureCapacity(v.size)
-        val view = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-        view.position(pos)
-        view.put(v)
+        v.copyInto(buffer, destinationOffset = pos)
         pos += v.size
     }
 
@@ -125,13 +138,41 @@ private class boltffiWireWriter(initialCapacity: Int = 256) {
     fun writePrimitiveList(v: ByteArray) {
         writeU32(v.size.toUInt())
         ensureCapacity(v.size)
-        val view = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-        view.position(pos)
-        view.put(v)
+        v.copyInto(buffer, destinationOffset = pos)
         pos += v.size
     }
 
+    @JvmName("writeByteList")
+    fun writePrimitiveList(v: List<Byte>) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeI8(it) }
+    }
+
+    @JvmName("writeUByteList")
+    fun writePrimitiveList(v: List<UByte>) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeU8(it) }
+    }
+
+    @JvmName("writeShortList")
+    fun writePrimitiveList(v: List<Short>) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeI16(it) }
+    }
+
+    @JvmName("writeUShortList")
+    fun writePrimitiveList(v: List<UShort>) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeU16(it) }
+    }
+
     fun writePrimitiveList(v: BooleanArray) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeBool(it) }
+    }
+
+    @JvmName("writeBooleanList")
+    fun writePrimitiveList(v: List<Boolean>) {
         writeU32(v.size.toUInt())
         v.forEach { writeBool(it) }
     }
@@ -142,10 +183,34 @@ private class boltffiWireWriter(initialCapacity: Int = 256) {
         v.forEach { writeI32(it) }
     }
 
+    @JvmName("writeUIntList")
+    fun writePrimitiveList(v: List<UInt>) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeU32(it) }
+    }
+
     @JvmName("writeLongList")
     fun writePrimitiveList(v: List<Long>) {
         writeU32(v.size.toUInt())
         v.forEach { writeI64(it) }
+    }
+
+    @JvmName("writeULongList")
+    fun writePrimitiveList(v: List<ULong>) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeU64(it) }
+    }
+
+    @JvmName("writeFloatList")
+    fun writePrimitiveList(v: List<Float>) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeF32(it) }
+    }
+
+    @JvmName("writeDoubleList")
+    fun writePrimitiveList(v: List<Double>) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeF64(it) }
     }
 
     fun writeDuration(v: Duration) {
