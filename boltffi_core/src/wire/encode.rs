@@ -1,6 +1,8 @@
 use crate::wire::constants::*;
 use crate::wire::shape::WireShape;
 use crate::wire::temporal::{DurationWireValue, EpochTimestampWireValue};
+use std::collections::HashMap;
+use std::hash::Hash;
 
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, Utc};
@@ -376,6 +378,32 @@ impl<T: WireEncode> WireEncode for Vec<T> {
                 writer.finish()
             }
         }
+    }
+}
+
+impl<K, V> WireEncode for HashMap<K, V>
+where
+    K: WireEncode + Eq + Hash,
+    V: WireEncode,
+{
+    #[inline]
+    fn wire_size(&self) -> usize {
+        VEC_COUNT_SIZE
+            + self
+                .iter()
+                .map(|(key, value)| key.wire_size() + value.wire_size())
+                .sum::<usize>()
+    }
+
+    #[inline]
+    fn encode_to(&self, buffer: &mut [u8]) -> usize {
+        let mut writer = WireWriter::new(buffer);
+        writer.write_count(self.len());
+        self.iter().for_each(|(key, value)| {
+            writer.write_value(key);
+            writer.write_value(value);
+        });
+        writer.finish()
     }
 }
 

@@ -1,5 +1,7 @@
 use crate::wire::encode::{WireEncode, WireEncodingKind};
 use crate::wire::temporal::{DurationWireValue, EpochTimestampWireValue};
+use std::collections::HashMap;
+use std::hash::Hash;
 
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, Utc};
@@ -369,6 +371,26 @@ impl<T: WireDecode + WireEncode> WireDecode for Vec<T> {
             values.push(reader.read_value::<T>()?);
             Ok(values)
         })?;
+
+        reader.finish(values)
+    }
+}
+
+impl<K, V> WireDecode for HashMap<K, V>
+where
+    K: WireDecode + Eq + Hash,
+    V: WireDecode,
+{
+    fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
+        let mut reader = WireReader::new(buf);
+        let count = reader.read_value::<u32>()? as usize;
+        let mut values = HashMap::with_capacity(count);
+
+        for _ in 0..count {
+            let key = reader.read_value::<K>()?;
+            let value = reader.read_value::<V>()?;
+            values.insert(key, value);
+        }
 
         reader.finish(values)
     }

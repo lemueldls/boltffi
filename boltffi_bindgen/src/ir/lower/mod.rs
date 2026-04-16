@@ -281,6 +281,25 @@ mod tests {
     }
 
     #[test]
+    fn param_strategy_map_is_wire_encoded_span() {
+        let contract = test_contract();
+        let lowerer = lowerer_for_contract(&contract);
+
+        let strategy = lowerer.classify_param(
+            &TypeExpr::Map {
+                key: Box::new(TypeExpr::String),
+                value: Box::new(TypeExpr::Primitive(PrimitiveType::I32)),
+            },
+            &ParamPassing::Value,
+        );
+
+        assert!(matches!(
+            strategy,
+            Transport::Span(SpanContent::Encoded(CodecPlan::Map { .. }))
+        ));
+    }
+
+    #[test]
     fn param_strategy_handle_non_nullable() {
         let contract = test_contract();
         let lowerer = lowerer_for_contract(&contract);
@@ -1228,6 +1247,26 @@ mod tests {
                 assert!(matches!(*err, CodecPlan::String));
             }
             _ => panic!("expected Result"),
+        }
+    }
+
+    #[test]
+    fn build_codec_map_uses_encoded_layout() {
+        let contract = test_contract();
+        let lowerer = lowerer_for_contract(&contract);
+
+        let codec = lowerer.build_codec(&TypeExpr::Map {
+            key: Box::new(TypeExpr::String),
+            value: Box::new(TypeExpr::Primitive(PrimitiveType::I32)),
+        });
+
+        match codec {
+            CodecPlan::Map { key, value, layout } => {
+                assert!(matches!(*key, CodecPlan::String));
+                assert!(matches!(*value, CodecPlan::Primitive(PrimitiveType::I32)));
+                assert!(matches!(layout, MapLayout::Encoded));
+            }
+            _ => panic!("expected Map codec"),
         }
     }
 

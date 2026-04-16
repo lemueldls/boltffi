@@ -3052,6 +3052,73 @@ mod tests {
     }
 
     #[test]
+    fn map_string_i32_param_uses_codec_encoded_route() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "apply_scores",
+            vec![ParamDef {
+                name: ParamName::new("scores"),
+                type_expr: TypeExpr::Map {
+                    key: Box::new(TypeExpr::String),
+                    value: Box::new(TypeExpr::Primitive(PrimitiveType::I32)),
+                },
+                passing: ParamPassing::Value,
+                doc: None,
+            }],
+            ReturnDef::Void,
+            ExecutionKind::Sync,
+        ));
+
+        let module = lower_contract(&contract);
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "applyScores")
+            .expect("function should be lowered");
+        let param = function
+            .params
+            .iter()
+            .find(|param| param.name == "scores")
+            .expect("map parameter should exist");
+
+        assert_eq!(param.ts_type, "Map<string, number>");
+        assert!(matches!(
+            &param.input_route,
+            TsInputRoute::CodecEncoded { .. } | TsInputRoute::OtherEncoded { .. }
+        ));
+    }
+
+    #[test]
+    fn map_string_i32_return_uses_packed_map_decode() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "fetch_scores",
+            vec![],
+            ReturnDef::Value(TypeExpr::Map {
+                key: Box::new(TypeExpr::String),
+                value: Box::new(TypeExpr::Primitive(PrimitiveType::I32)),
+            }),
+            ExecutionKind::Sync,
+        ));
+
+        let module = lower_contract(&contract);
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "fetchScores")
+            .expect("function should be lowered");
+
+        assert_eq!(function.return_type.as_deref(), Some("Map<string, number>"));
+        assert!(function.return_route.is_packed());
+        assert!(
+            function
+                .return_route
+                .decode_expr()
+                .contains("reader.readMap(")
+        );
+    }
+
+    #[test]
     fn direct_write_info_uses_bool_writer_for_bool() {
         let info = direct_write_info(&AbiType::Bool);
         assert_eq!(info.method_name, "writeBool");

@@ -6,7 +6,7 @@ use crate::ir::{
     AbiContract,
     abi::{
         AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiEnum, AbiEnumField, AbiEnumPayload,
-        AbiStream, CallId, CallMode, StreamItemTransport,
+        AbiStream, CallId, CallMode, ParamRole, StreamItemTransport,
     },
     codec::{CodecPlan, EnumLayout, MapLayout, VariantPayloadLayout, VecLayout},
     contract::FfiContract,
@@ -93,7 +93,12 @@ impl<'a> KmpLowerer<'a> {
     }
 
     fn supported_function(&self, function: &FunctionDef, call: &AbiCall) -> Option<KmpFunction> {
-        if call.params.len() != function.params.len() {
+        let abi_input_count = call
+            .params
+            .iter()
+            .filter(|param| matches!(param.role, ParamRole::Input { .. }))
+            .count();
+        if abi_input_count != function.params.len() {
             return None;
         }
 
@@ -133,7 +138,11 @@ impl<'a> KmpLowerer<'a> {
             TypeExpr::Bytes => "ByteArray".to_string(),
             TypeExpr::Vec(inner) => format!("List<{}>", self.kotlin_type(inner)),
             TypeExpr::Map { key, value } => {
-                format!("Map<{}, {}>", self.kotlin_type(key), self.kotlin_type(value))
+                format!(
+                    "Map<{}, {}>",
+                    self.kotlin_type(key),
+                    self.kotlin_type(value)
+                )
             }
             TypeExpr::Option(inner) => format!("{}?", self.kotlin_type(inner)),
             TypeExpr::Result { ok, err } => format!(
@@ -972,12 +981,7 @@ impl<'a> KmpLowerer<'a> {
                 key,
                 value_size,
                 layout,
-            } => Self::kmp_emit_map_size(
-                &Self::kmp_render_value(value),
-                key,
-                value_size,
-                layout,
-            ),
+            } => Self::kmp_emit_map_size(&Self::kmp_render_value(value), key, value_size, layout),
             SizeExpr::ResultSize { value, ok, err } => {
                 let v = Self::kmp_render_value(value);
                 let ok_expr = Self::kmp_emit_size_expr(ok);
@@ -1048,12 +1052,7 @@ impl<'a> KmpLowerer<'a> {
                 value_seq,
                 layout,
                 ..
-            } => Self::kmp_emit_write_map(
-                &Self::kmp_render_value(value),
-                key,
-                value_seq,
-                layout,
-            ),
+            } => Self::kmp_emit_write_map(&Self::kmp_render_value(value), key, value_seq, layout),
             WriteOp::Record { value, .. } => {
                 format!("{}.wireEncodeTo(wire)", Self::kmp_render_value(value))
             }
@@ -1523,9 +1522,11 @@ mod tests {
 
     use boltffi_ffi_rules::transport::EnumTagStrategy;
 
-    use crate::ir::codec::{EnumLayout, VecLayout};
+    use crate::ir::codec::{EnumLayout, MapLayout, VecLayout};
     use crate::ir::ids::{BuiltinId, EnumId, RecordId};
-    use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq};
+    use crate::ir::ops::{
+        OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq,
+    };
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use crate::ir::{Lowerer, build_contract};
     use crate::scan::scan_crate_with_pointer_width;
@@ -1637,6 +1638,48 @@ mod tests {
     }
 
     #[test]
+    fn kmp_emit_write_expr_for_map_emits_entry_loop() {
+        let key_seq = WriteSeq {
+            size: SizeExpr::StringLen(ValueExpr::Var("key".to_string())),
+            ops: vec![WriteOp::String {
+                value: ValueExpr::Var("key".to_string()),
+            }],
+            shape: WireShape::Value,
+        };
+        let value_seq = WriteSeq {
+            size: SizeExpr::Fixed(4),
+            ops: vec![WriteOp::Primitive {
+                primitive: PrimitiveType::I32,
+                value: ValueExpr::Var("value".to_string()),
+            }],
+            shape: WireShape::Value,
+        };
+        let seq = WriteSeq {
+            size: SizeExpr::MapSize {
+                value: ValueExpr::Named("scores".into()),
+                key: Box::new(SizeExpr::StringLen(ValueExpr::Var("key".to_string()))),
+                value_size: Box::new(SizeExpr::Fixed(4)),
+                layout: MapLayout::Encoded,
+            },
+            ops: vec![WriteOp::Map {
+                value: ValueExpr::Named("scores".into()),
+                key_type: TypeExpr::String,
+                value_type: TypeExpr::Primitive(PrimitiveType::I32),
+                key: Box::new(key_seq),
+                value_seq: Box::new(value_seq),
+                layout: MapLayout::Encoded,
+            }],
+            shape: WireShape::Sequence,
+        };
+
+        let expr = KmpLowerer::kmp_emit_write_expr(&seq);
+        assert!(expr.contains("wire.writeU32(scores.size.toUInt())"));
+        assert!(expr.contains("scores.forEach"));
+        assert!(expr.contains("wire.writeString(key)"));
+        assert!(expr.contains("wire.writeI32(value)"));
+    }
+
+    #[test]
     fn kmp_emit_write_expr_for_cstyle_enum_discriminant_writes_tag_value() {
         let seq = WriteSeq {
             size: SizeExpr::Fixed(2),
@@ -1723,6 +1766,48 @@ mod tests {
     }
 
     #[test]
+    fn wire_read_expr_for_map_builds_kotlin_map() {
+        let mut scanned_module =
+            scan_crate_with_pointer_width(&demo_source_directory(), "demo", None)
+                .expect("demo crate should scan");
+        let ffi_contract = build_contract(&mut scanned_module);
+        let abi_contract = Lowerer::new(&ffi_contract).to_abi_contract();
+        let lowerer = KmpLowerer::new(&ffi_contract, &abi_contract);
+
+        let seq = ReadSeq {
+            size: SizeExpr::Runtime,
+            ops: vec![ReadOp::Map {
+                len_offset: OffsetExpr::Base,
+                key_type: TypeExpr::String,
+                value_type: TypeExpr::Primitive(PrimitiveType::I32),
+                key: Box::new(ReadSeq {
+                    size: SizeExpr::Runtime,
+                    ops: vec![ReadOp::String {
+                        offset: OffsetExpr::Base,
+                    }],
+                    shape: WireShape::Value,
+                }),
+                value: Box::new(ReadSeq {
+                    size: SizeExpr::Fixed(4),
+                    ops: vec![ReadOp::Primitive {
+                        primitive: PrimitiveType::I32,
+                        offset: OffsetExpr::Base,
+                    }],
+                    shape: WireShape::Value,
+                }),
+                layout: MapLayout::Encoded,
+            }],
+            shape: WireShape::Sequence,
+        };
+
+        let expr = lowerer.wire_read_expr(&seq);
+        assert!(expr.contains("buildMap"));
+        assert!(expr.contains("repeat(len)"));
+        assert!(expr.contains("reader.readString()"));
+        assert!(expr.contains("reader.readI32()"));
+    }
+
+    #[test]
     fn wire_read_expr_for_recursive_enum_uses_decode_helper_call() {
         let mut scanned_module =
             scan_crate_with_pointer_width(&demo_source_directory(), "demo", None)
@@ -1743,5 +1828,26 @@ mod tests {
 
         let expr = lowerer.wire_read_expr(&seq);
         assert_eq!(expr, "boltffiDecodeEnumExprTree(reader)");
+    }
+
+    #[test]
+    fn lower_demo_contract_includes_map_signature() {
+        let mut scanned_module =
+            scan_crate_with_pointer_width(&demo_source_directory(), "demo", None)
+                .expect("demo crate should scan");
+        let ffi_contract = build_contract(&mut scanned_module);
+        let abi_contract = Lowerer::new(&ffi_contract).to_abi_contract();
+
+        let module = KmpLowerer::new(&ffi_contract, &abi_contract).lower();
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.public_name == "echoMapStringI32")
+            .expect("map function should be lowered for KMP");
+
+        assert_eq!(function.params.len(), 1);
+        assert_eq!(function.params[0].name, "v");
+        assert_eq!(function.params[0].kotlin_type, "Map<String, Int>");
+        assert_eq!(function.return_type.as_deref(), Some("Map<String, Int>"));
     }
 }

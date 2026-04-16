@@ -512,6 +512,69 @@ mod vecs {
     }
 }
 
+mod maps {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn empty_hash_map_roundtrip() {
+        let original: HashMap<String, i32> = HashMap::new();
+
+        let mut buf = vec![0u8; original.wire_size()];
+        let written = original.encode_to(&mut buf);
+        let (decoded, consumed) = HashMap::<String, i32>::decode_from(&buf).unwrap();
+
+        assert_eq!(written, 4);
+        assert_eq!(consumed, written);
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn hash_map_string_i32_roundtrip() {
+        let mut original = HashMap::new();
+        original.insert("alice".to_string(), 10);
+        original.insert("bob".to_string(), 20);
+        original.insert("carol".to_string(), 30);
+
+        let mut buf = vec![0u8; original.wire_size()];
+        let written = original.encode_to(&mut buf);
+        let (decoded, consumed) = HashMap::<String, i32>::decode_from(&buf).unwrap();
+
+        assert_eq!(consumed, written);
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn hash_map_i32_string_roundtrip() {
+        let mut original = HashMap::new();
+        original.insert(1i32, "one".to_string());
+        original.insert(2i32, "two".to_string());
+        original.insert(3i32, "three".to_string());
+
+        let mut buf = vec![0u8; original.wire_size()];
+        let written = original.encode_to(&mut buf);
+        let (decoded, consumed) = HashMap::<i32, String>::decode_from(&buf).unwrap();
+
+        assert_eq!(consumed, written);
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn hash_map_string_option_vec_roundtrip() {
+        let mut original: HashMap<String, Option<Vec<i32>>> = HashMap::new();
+        original.insert("a".to_string(), Some(vec![1, 2, 3]));
+        original.insert("b".to_string(), None);
+        original.insert("c".to_string(), Some(vec![]));
+
+        let mut buf = vec![0u8; original.wire_size()];
+        let written = original.encode_to(&mut buf);
+        let (decoded, consumed) = HashMap::<String, Option<Vec<i32>>>::decode_from(&buf).unwrap();
+
+        assert_eq!(consumed, written);
+        assert_eq!(decoded, original);
+    }
+}
+
 mod records {
     use super::*;
 
