@@ -15,6 +15,7 @@ pub struct CommonMainTemplate<'a> {
     pub enum_sources: &'a [String],
     pub class_sources: &'a [String],
     pub callback_sources: &'a [String],
+    pub uses_wire_writer: bool,
     pub uses_flow: bool,
     pub functions: &'a [KmpFunction],
 }
@@ -58,6 +59,7 @@ pub struct CInteropDefTemplate<'a> {
 pub struct RecordTemplate<'a> {
     pub class_name: &'a str,
     pub fields: &'a [KmpRecordFieldView<'a>],
+    pub encode_source: &'a str,
     pub doc: Option<&'a str>,
 }
 
@@ -69,6 +71,7 @@ pub struct EnumTemplate<'a> {
     pub is_error: bool,
     pub value_type: Option<&'a str>,
     pub variants: &'a [KmpEnumVariantView],
+    pub encode_source: &'a str,
     pub doc: Option<&'a str>,
 }
 
@@ -153,6 +156,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             RecordTemplate {
                 class_name: &record.class_name,
                 fields: &fields,
+                encode_source: &record.encode_source,
                 doc: record.doc.as_deref(),
             }
             .render()
@@ -190,6 +194,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
                 is_error: enumeration.is_error,
                 value_type: enumeration.value_type.as_deref(),
                 variants: &variants,
+                encode_source: &enumeration.encode_source,
                 doc: enumeration.doc.as_deref(),
             }
             .render()
@@ -394,6 +399,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             .iter()
             .any(|stream| matches!(stream.mode, KmpStreamMode::Async))
     });
+    let uses_wire_writer = !module.records.is_empty() || !module.enums.is_empty();
     let uses_wire_reader = module.classes.iter().any(|class| {
         class
             .streams
@@ -420,6 +426,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             enum_sources: &enum_sources,
             class_sources: &class_common_sources,
             callback_sources: &callback_sources,
+            uses_wire_writer,
             uses_flow,
             functions: &module.functions,
         }
@@ -485,6 +492,7 @@ mod tests {
                     default_value: None,
                 }],
                 decode_source: "private fun boltffiDecodeRecordLocation(reader: boltffiWireReader): Location = Location(id = reader.readI64())".to_string(),
+                encode_source: "fun Location.wireEncodedSize(): Int = 8\n\nfun Location.wireEncodeTo(wire: boltffiWireWriter) {\n    wire.writeI64(id)\n}".to_string(),
                 doc: Some("A physical location.".to_string()),
             }],
             enums: vec![super::super::plan::KmpEnum {
@@ -499,6 +507,7 @@ mod tests {
                     doc: Some("Operation succeeded.".to_string()),
                 }],
                 decode_source: "private fun boltffiDecodeEnumResult(reader: boltffiWireReader): Result = Result.Success".to_string(),
+                encode_source: "fun Result.wireEncodedSize(): Int = 4 + when (this) {\n    is Success -> 0\n}\n\nfun Result.wireEncodeTo(wire: boltffiWireWriter) {\n    when (this) {\n        is Success -> wire.writeI32(0)\n    }\n}".to_string(),
                 doc: Some("The result of an operation.".to_string()),
             }],
             classes: vec![super::super::plan::KmpClass {
@@ -596,6 +605,7 @@ mod tests {
             RecordTemplate {
                 class_name: "Location",
                 fields: &record_fields,
+                encode_source: "fun Location.wireEncodedSize(): Int = 8\n\nfun Location.wireEncodeTo(wire: boltffiWireWriter) {\n    wire.writeI64(id)\n}",
                 doc: Some("A physical location."),
             }
             .render()
@@ -614,6 +624,7 @@ mod tests {
                 is_error: false,
                 value_type: None,
                 variants: &enum_variants,
+                encode_source: "fun Result.wireEncodedSize(): Int = 4 + when (this) {\n    is Success -> 0\n}\n\nfun Result.wireEncodeTo(wire: boltffiWireWriter) {\n    when (this) {\n        is Success -> wire.writeI32(0)\n    }\n}",
                 doc: Some("The result of an operation."),
             }
             .render()
@@ -703,6 +714,7 @@ mod tests {
             .render()
             .unwrap(),
         ];
+        let uses_wire_writer = !record_sources.is_empty() || !enum_sources.is_empty();
         let rendered = CommonMainTemplate {
             package_name: &options.package_name,
             module_name: &options.module_name,
@@ -710,6 +722,7 @@ mod tests {
             enum_sources: &enum_sources,
             class_sources: &class_common_sources,
             callback_sources: &callback_sources,
+            uses_wire_writer,
             uses_flow: true,
             functions: &module.functions,
         }
@@ -894,6 +907,7 @@ mod tests {
         let rendered = RecordTemplate {
             class_name: "Location",
             fields: &fields,
+            encode_source: "fun Location.wireEncodedSize(): Int = 8\n\nfun Location.wireEncodeTo(wire: boltffiWireWriter) {\n    wire.writeI64(id)\n}",
             doc: Some("A physical location."),
         }
         .render()
@@ -1079,6 +1093,7 @@ mod tests {
             is_error: false,
             value_type: None,
             variants: &variants,
+            encode_source: "fun Result.wireEncodedSize(): Int = 4 + when (this) {\n    is Success -> 0\n    is Error -> 0\n}\n\nfun Result.wireEncodeTo(wire: boltffiWireWriter) {\n    when (this) {\n        is Success -> wire.writeI32(0)\n        is Error -> wire.writeI32(1)\n    }\n}",
             doc: Some("The result of an operation."),
         }
         .render()

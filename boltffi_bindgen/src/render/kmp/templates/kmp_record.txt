@@ -7,3 +7,4 @@
     val {{ field.name }}: {{ field.kotlin_type }}{% match field.default_value %}{% when Some with (default_value) %} = {{ default_value }}{% when None %}{% endmatch %}{% if !loop.last %},{% endif %}
 {%- endfor %}
 )
+{{ encode_source }}

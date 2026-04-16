@@ -10,3 +10,8 @@ data class Location(
     val id: Long,
     val name: String = "demo"
 )
+fun Location.wireEncodedSize(): Int = 8
+
+fun Location.wireEncodeTo(wire: boltffiWireWriter) {
+    wire.writeI64(id)
+}

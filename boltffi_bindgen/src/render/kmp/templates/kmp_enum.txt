@@ -21,3 +21,4 @@ sealed class {{ class_name }}{% if is_error %} : Exception(){% endif %} {
 {%- endfor %}
 }
 {% endif %}
+{{ encode_source }}

@@ -17,3 +17,15 @@ sealed class Result {
      */
     data class Error(val message: String) : Result()
 }
+
+fun Result.wireEncodedSize(): Int = 4 + when (this) {
+    is Success -> 0
+    is Error -> 0
+}
+
+fun Result.wireEncodeTo(wire: boltffiWireWriter) {
+    when (this) {
+        is Success -> wire.writeI32(0)
+        is Error -> wire.writeI32(1)
+    }
+}

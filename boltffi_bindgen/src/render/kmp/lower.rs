@@ -15,10 +15,10 @@ use crate::ir::{
         FunctionDef, MethodDef, RecordDef, ReturnDef, StreamDef, StreamMode,
     },
     ids::BuiltinId,
-    ops::{ReadOp, ReadSeq},
+    ops::{ReadOp, ReadSeq, WriteOp},
     types::{PrimitiveType, TypeExpr},
 };
-use crate::render::kotlin::NamingConvention;
+use crate::render::kotlin::{NamingConvention, emit_size_expr_for_write_seq, emit_write_expr};
 use boltffi_ffi_rules::naming;
 use boltffi_ffi_rules::transport::EnumTagStrategy;
 
@@ -183,6 +183,7 @@ impl<'a> KmpLowerer<'a> {
                 .map(|field| self.lower_record_field(field))
                 .collect::<Vec<_>>(),
             decode_source: self.render_record_decode_source(record, abi_record),
+            encode_source: self.render_record_encode_source(record, abi_record),
             doc: record.doc.clone(),
         }
     }
@@ -286,6 +287,7 @@ impl<'a> KmpLowerer<'a> {
             value_type,
             variants,
             decode_source: self.render_enum_decode_source(enumeration, abi_enum),
+            encode_source: self.render_enum_encode_source(enumeration, abi_enum),
             doc: enumeration.doc.clone(),
         }
     }
@@ -630,8 +632,8 @@ impl<'a> KmpLowerer<'a> {
                     .iter()
                     .enumerate()
                     .map(|(index, variant)| {
-                        let tag_value = abi_enum.resolve_codec_tag(index, variant.discriminant);
-                        let tag_literal = Self::kotlin_tag_literal(tag_value, *tag_type);
+                        let _tag_value = abi_enum.resolve_codec_tag(index, variant.discriminant);
+                        let tag_literal = Self::kotlin_tag_literal(_tag_value, *tag_type);
                         format!(
                             "{} -> {}.{}",
                             tag_literal,
@@ -690,6 +692,126 @@ impl<'a> KmpLowerer<'a> {
             enum_name,
             body
         )
+    }
+
+    fn render_record_encode_source(
+        &self,
+        _record: &RecordDef,
+        abi_record: &crate::ir::abi::AbiRecord,
+    ) -> String {
+        let Some(WriteOp::Record { fields, .. }) = abi_record.encode_ops.ops.first() else {
+            return format!(
+                "fun {}.wireEncodedSize(): Int = 0\n\nfun {}.wireEncodeTo(wire: boltffiWireWriter) {{\n}}",
+                NamingConvention::class_name(_record.id.as_str()),
+                NamingConvention::class_name(_record.id.as_str())
+            );
+        };
+
+        let size_expr = if fields.is_empty() {
+            "0".to_string()
+        } else {
+            fields
+                .iter()
+                .map(|field| emit_size_expr_for_write_seq(&field.seq))
+                .collect::<Vec<_>>()
+                .join(" + ")
+        };
+        let encode_lines = fields
+            .iter()
+            .map(|field| format!("        {}", emit_write_expr(&field.seq)))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        format!(
+            "fun {}.wireEncodedSize(): Int = {size_expr}\n\nfun {}.wireEncodeTo(wire: boltffiWireWriter) {{\n{encode_lines}\n}}",
+            NamingConvention::class_name(_record.id.as_str()),
+            NamingConvention::class_name(_record.id.as_str()),
+        )
+    }
+
+    fn render_enum_encode_source(&self, enumeration: &EnumDef, abi_enum: &AbiEnum) -> String {
+        let enum_name = NamingConvention::class_name(enumeration.id.as_str());
+        match &enumeration.repr {
+            crate::ir::definitions::EnumRepr::CStyle { tag_type, .. } => {
+                let tag_write = Self::wire_primitive_write_expr(*tag_type, "this.value");
+                let size_expr = tag_type.wire_size_bytes().to_string();
+                format!(
+                    "fun {enum_name}.wireEncodedSize(): Int = {size_expr}\n\nfun {enum_name}.wireEncodeTo(wire: boltffiWireWriter) {{\n    {tag_write}\n}}"
+                )
+            }
+            crate::ir::definitions::EnumRepr::Data { tag_type, variants } => {
+                let tag_size = tag_type.wire_size_bytes();
+                let size_arms = variants
+                    .iter()
+                    .enumerate()
+                    .map(|(index, variant)| match &abi_enum.variants[index].payload {
+                        AbiEnumPayload::Unit => format!(
+                            "is {}.{} -> 0",
+                            enum_name,
+                            NamingConvention::class_name(variant.name.as_str())
+                        ),
+                        AbiEnumPayload::Tuple(fields) | AbiEnumPayload::Struct(fields) => {
+                            let field_sizes = fields
+                                .iter()
+                                .map(|field| emit_size_expr_for_write_seq(&field.encode))
+                                .collect::<Vec<_>>()
+                                .join(" + ");
+                            format!(
+                                "is {}.{} -> {}",
+                                enum_name,
+                                NamingConvention::class_name(variant.name.as_str()),
+                                field_sizes
+                            )
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n        ");
+                let encode_arms = variants
+                    .iter()
+                    .enumerate()
+                    .map(|(index, variant)| {
+                        let tag_value = abi_enum.resolve_codec_tag(index, variant.discriminant);
+                        let tag_literal = Self::kotlin_tag_literal(tag_value, *tag_type);
+                        let tag_write = Self::wire_primitive_write_expr(*tag_type, &tag_literal);
+                        let variant_name = NamingConvention::class_name(variant.name.as_str());
+                        let abi_variant = &abi_enum.variants[index];
+                        let field_lines = match &abi_variant.payload {
+                            AbiEnumPayload::Unit => String::new(),
+                            AbiEnumPayload::Tuple(fields) | AbiEnumPayload::Struct(fields) => fields
+                                .iter()
+                                .map(|field| format!("            {}", emit_write_expr(&field.encode)))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        };
+                        if field_lines.is_empty() {
+                            format!("            is {}.{} -> {}", enum_name, variant_name, tag_write)
+                        } else {
+                            format!("            is {}.{} -> {{\n                {}\n{}\n            }}", enum_name, variant_name, tag_write, field_lines)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!(
+                    "fun {enum_name}.wireEncodedSize(): Int = {tag_size} + when (this) {{\n        {size_arms}\n    }}\n\nfun {enum_name}.wireEncodeTo(wire: boltffiWireWriter) {{\n    when (this) {{\n{encode_arms}\n    }}\n}}"
+                )
+            }
+        }
+    }
+
+    fn wire_primitive_write_expr(primitive: PrimitiveType, value_expr: &str) -> String {
+        match primitive {
+            PrimitiveType::Bool => format!("wire.writeBool({value_expr})"),
+            PrimitiveType::I8 => format!("wire.writeI8({value_expr})"),
+            PrimitiveType::U8 => format!("wire.writeU8({value_expr})"),
+            PrimitiveType::I16 => format!("wire.writeI16({value_expr})"),
+            PrimitiveType::U16 => format!("wire.writeU16({value_expr})"),
+            PrimitiveType::I32 => format!("wire.writeI32({value_expr})"),
+            PrimitiveType::U32 => format!("wire.writeU32({value_expr})"),
+            PrimitiveType::I64 | PrimitiveType::ISize => format!("wire.writeI64({value_expr})"),
+            PrimitiveType::U64 | PrimitiveType::USize => format!("wire.writeU64({value_expr})"),
+            PrimitiveType::F32 => format!("wire.writeF32({value_expr})"),
+            PrimitiveType::F64 => format!("wire.writeF64({value_expr})"),
+        }
     }
 
     fn wire_primitive_read_expr(primitive: PrimitiveType) -> String {

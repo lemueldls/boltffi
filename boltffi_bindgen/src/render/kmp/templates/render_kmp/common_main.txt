@@ -4,6 +4,107 @@ package {{ package_name }}
 {% if uses_flow %}import kotlinx.coroutines.flow.Flow
 
 {% endif %}
+{% if uses_wire_writer %}import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.time.Duration
+import java.time.Instant
+import java.net.URI
+import java.util.UUID
+
+{% endif %}
+
+{% if uses_wire_writer %}
+private class boltffiWireWriter(initialCapacity: Int = 256) {
+    private var buffer: ByteBuffer = ByteBuffer.allocateDirect(initialCapacity).order(ByteOrder.LITTLE_ENDIAN)
+    private var pos: Int = 0
+
+    private fun ensureCapacity(needed: Int) {
+        val required = pos + needed
+        if (required <= buffer.capacity()) return
+        val next = ByteBuffer.allocateDirect(maxOf(buffer.capacity() * 2, required)).order(ByteOrder.LITTLE_ENDIAN)
+        val source = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        source.position(0)
+        source.limit(pos)
+        next.put(source)
+        buffer = next
+    }
+
+    internal fun writeRawBytes(byteCount: Int, writer: (ByteBuffer, Int) -> Unit) {
+        ensureCapacity(byteCount)
+        val baseOffset = pos
+        writer(buffer, baseOffset)
+        pos = baseOffset + byteCount
+    }
+
+    fun writePadding(count: Int) {
+        ensureCapacity(count)
+        val view = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        view.position(pos)
+        repeat(count) { view.put(0) }
+        pos += count
+    }
+
+    fun writeBool(v: Boolean) { ensureCapacity(1); buffer.put(pos, if (v) 1 else 0); pos += 1 }
+    fun writeI8(v: Byte) { ensureCapacity(1); buffer.put(pos, v); pos += 1 }
+    fun writeU8(v: UByte) { ensureCapacity(1); buffer.put(pos, v.toByte()); pos += 1 }
+    fun writeI16(v: Short) { ensureCapacity(2); buffer.putShort(pos, v); pos += 2 }
+    fun writeU16(v: UShort) = writeI16(v.toShort())
+    fun writeI32(v: Int) { ensureCapacity(4); buffer.putInt(pos, v); pos += 4 }
+    fun writeU32(v: UInt) = writeI32(v.toInt())
+    fun writeI64(v: Long) { ensureCapacity(8); buffer.putLong(pos, v); pos += 8 }
+    fun writeU64(v: ULong) = writeI64(v.toLong())
+    fun writeF32(v: Float) = writeI32(java.lang.Float.floatToRawIntBits(v))
+    fun writeF64(v: Double) = writeI64(java.lang.Double.doubleToRawLongBits(v))
+
+    fun writeString(v: String) {
+        val bytes = v.toByteArray(Charsets.UTF_8)
+        writeU32(bytes.size.toUInt())
+        ensureCapacity(bytes.size)
+        val view = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        view.position(pos)
+        view.put(bytes)
+        pos += bytes.size
+    }
+
+    fun writeBytes(v: ByteArray) {
+        writeU32(v.size.toUInt())
+        ensureCapacity(v.size)
+        val view = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        view.position(pos)
+        view.put(v)
+        pos += v.size
+    }
+
+    fun writeDuration(v: Duration) {
+        require(v.seconds >= 0L) { "Invalid duration, must be non-negative" }
+        require(v.nano >= 0) { "Invalid duration nanos" }
+        writeI64(v.seconds)
+        writeI32(v.nano)
+    }
+
+    fun writeInstant(v: Instant) {
+        var epochOffset = Duration.between(Instant.EPOCH, v)
+        var sign = 1L
+        if (epochOffset.isNegative) {
+            sign = -1L
+            epochOffset = epochOffset.negated()
+        }
+        require(epochOffset.nano >= 0) { "Invalid instant nanos" }
+        writeI64(sign * epochOffset.seconds)
+        writeI32(epochOffset.nano)
+    }
+
+    fun writeUuid(v: UUID) {
+        writeI64(v.mostSignificantBits)
+        writeI64(v.leastSignificantBits)
+    }
+
+    fun writeUri(v: URI) {
+        writeString(v.toString())
+    }
+}
+
+{% endif %}
 
 {% for record in record_sources %}
 {{ record }}
