@@ -1445,7 +1445,9 @@ mod tests {
 
     use crate::ir::codec::{EnumLayout, VecLayout};
     use crate::ir::ids::{BuiltinId, EnumId, RecordId};
-    use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq};
+    use crate::ir::ops::{
+        OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq,
+    };
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use crate::ir::{Lowerer, build_contract};
     use crate::scan::scan_crate_with_pointer_width;

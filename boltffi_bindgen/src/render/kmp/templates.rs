@@ -922,6 +922,33 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_record_template_recursive() {
+        let fields = vec![
+            KmpRecordFieldView {
+                name: "value",
+                kotlin_type: "Int",
+                default_value: None,
+            },
+            KmpRecordFieldView {
+                name: "next",
+                kotlin_type: "TreeNode?",
+                default_value: Some("null"),
+            },
+        ];
+
+        let rendered = RecordTemplate {
+            class_name: "TreeNode",
+            fields: &fields,
+            encode_source: "fun TreeNode.wireEncodedSize(): Int = 4 + 1 + (next?.wireEncodedSize() ?: 0)\n\nfun TreeNode.wireEncodeTo(wire: boltffiWireWriter) {\n    wire.writeI32(value)\n    if (next == null) {\n        wire.writeU8(0u)\n    } else {\n        wire.writeU8(1u)\n        next.wireEncodeTo(wire)\n    }\n}",
+            doc: Some("A recursive tree node."),
+        }
+        .render()
+        .unwrap();
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
     fn snapshot_class_common_template() {
         let constructor_sources = vec![render_kmp_constructor_signature(
             &[KmpParam {
@@ -1204,6 +1231,50 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_enum_template_recursive_data() {
+        let variants = vec![
+            KmpEnumVariantView {
+                name: "Value".to_string(),
+                tag: 0,
+                fields: vec![KmpEnumFieldView {
+                    name: "value".to_string(),
+                    kotlin_type: "Int".to_string(),
+                }],
+                doc: Some("Leaf value.".to_string()),
+            },
+            KmpEnumVariantView {
+                name: "Add".to_string(),
+                tag: 1,
+                fields: vec![
+                    KmpEnumFieldView {
+                        name: "left".to_string(),
+                        kotlin_type: "ExprTree".to_string(),
+                    },
+                    KmpEnumFieldView {
+                        name: "right".to_string(),
+                        kotlin_type: "ExprTree".to_string(),
+                    },
+                ],
+                doc: Some("Recursive addition node.".to_string()),
+            },
+        ];
+
+        let rendered = EnumTemplate {
+            class_name: "ExprTree",
+            is_c_style: false,
+            is_error: false,
+            value_type: None,
+            variants: &variants,
+            encode_source: "fun ExprTree.wireEncodedSize(): Int = 4 + when (this) {\n    is ExprTree.Value -> 4\n    is ExprTree.Add -> left.wireEncodedSize() + right.wireEncodedSize()\n}\n\nfun ExprTree.wireEncodeTo(wire: boltffiWireWriter) {\n    when (this) {\n        is ExprTree.Value -> {\n            wire.writeI32(0)\n            wire.writeI32(value)\n        }\n        is ExprTree.Add -> {\n            wire.writeI32(1)\n            left.wireEncodeTo(wire)\n            right.wireEncodeTo(wire)\n        }\n    }\n}",
+            doc: Some("A recursive expression tree."),
+        }
+        .render()
+        .unwrap();
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
     fn snapshot_cinterop_def_template() {
         let options = test_options();
         let rendered = CInteropDefTemplate {
@@ -1324,29 +1395,175 @@ mod tests {
         let _ = fs::remove_dir_all(tmp_root);
     }
 
-    #[test]
-    fn generated_kmp_common_sources_compile_with_kotlinc_when_available() {
-        let mut module = test_module();
-        if let Some(enumeration) = module.enums.first_mut() {
-            enumeration.encode_source = "fun Result.wireEncodedSize(): Int = 4 + when (this) {\n    is Result.Success -> 0\n}\n\nfun Result.wireEncodeTo(wire: boltffiWireWriter) {\n    when (this) {\n        is Result.Success -> wire.writeI32(0)\n    }\n}".to_string();
+    fn compile_kotlin_multiplatform_sources_when_available(
+        common_files: &[(&str, String)],
+        platform_files: &[(&str, String)],
+    ) {
+        if Command::new("kotlinc").arg("-version").output().is_err() {
+            return;
         }
-        module.functions.push(KmpFunction {
-            public_name: "resultFn".to_string(),
-            ffi_symbol: "boltffi_result_fn".to_string(),
-            params: vec![KmpParam {
-                name: "value".to_string(),
-                kotlin_type: "Int".to_string(),
-            }],
-            return_type: Some("BoltFFIResult<Int, String>".to_string()),
-            is_async: false,
-        });
-        if let Some(class) = module.classes.first_mut() {
-            if let Some(stream) = class.streams.first_mut() {
-                stream.mode = KmpStreamMode::Batch;
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be monotonic")
+            .as_nanos();
+        let tmp_root = env::temp_dir().join(format!("boltffi-kmp-multiplatform-compile-{nanos}"));
+        fs::create_dir_all(&tmp_root).expect("should create temp kotlin directory");
+
+        let common_paths = common_files
+            .iter()
+            .map(|(name, source)| {
+                let path = tmp_root.join(name);
+                fs::write(&path, source).expect("should write common kotlin source");
+                path
+            })
+            .collect::<Vec<_>>();
+        let platform_paths = platform_files
+            .iter()
+            .map(|(name, source)| {
+                let path = tmp_root.join(name);
+                fs::write(&path, source).expect("should write platform kotlin source");
+                path
+            })
+            .collect::<Vec<_>>();
+
+        let mut all_paths = common_paths.clone();
+        all_paths.extend(platform_paths.clone());
+
+        let out_jar = tmp_root.join("out.jar");
+        let mut cmd = Command::new("kotlinc");
+        cmd.arg("-Xmulti-platform");
+        cmd.arg("-Xexpect-actual-classes");
+        for path in &common_paths {
+            cmd.arg(format!("-Xcommon-sources={}", path.display()));
+        }
+        let status = cmd
+            .args(&all_paths)
+            .arg("-d")
+            .arg(&out_jar)
+            .status()
+            .expect("kotlinc should execute");
+
+        if !status.success() {
+            for (name, source) in common_files {
+                eprintln!("=== common::{name} ===\n{source}");
+            }
+            for (name, source) in platform_files {
+                eprintln!("=== platform::{name} ===\n{source}");
             }
         }
 
-        let options = test_options();
+        assert!(
+            status.success(),
+            "generated common/actual kotlin sources should compile"
+        );
+        let _ = fs::remove_dir_all(tmp_root);
+    }
+
+    fn kotlin_param_signature(params: &[KmpParam]) -> String {
+        params
+            .iter()
+            .map(|param| format!("{}: {}", param.name, param.kotlin_type))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn kotlin_stub_expr(return_type: Option<&str>) -> &'static str {
+        match return_type {
+            None | Some("Unit") => "{}",
+            Some(_) => "= TODO(\"stub\")",
+        }
+    }
+
+    fn generate_actual_stubs_source(module: &KmpModule, options: &KmpOptions) -> String {
+        let mut src = String::new();
+        src.push_str("// Generated by BoltFFI tests.\n");
+        src.push_str(&format!("package {}\n\n", options.package_name));
+
+        for class in &module.classes {
+            src.push_str(&format!(
+                "actual class {} private actual constructor(private val handle: Long) {{\n",
+                class.class_name
+            ));
+
+            for ctor in &class.constructors {
+                let params = kotlin_param_signature(&ctor.params);
+                src.push_str(&format!("    actual constructor({params}) : this(0L)\n"));
+            }
+
+            for method in &class.methods {
+                let params = kotlin_param_signature(&method.params);
+                let suspend_kw = if method.is_async { "suspend " } else { "" };
+                let ret_ty = method.return_type.as_deref().unwrap_or("Unit");
+                src.push_str(&format!(
+                    "    actual {suspend_kw}fun {}({}): {} {}\n",
+                    method.name,
+                    params,
+                    ret_ty,
+                    kotlin_stub_expr(method.return_type.as_deref())
+                ));
+            }
+
+            for stream in &class.streams {
+                let stream_pascal = stream.name.to_upper_camel_case();
+                let batch_interface = format!("{}{}Subscription", class.class_name, stream_pascal);
+                let callback_interface =
+                    format!("{}{}Cancellable", class.class_name, stream_pascal);
+                match stream.mode {
+                    KmpStreamMode::Async => {
+                        src.push_str(&format!(
+                            "    actual fun {}(): kotlinx.coroutines.flow.Flow<{}> = TODO(\"stub\")\n",
+                            stream.name, stream.item_type
+                        ));
+                    }
+                    KmpStreamMode::Batch => {
+                        src.push_str(&format!(
+                            "    actual fun {}(): {} = object : {} {{\n",
+                            stream.name, batch_interface, batch_interface
+                        ));
+                        src.push_str(&format!(
+                            "        override fun popBatch(maxCount: Long): List<{}> = emptyList()\n",
+                            stream.item_type
+                        ));
+                        src.push_str("        override fun wait(timeout: Int): Int = 0\n");
+                        src.push_str("        override fun unsubscribe() {}\n");
+                        src.push_str("        override fun close() {}\n");
+                        src.push_str("    }\n");
+                    }
+                    KmpStreamMode::Callback => {
+                        src.push_str(&format!(
+                            "    actual fun {}(callback: ({}) -> Unit): {} = object : {} {{\n",
+                            stream.name, stream.item_type, callback_interface, callback_interface
+                        ));
+                        src.push_str("        override fun cancel() {}\n");
+                        src.push_str("        override fun close() {}\n");
+                        src.push_str("    }\n");
+                    }
+                }
+            }
+
+            src.push_str("}\n\n");
+        }
+
+        src.push_str(&format!("actual object {} {{\n", options.module_name));
+        for function in &module.functions {
+            let params = kotlin_param_signature(&function.params);
+            let suspend_kw = if function.is_async { "suspend " } else { "" };
+            let ret_ty = function.return_type.as_deref().unwrap_or("Unit");
+            src.push_str(&format!(
+                "    actual {suspend_kw}fun {}({}): {} {}\n",
+                function.public_name,
+                params,
+                ret_ty,
+                kotlin_stub_expr(function.return_type.as_deref())
+            ));
+        }
+        src.push_str("}\n");
+
+        src
+    }
+
+    fn render_common_main_for_compile(module: &KmpModule, options: &KmpOptions) -> String {
         let record_sources = module
             .records
             .iter()
@@ -1408,6 +1625,54 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
+        let class_sources = module
+            .classes
+            .iter()
+            .map(|class| {
+                let constructor_sources = class
+                    .constructors
+                    .iter()
+                    .map(|ctor| {
+                        render_kmp_constructor_signature(
+                            &ctor.params,
+                            ctor.doc.as_deref(),
+                            false,
+                            None,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let method_sources = class
+                    .methods
+                    .iter()
+                    .map(|method| render_kmp_method_signature(method, false, None))
+                    .collect::<Vec<_>>();
+                let stream_rendered = class
+                    .streams
+                    .iter()
+                    .map(|stream| render_kmp_stream_signature(&class.class_name, stream, false))
+                    .collect::<Vec<_>>();
+                let stream_sources = stream_rendered
+                    .iter()
+                    .map(|stream| stream.member_source.clone())
+                    .collect::<Vec<_>>();
+                let stream_support_sources = stream_rendered
+                    .iter()
+                    .filter_map(|stream| stream.common_support_source.clone())
+                    .collect::<Vec<_>>();
+
+                ClassCommonTemplate {
+                    class_name: &class.class_name,
+                    doc: class.doc.as_deref(),
+                    constructor_sources: &constructor_sources,
+                    method_sources: &method_sources,
+                    stream_sources: &stream_sources,
+                    stream_support_sources: &stream_support_sources,
+                }
+                .render()
+                .expect("class common template should render")
+            })
+            .collect::<Vec<_>>();
+
         let callback_sources = module
             .callbacks
             .iter()
@@ -1429,51 +1694,58 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let mut compile_common_source = CommonMainTemplate {
+        let uses_flow = module.classes.iter().any(|class| {
+            class
+                .streams
+                .iter()
+                .any(|stream| stream.mode == KmpStreamMode::Async)
+        });
+        let uses_wire_writer = !module.records.is_empty() || !module.enums.is_empty();
+
+        CommonMainTemplate {
             package_name: &options.package_name,
             module_name: &options.module_name,
             record_sources: &record_sources,
             enum_sources: &enum_sources,
-            class_sources: &[],
+            class_sources: &class_sources,
             callback_sources: &callback_sources,
-            uses_wire_writer: true,
-            uses_flow: false,
-            functions: &[],
+            uses_wire_writer,
+            uses_flow,
+            functions: &module.functions,
         }
         .render()
-        .expect("compile common template should render");
+        .expect("compile common template should render")
+    }
 
-        if let Some(idx) =
-            compile_common_source.find(&format!("expect object {}", options.module_name))
-        {
-            compile_common_source.truncate(idx);
+    #[test]
+    fn generated_kmp_common_sources_compile_with_kotlinc_when_available() {
+        let mut module = test_module();
+        if let Some(enumeration) = module.enums.first_mut() {
+            enumeration.encode_source = "fun Result.wireEncodedSize(): Int = 4 + when (this) {\n    is Result.Success -> 0\n}\n\nfun Result.wireEncodeTo(wire: boltffiWireWriter) {\n    when (this) {\n        is Result.Success -> wire.writeI32(0)\n    }\n}".to_string();
+        }
+        module.functions.push(KmpFunction {
+            public_name: "resultFn".to_string(),
+            ffi_symbol: "boltffi_result_fn".to_string(),
+            params: vec![KmpParam {
+                name: "value".to_string(),
+                kotlin_type: "Int".to_string(),
+            }],
+            return_type: Some("BoltFFIResult<Int, String>".to_string()),
+            is_async: false,
+        });
+        if let Some(class) = module.classes.first_mut() {
+            if let Some(stream) = class.streams.first_mut() {
+                stream.mode = KmpStreamMode::Batch;
+            }
         }
 
-        let stream_support = module
-            .classes
-            .iter()
-            .flat_map(|class| {
-                class
-                    .streams
-                    .iter()
-                    .filter_map(|stream| {
-                        render_kmp_stream_signature(&class.class_name, stream, false)
-                            .common_support_source
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        let stream_support_source = format!(
-            "package {}\n\n{}\n",
-            options.package_name,
-            stream_support.join("\n\n")
+        let options = test_options();
+        let common_main = render_common_main_for_compile(&module, &options);
+        let actual_stubs = generate_actual_stubs_source(&module, &options);
+        compile_kotlin_multiplatform_sources_when_available(
+            &[("CommonMain.kt", common_main)],
+            &[("ActualStubs.kt", actual_stubs)],
         );
-
-        compile_kotlin_sources_when_available(&[
-            ("CommonMain.kt", compile_common_source),
-            ("StreamSupport.kt", stream_support_source),
-        ]);
     }
 }
 
