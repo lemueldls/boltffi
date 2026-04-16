@@ -4,6 +4,9 @@
 
 using System;
 using System.Runtime.InteropServices;
+{%- if module.has_strings() %}
+using System.Text;
+{%- endif %}
 
 namespace {{ module.namespace }}
 {
