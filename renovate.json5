@@ -1,0 +1,46 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommitTypeAll(chore)",
+  ],
+  timezone: "UTC",
+  schedule: ["after 6am and before 9am on Wednesday"],
+  prConcurrentLimit: 5,
+  minimumReleaseAge: "5 days",
+  labels: ["dependencies"],
+
+  // No pinned crates at this time. All version strings in Cargo.toml files are
+  // floating minimums (caret ranges), not pins. If a real pin is ever needed
+  // (e.g., an upstream crate breaks us), add a packageRule below with
+  // matchPackageNames + allowedVersions and document the reason inline.
+  packageRules: [
+    {
+      description: "Group all Cargo updates (workspace, benchmarks, examples/demo) so path-dep consumers stay in sync with library deps",
+      matchManagers: ["cargo"],
+      groupName: "cargo",
+      commitMessagePrefix: "chore(deps):",
+    },
+    {
+      description: "Group example platform updates (apple/Swift Package Manager, kotlin/Gradle, wasm/npm; java and python demos are stdlib-only)",
+      matchFileNames: ["examples/platforms/**"],
+      groupName: "example-platforms",
+      commitMessagePrefix: "chore(examples):",
+    },
+    {
+      description: "Group GitHub Actions updates",
+      matchManagers: ["github-actions"],
+      groupName: "github-actions",
+      commitMessagePrefix: "chore(ci):",
+    },
+    {
+      // Without this, Renovate only opens PRs when Cargo.toml needs to change.
+      // Patch/minor updates resolved through existing caret ranges would sit in
+      // Cargo.lock forever.
+      description: "Update Cargo lockfiles even when the declared range is satisfied",
+      matchManagers: ["cargo"],
+      rangeStrategy: "update-lockfile",
+    },
+  ],
+}
