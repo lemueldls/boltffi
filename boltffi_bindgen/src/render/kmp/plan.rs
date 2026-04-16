@@ -29,6 +29,7 @@ pub struct KmpModule {
 pub struct KmpRecord {
     pub class_name: String,
     pub fields: Vec<KmpRecordField>,
+    pub decode_source: String,
     pub doc: Option<String>,
 }
 
@@ -46,6 +47,7 @@ pub struct KmpEnum {
     pub is_error: bool,
     pub value_type: Option<String>,
     pub variants: Vec<KmpEnumVariant>,
+    pub decode_source: String,
     pub doc: Option<String>,
 }
 

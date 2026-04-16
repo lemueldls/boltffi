@@ -36,6 +36,7 @@ pub struct NativeMainTemplate<'a> {
     pub native_binding_package: &'a str,
     pub callback_imports: &'a [String],
     pub class_imports: &'a [String],
+    pub decode_sources: &'a [String],
     pub class_sources: &'a [String],
     pub callback_bridge_sources: &'a [String],
     pub uses_flow: bool,
@@ -337,6 +338,17 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             ctor_imports.chain(method_imports).chain(stream_imports)
         })
         .collect::<Vec<_>>();
+    let decode_sources = module
+        .records
+        .iter()
+        .map(|record| record.decode_source.clone())
+        .chain(
+            module
+                .enums
+                .iter()
+                .map(|enumeration| enumeration.decode_source.clone()),
+        )
+        .collect::<Vec<_>>();
     let class_actual_sources = module
         .classes
         .iter()
@@ -387,7 +399,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             .streams
             .iter()
             .any(|stream| stream.pop_batch_items_expr.contains("boltffiWireReader("))
-    });
+    }) || !decode_sources.is_empty();
     let uses_callback_streams = module.classes.iter().any(|class| {
         class
             .streams
@@ -427,6 +439,7 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             native_binding_package: &options.native_binding_package,
             callback_imports: &callback_imports,
             class_imports: &class_imports,
+            decode_sources: &decode_sources,
             class_sources: &class_actual_sources,
             callback_bridge_sources: &callback_bridge_sources,
             uses_flow,
@@ -471,6 +484,7 @@ mod tests {
                     kotlin_type: "Long".to_string(),
                     default_value: None,
                 }],
+                decode_source: "private fun boltffiDecodeRecordLocation(reader: boltffiWireReader): Location = Location(id = reader.readI64())".to_string(),
                 doc: Some("A physical location.".to_string()),
             }],
             enums: vec![super::super::plan::KmpEnum {
@@ -484,6 +498,7 @@ mod tests {
                     fields: vec![],
                     doc: Some("Operation succeeded.".to_string()),
                 }],
+                decode_source: "private fun boltffiDecodeEnumResult(reader: boltffiWireReader): Result = Result.Success".to_string(),
                 doc: Some("The result of an operation.".to_string()),
             }],
             classes: vec![super::super::plan::KmpClass {
@@ -823,6 +838,7 @@ mod tests {
             native_binding_package: &options.native_binding_package,
             callback_imports: &[],
             class_imports: &class_imports,
+            decode_sources: &[],
             class_sources: &class_actual_sources,
             callback_bridge_sources: &callback_bridge_sources,
             uses_flow: true,
@@ -846,6 +862,7 @@ mod tests {
             native_binding_package: &options.native_binding_package,
             callback_imports: &[],
             class_imports: &[],
+            decode_sources: &[],
             class_sources: &[],
             callback_bridge_sources: &[],
             uses_flow: false,

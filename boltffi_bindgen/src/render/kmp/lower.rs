@@ -174,6 +174,7 @@ impl<'a> KmpLowerer<'a> {
     }
 
     fn lower_record(&self, record: &RecordDef) -> KmpRecord {
+        let abi_record = self.abi_record_for(record);
         KmpRecord {
             class_name: NamingConvention::class_name(record.id.as_str()),
             fields: record
@@ -181,8 +182,17 @@ impl<'a> KmpLowerer<'a> {
                 .iter()
                 .map(|field| self.lower_record_field(field))
                 .collect::<Vec<_>>(),
+            decode_source: self.render_record_decode_source(record, abi_record),
             doc: record.doc.clone(),
         }
+    }
+
+    fn abi_record_for(&self, record: &RecordDef) -> &crate::ir::abi::AbiRecord {
+        self.abi
+            .records
+            .iter()
+            .find(|abi_record| abi_record.id == record.id)
+            .expect("abi record missing")
     }
 
     fn lower_record_field(&self, field: &FieldDef) -> KmpRecordField {
@@ -275,6 +285,7 @@ impl<'a> KmpLowerer<'a> {
             is_error,
             value_type,
             variants,
+            decode_source: self.render_enum_decode_source(enumeration, abi_enum),
             doc: enumeration.doc.clone(),
         }
     }
@@ -426,22 +437,8 @@ impl<'a> KmpLowerer<'a> {
                 let element_expr = self.wire_read_expr(element);
                 format!("run {{ val len = reader.readI32(); List(len) {{ {element_expr} }} }}")
             }
-            ReadOp::Record { id, fields, .. } => {
-                let record_name = NamingConvention::class_name(id.as_str());
-                let mut args = Vec::with_capacity(fields.len());
-                for field in fields {
-                    let field_expr = self.wire_read_expr(&field.seq);
-                    args.push(format!(
-                        "{} = {}",
-                        NamingConvention::param_name(field.name.as_str()),
-                        field_expr
-                    ));
-                }
-                if fields.is_empty() {
-                    Self::recursive_decode_guard_expr("record", id.as_str())
-                } else {
-                    format!("{}({})", record_name, args.join(", "))
-                }
+            ReadOp::Record { id, .. } => {
+                format!("{}(reader)", Self::record_decode_helper_name(id.as_str()))
             }
             ReadOp::Enum { id, layout, .. } => match layout {
                 EnumLayout::CStyle { tag_type, .. } => {
@@ -457,7 +454,9 @@ impl<'a> KmpLowerer<'a> {
                     tag_strategy,
                     variants,
                 } => self.wire_read_data_enum_expr(id.as_str(), *tag_type, *tag_strategy, variants),
-                EnumLayout::Recursive => Self::recursive_decode_guard_expr("enum", id.as_str()),
+                EnumLayout::Recursive => {
+                    format!("{}(reader)", Self::enum_decode_helper_name(id.as_str()))
+                }
             },
             ReadOp::Result { ok, err, .. } => {
                 let ok_expr = self.wire_read_expr(ok);
@@ -495,33 +494,15 @@ impl<'a> KmpLowerer<'a> {
             }
             CodecPlan::Record { id, layout } => match layout {
                 crate::ir::codec::RecordLayout::Blittable { fields, .. } => {
-                    let record_name = NamingConvention::class_name(id.as_str());
-                    let args = fields
-                        .iter()
-                        .map(|field| {
-                            let field_name = NamingConvention::param_name(field.name.as_str());
-                            let value_expr = Self::wire_primitive_read_expr(field.primitive);
-                            format!("{} = {}", field_name, value_expr)
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("{}({})", record_name, args)
+                    let _ = fields;
+                    format!("{}(reader)", Self::record_decode_helper_name(id.as_str()))
                 }
                 crate::ir::codec::RecordLayout::Encoded { fields } => {
-                    let record_name = NamingConvention::class_name(id.as_str());
-                    let args = fields
-                        .iter()
-                        .map(|field| {
-                            let field_name = NamingConvention::param_name(field.name.as_str());
-                            let value_expr = self.wire_read_codec_expr(&field.codec);
-                            format!("{} = {}", field_name, value_expr)
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("{}({})", record_name, args)
+                    let _ = fields;
+                    format!("{}(reader)", Self::record_decode_helper_name(id.as_str()))
                 }
                 crate::ir::codec::RecordLayout::Recursive => {
-                    Self::recursive_decode_guard_expr("record", id.as_str())
+                    format!("{}(reader)", Self::record_decode_helper_name(id.as_str()))
                 }
             },
             CodecPlan::Enum { id, layout } => match layout {
@@ -538,7 +519,9 @@ impl<'a> KmpLowerer<'a> {
                     tag_strategy,
                     variants,
                 } => self.wire_read_data_enum_expr(id.as_str(), *tag_type, *tag_strategy, variants),
-                EnumLayout::Recursive => Self::recursive_decode_guard_expr("enum", id.as_str()),
+                EnumLayout::Recursive => {
+                    format!("{}(reader)", Self::enum_decode_helper_name(id.as_str()))
+                }
             },
             CodecPlan::Custom { underlying, .. } => self.wire_read_codec_expr(underlying),
         }
@@ -595,17 +578,117 @@ impl<'a> KmpLowerer<'a> {
             "SystemTime" => "reader.readInstant()".to_string(),
             "Uuid" => "reader.readUuid()".to_string(),
             "Url" => "reader.readUri()".to_string(),
-            other => format!(
-                "error(\"Unsupported builtin wire decode in stream for {}\")",
-                other
-            ),
+            _ => "reader.readString()".to_string(),
         }
     }
 
-    fn recursive_decode_guard_expr(kind: &str, id: &str) -> String {
+    fn record_decode_helper_name(id: &str) -> String {
+        format!("boltffiDecodeRecord{}", NamingConvention::class_name(id))
+    }
+
+    fn enum_decode_helper_name(id: &str) -> String {
+        format!("boltffiDecodeEnum{}", NamingConvention::class_name(id))
+    }
+
+    fn render_record_decode_source(
+        &self,
+        record: &RecordDef,
+        abi_record: &crate::ir::abi::AbiRecord,
+    ) -> String {
+        let record_name = NamingConvention::class_name(record.id.as_str());
+        let body = match abi_record.decode_ops.ops.first() {
+            Some(ReadOp::Record { fields, .. }) => {
+                let args = fields
+                    .iter()
+                    .map(|field| {
+                        let field_name = NamingConvention::param_name(field.name.as_str());
+                        let value_expr = self.wire_read_expr(&field.seq);
+                        format!("{} = {}", field_name, value_expr)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}({})", record_name, args)
+            }
+            _ => self.wire_read_expr(&abi_record.decode_ops),
+        };
+
         format!(
-            "error(\"Recursive {} wire decode in stream is not supported yet for {}\")",
-            kind, id
+            "private fun {}(reader: boltffiWireReader): {} = {}",
+            Self::record_decode_helper_name(record.id.as_str()),
+            record_name,
+            body
+        )
+    }
+
+    fn render_enum_decode_source(&self, enumeration: &EnumDef, abi_enum: &AbiEnum) -> String {
+        let enum_name = NamingConvention::class_name(enumeration.id.as_str());
+        let body = match &enumeration.repr {
+            crate::ir::definitions::EnumRepr::CStyle { tag_type, .. } => {
+                let tag_read = Self::wire_primitive_read_expr(*tag_type);
+                let arms = abi_enum
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .map(|(index, variant)| {
+                        let tag_value = abi_enum.resolve_codec_tag(index, variant.discriminant);
+                        let tag_literal = Self::kotlin_tag_literal(tag_value, *tag_type);
+                        format!(
+                            "{} -> {}.{}",
+                            tag_literal,
+                            enum_name,
+                            NamingConvention::enum_entry_name(variant.name.as_str())
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!(
+                    "run {{ val tag = {}; when (tag) {{ {}; else -> error(\"Unknown enum tag for {}: $tag\") }} }}",
+                    tag_read, arms, enum_name
+                )
+            }
+            crate::ir::definitions::EnumRepr::Data { tag_type, variants } => {
+                let arms = variants
+                    .iter()
+                    .enumerate()
+                    .map(|(index, variant)| {
+                        let tag_value = abi_enum.resolve_codec_tag(index, variant.discriminant);
+                        let tag_literal = Self::kotlin_tag_literal(tag_value, *tag_type);
+                        let abi_variant = &abi_enum.variants[index];
+                        let variant_name = NamingConvention::class_name(variant.name.as_str());
+                        let ctor_expr = match &abi_variant.payload {
+                            AbiEnumPayload::Unit => format!("{}.{}", enum_name, variant_name),
+                            AbiEnumPayload::Tuple(fields) | AbiEnumPayload::Struct(fields) => {
+                                let args = fields
+                                    .iter()
+                                    .map(|field| {
+                                        let field_name =
+                                            NamingConvention::param_name(field.name.as_str());
+                                        let value_expr = self.wire_read_expr(&field.decode);
+                                        format!("{} = {}", field_name, value_expr)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                format!("{}.{}({})", enum_name, variant_name, args)
+                            }
+                        };
+                        format!("{} -> {}", tag_literal, ctor_expr)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!(
+                    "run {{ val tag = {}; when (tag) {{ {}; else -> error(\"Unknown enum tag for {}: $tag\") }} }}",
+                    Self::wire_primitive_read_expr(*tag_type),
+                    arms,
+                    enum_name
+                )
+            }
+        };
+
+        format!(
+            "private fun {}(reader: boltffiWireReader): {} = {}",
+            Self::enum_decode_helper_name(enumeration.id.as_str()),
+            enum_name,
+            body
         )
     }
 
