@@ -8,15 +8,24 @@ package com.example.demo
 import kotlinx.coroutines.flow.Flow
 
 
-import java.time.Duration
-import java.time.Instant
-import java.net.URI
-import java.util.UUID
-
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 
+
+data class Duration(val seconds: Long, val nano: Int)
+
+data class Instant(val epochSeconds: Long, val nano: Int)
+
+data class UUID(val mostSignificantBits: Long, val leastSignificantBits: Long)
+
+data class URI(private val raw: String) {
+    override fun toString(): String = raw
+
+    companion object {
+        fun create(value: String): URI = URI(value)
+    }
+}
 
 sealed class BoltFFIResult<out T, out E> {
     data class Ok<T>(val value: T) : BoltFFIResult<T, Nothing>()
@@ -151,15 +160,9 @@ private class boltffiWireWriter(initialCapacity: Int = 256) {
     }
 
     fun writeInstant(v: Instant) {
-        var epochOffset = Duration.between(Instant.EPOCH, v)
-        var sign = 1L
-        if (epochOffset.isNegative) {
-            sign = -1L
-            epochOffset = epochOffset.negated()
-        }
-        require(epochOffset.nano >= 0) { "Invalid instant nanos" }
-        writeI64(sign * epochOffset.seconds)
-        writeI32(epochOffset.nano)
+        require(v.nano >= 0) { "Invalid instant nanos" }
+        writeI64(v.epochSeconds)
+        writeI32(v.nano)
     }
 
     fun writeUuid(v: UUID) {
