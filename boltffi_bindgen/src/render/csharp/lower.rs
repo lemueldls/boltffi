@@ -5,7 +5,7 @@ use crate::ir::types::TypeExpr;
 use crate::ir::{AbiContract, FfiContract};
 
 use super::mappings;
-use super::plan::{CSharpFunction, CSharpModule, CSharpParam};
+use super::plan::{CSharpFunction, CSharpModule, CSharpParam, CSharpType};
 use super::{CSharpOptions, NamingConvention};
 
 /// Transforms the language-agnostic [`FfiContract`] and [`AbiContract`] into
@@ -92,17 +92,17 @@ impl<'a> CSharpLowerer<'a> {
         })
     }
 
-    fn lower_return(return_def: &ReturnDef) -> Option<String> {
+    fn lower_return(return_def: &ReturnDef) -> Option<CSharpType> {
         match return_def {
-            ReturnDef::Void => Some("void".to_string()),
+            ReturnDef::Void => Some(CSharpType::Void),
             ReturnDef::Value(type_expr) => Self::lower_type(type_expr),
             ReturnDef::Result { .. } => None,
         }
     }
 
-    fn lower_type(type_expr: &TypeExpr) -> Option<String> {
+    fn lower_type(type_expr: &TypeExpr) -> Option<CSharpType> {
         match type_expr {
-            TypeExpr::Primitive(primitive) => Some(mappings::csharp_type(*primitive).to_string()),
+            TypeExpr::Primitive(primitive) => Some(mappings::csharp_type(*primitive)),
             _ => None,
         }
     }
