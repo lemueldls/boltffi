@@ -8,14 +8,27 @@ package com.example.demo
 import kotlinx.coroutines.flow.Flow
 
 
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.time.Duration
 import java.time.Instant
 import java.net.URI
 import java.util.UUID
 
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
+
+
+sealed class BoltFFIResult<out T, out E> {
+    data class Ok<T>(val value: T) : BoltFFIResult<T, Nothing>()
+    data class Err<E>(val error: E) : BoltFFIResult<Nothing, E>()
+}
+
+@Suppress("UNCHECKED_CAST")
+private fun <T> boltffiUnsafeCast(value: Any?): T = value as T
+
+private object Utf8Codec {
+    fun maxBytes(value: String): Int = value.length * 3
+}
 
 
 private class boltffiWireWriter(initialCapacity: Int = 256) {
@@ -77,6 +90,57 @@ private class boltffiWireWriter(initialCapacity: Int = 256) {
         view.position(pos)
         view.put(v)
         pos += v.size
+    }
+
+    fun writePrimitiveList(v: IntArray) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeI32(it) }
+    }
+
+    fun writePrimitiveList(v: LongArray) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeI64(it) }
+    }
+
+    fun writePrimitiveList(v: FloatArray) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeF32(it) }
+    }
+
+    fun writePrimitiveList(v: DoubleArray) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeF64(it) }
+    }
+
+    fun writePrimitiveList(v: ShortArray) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeI16(it) }
+    }
+
+    fun writePrimitiveList(v: ByteArray) {
+        writeU32(v.size.toUInt())
+        ensureCapacity(v.size)
+        val view = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        view.position(pos)
+        view.put(v)
+        pos += v.size
+    }
+
+    fun writePrimitiveList(v: BooleanArray) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeBool(it) }
+    }
+
+    @JvmName("writeIntList")
+    fun writePrimitiveList(v: List<Int>) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeI32(it) }
+    }
+
+    @JvmName("writeLongList")
+    fun writePrimitiveList(v: List<Long>) {
+        writeU32(v.size.toUInt())
+        v.forEach { writeI64(it) }
     }
 
     fun writeDuration(v: Duration) {

@@ -722,10 +722,9 @@ impl<'a> KmpLowerer<'a> {
             .collect::<Vec<_>>()
             .join("\n");
 
+        let class_name = NamingConvention::class_name(_record.id.as_str());
         format!(
-            "fun {}.wireEncodedSize(): Int = {size_expr}\n\nfun {}.wireEncodeTo(wire: boltffiWireWriter) {{\n{encode_lines}\n}}",
-            NamingConvention::class_name(_record.id.as_str()),
-            NamingConvention::class_name(_record.id.as_str()),
+            "fun {class_name}.wireEncodedSize(): Int = {size_expr}\n\nfun {class_name}.wireEncodeTo(wire: boltffiWireWriter) {{\n{encode_lines}\n}}\n\nobject {class_name}Writer {{\n    fun writeAllToWire(wire: boltffiWireWriter, items: List<{class_name}>) {{\n        items.forEach {{ item -> item.wireEncodeTo(wire) }}\n    }}\n}}",
         )
     }
 
