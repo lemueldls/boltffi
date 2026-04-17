@@ -36,5 +36,5 @@ pub struct SetupTemplate<'a> {
 #[template(path = "render_python/native_module.c.txt", escape = "none")]
 pub struct NativeModuleTemplate<'a> {
     pub module: &'a PythonModule,
-    pub used_scalar_types: &'a [PrimitiveType],
+    pub used_primitive_types: &'a [PrimitiveType],
 }
