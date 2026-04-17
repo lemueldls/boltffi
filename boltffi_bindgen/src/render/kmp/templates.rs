@@ -26,6 +26,10 @@ pub struct JvmMainTemplate<'a> {
     pub package_name: &'a str,
     pub module_name: &'a str,
     pub jvm_binding_package: &'a str,
+    pub class_imports: &'a [String],
+    pub class_sources: &'a [String],
+    pub uses_flow: bool,
+    pub uses_launch: bool,
     pub functions: &'a [KmpFunction],
 }
 
@@ -393,6 +397,49 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             .expect("KMP class actual template should render")
         })
         .collect::<Vec<_>>();
+    let jvm_class_imports = module
+        .classes
+        .iter()
+        .flat_map(|class| {
+            let ctor_imports = class.constructors.iter().map(|ctor| {
+                format!(
+                    "import {}.{} as __jvm_class_{}",
+                    options.jvm_binding_package, ctor.ffi_symbol, ctor.ffi_symbol
+                )
+            });
+            let method_imports = class.methods.iter().map(|method| {
+                format!(
+                    "import {}.{} as __jvm_class_{}",
+                    options.jvm_binding_package, method.ffi_symbol, method.ffi_symbol
+                )
+            });
+            let stream_imports = class.streams.iter().flat_map(|stream| {
+                [
+                    stream.subscribe_symbol.as_str(),
+                    stream.pop_batch_symbol.as_str(),
+                    stream.wait_symbol.as_str(),
+                    stream.unsubscribe_symbol.as_str(),
+                    stream.free_symbol.as_str(),
+                ]
+                .into_iter()
+                .map(|symbol| {
+                    format!(
+                        "import {}.{} as __jvm_class_{}",
+                        options.jvm_binding_package, symbol, symbol
+                    )
+                })
+                .collect::<Vec<_>>()
+            });
+
+            ctor_imports.chain(method_imports).chain(stream_imports)
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let jvm_class_actual_sources = class_actual_sources
+        .iter()
+        .map(|source| source.replace("__native_class_", "__jvm_class_"))
+        .collect::<Vec<_>>();
     let uses_flow = module.classes.iter().any(|class| {
         class
             .streams
@@ -436,6 +483,10 @@ pub fn render_outputs(module: &KmpModule, options: &KmpOptions) -> KmpOutputs {
             package_name: &options.package_name,
             module_name: &options.module_name,
             jvm_binding_package: &options.jvm_binding_package,
+            class_imports: &jvm_class_imports,
+            class_sources: &jvm_class_actual_sources,
+            uses_flow,
+            uses_launch: uses_callback_streams,
             functions: &module.functions,
         }
         .render()
@@ -741,14 +792,7 @@ mod tests {
     fn snapshot_jvm_main_template() {
         let module = test_module();
         let options = test_options();
-        let rendered = JvmMainTemplate {
-            package_name: &options.package_name,
-            module_name: &options.module_name,
-            jvm_binding_package: &options.jvm_binding_package,
-            functions: &module.functions,
-        }
-        .render()
-        .unwrap();
+        let rendered = render_outputs(&module, &options).jvm_main_source;
 
         insta::assert_snapshot!(rendered);
     }
