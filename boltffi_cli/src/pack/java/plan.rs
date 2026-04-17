@@ -10,7 +10,10 @@ use crate::reporter::Reporter;
 use crate::target::JavaHostTarget;
 use crate::toolchain::NativeHostToolchain;
 
-use super::link::{build_jvm_native_library, compile_jni_library, resolve_jni_include_directories};
+use super::link::{
+    build_jvm_native_library, compile_jni_library, resolve_jni_include_directories,
+    validate_desktop_jni_symbol_stripping,
+};
 use super::outputs::{
     remove_stale_flat_jvm_outputs_if_current_host_unrequested,
     remove_stale_requested_jvm_shared_library_copies_after_success,
@@ -327,6 +330,7 @@ fn resolve_jvm_packaging_targets(
         .iter()
         .copied()
         .map(|host_target| {
+            validate_desktop_jni_symbol_stripping(config, host_target)?;
             let toolchain = NativeHostToolchain::discover(
                 toolchain_selector.as_deref(),
                 &cargo_command_args,
@@ -362,7 +366,8 @@ mod tests {
 
     use super::{
         JvmCargoContext, JvmCrateOutputs, JvmPackagingTarget, ensure_java_no_build_supported,
-        ensure_java_pack_cargo_args_supported, selected_jvm_package_source_directory,
+        ensure_java_pack_cargo_args_supported, resolve_jvm_packaging_targets,
+        selected_jvm_package_source_directory,
     };
     use crate::build::CargoBuildProfile;
     use crate::cli::CliError;
@@ -393,6 +398,17 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    fn config_with_host_targets(
+        java_enabled: bool,
+        host_targets: Vec<JavaHostTarget>,
+        strip_symbols: bool,
+    ) -> Config {
+        let mut config = config(java_enabled);
+        config.targets.java.jvm.host_targets = Some(host_targets);
+        config.targets.java.jvm.strip_symbols = strip_symbols;
+        config
     }
 
     #[test]
@@ -432,6 +448,25 @@ mod tests {
     fn pack_java_no_longer_requires_experimental_gate() {
         ensure_java_no_build_supported(&config(true), false, false, "pack java")
             .expect("expected pack java to proceed without experimental gate");
+    }
+
+    #[test]
+    fn rejects_windows_strip_symbols_during_preflight() {
+        let error = match resolve_jvm_packaging_targets(
+            &config_with_host_targets(true, vec![JavaHostTarget::WindowsX86_64], true),
+            &[],
+            false,
+            CargoBuildProfile::Named("dist".to_string()),
+            &[JavaHostTarget::WindowsX86_64],
+        ) {
+            Ok(_) => panic!("expected unsupported windows strip config to fail during preflight"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            CliError::CommandFailed { status: None, .. }
+        ));
     }
 
     #[test]
