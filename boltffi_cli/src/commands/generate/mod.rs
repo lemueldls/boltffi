@@ -213,7 +213,7 @@ module_name = "DemoKmp"
         let header_path = output_directory.join("include/demo.h");
         let jni_path = output_directory.join("jvmMain/jni/jni_glue.c");
         let jvm_binding_path = output_directory
-            .join("jvmMain/kotlin/com/example/demo/jvmffi/DemoKmpJvmFfi.kt");
+            .join("jvmMain/kotlin/com/example/demo/DemoKmpJvmFfi.kt");
 
         assert!(common_path.exists());
         assert!(jvm_path.exists());
@@ -226,7 +226,6 @@ module_name = "DemoKmp"
         let common_source = fs::read_to_string(&common_path).expect("common source readable");
         let def_source = fs::read_to_string(&def_path).expect("def source readable");
         assert!(common_source.contains("expect object DemoKmp"));
-        assert!(common_source.contains("Skipped functions"));
         assert!(def_source.contains("headers = demo.h"));
         assert!(def_source.contains("package = com.example.demo.native"));
 

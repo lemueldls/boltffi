@@ -11,16 +11,16 @@ import kotlinx.coroutines.flow.flow
 
 
 
-import com.example.demo.jvmffi.echoI32 as __jvm_echoI32
-import com.example.demo.jvmffi.fetchName as __jvm_fetchName
+import com.example.demo.echoI32 as __jvm_echoI32
+import com.example.demo.fetchName as __jvm_fetchName
 
-import com.example.demo.jvmffi.boltffi_widget_new as __jvm_class_boltffi_widget_new
-import com.example.demo.jvmffi.boltffi_widget_rename as __jvm_class_boltffi_widget_rename
-import com.example.demo.jvmffi.boltffi_widget_updates_free as __jvm_class_boltffi_widget_updates_free
-import com.example.demo.jvmffi.boltffi_widget_updates_pop_batch as __jvm_class_boltffi_widget_updates_pop_batch
-import com.example.demo.jvmffi.boltffi_widget_updates_subscribe as __jvm_class_boltffi_widget_updates_subscribe
-import com.example.demo.jvmffi.boltffi_widget_updates_unsubscribe as __jvm_class_boltffi_widget_updates_unsubscribe
-import com.example.demo.jvmffi.boltffi_widget_updates_wait as __jvm_class_boltffi_widget_updates_wait
+import com.example.demo.boltffi_widget_new as __jvm_class_boltffi_widget_new
+import com.example.demo.boltffi_widget_rename as __jvm_class_boltffi_widget_rename
+import com.example.demo.boltffi_widget_updates_free as __jvm_class_boltffi_widget_updates_free
+import com.example.demo.boltffi_widget_updates_pop_batch as __jvm_class_boltffi_widget_updates_pop_batch
+import com.example.demo.boltffi_widget_updates_subscribe as __jvm_class_boltffi_widget_updates_subscribe
+import com.example.demo.boltffi_widget_updates_unsubscribe as __jvm_class_boltffi_widget_updates_unsubscribe
+import com.example.demo.boltffi_widget_updates_wait as __jvm_class_boltffi_widget_updates_wait
 
 
 

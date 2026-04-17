@@ -72,7 +72,7 @@ impl LanguageGenerator for KmpGenerator {
             .join(&package_path);
         let include_directory = output_directory.join("include");
 
-        let jvm_binding_package = format!("{}.jvmffi", package_name);
+        let jvm_binding_package = package_name.clone();
         let jvm_binding_module_name = format!("{}JvmFfi", module_name);
         let jvm_binding_path = jvm_binding_package.replace('.', "/");
         let jvm_binding_directory = output_directory

@@ -531,7 +531,7 @@ mod tests {
         KmpOptions {
             package_name: "com.example.demo".to_string(),
             module_name: "DemoKmp".to_string(),
-            jvm_binding_package: "com.example.demo.jvmffi".to_string(),
+            jvm_binding_package: "com.example.demo".to_string(),
             native_binding_package: "com.example.demo.native".to_string(),
             header_file_name: "demo.h".to_string(),
             library_name: "demo".to_string(),
