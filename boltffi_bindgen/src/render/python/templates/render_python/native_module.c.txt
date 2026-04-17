@@ -10,7 +10,7 @@
 #include <dlfcn.h>
 #endif
 
-{% if module.uses_string_returns() %}
+{% if module.uses_owned_buffer_returns() %}
 typedef struct FfiBuf_u8 { uint8_t* ptr; size_t len; size_t cap; size_t align; } FfiBuf_u8;
 typedef void (*boltffi_python_free_buf_fn)(FfiBuf_u8);
 static boltffi_python_free_buf_fn boltffi_python_free_buf_symbol = NULL;
@@ -30,7 +30,7 @@ static void boltffi_python_unload_library(void) {
 {% for function in module.functions %}
     {{ function.function_pointer_name() }} = NULL;
 {% endfor %}
-{% if module.uses_string_returns() %}
+{% if module.uses_owned_buffer_returns() %}
     boltffi_python_free_buf_symbol = NULL;
 {% endif %}
     if (boltffi_python_library_handle == NULL) {
@@ -87,7 +87,7 @@ static int boltffi_python_load_library(PyObject *library_path) {
 }
 
 static int boltffi_python_bind_symbols(void) {
-{% if module.uses_string_returns() %}
+{% if module.uses_owned_buffer_returns() %}
 #ifdef _WIN32
     boltffi_python_free_buf_symbol = (boltffi_python_free_buf_fn)GetProcAddress(boltffi_python_library_handle, "{{ module.free_buffer_symbol }}");
 #else
@@ -130,7 +130,12 @@ static PyObject *boltffi_python_initialize_loader(PyObject *self, PyObject *libr
 {% endif %}
 {% if module.uses_string_parameters() %}
 
-static int boltffi_python_parse_string(PyObject *value, const uint8_t **out_ptr, uintptr_t *out_len) {
+typedef struct boltffi_python_utf8_input {
+    const uint8_t *ptr;
+    uintptr_t len;
+} boltffi_python_utf8_input;
+
+static int boltffi_python_parse_string(PyObject *value, boltffi_python_utf8_input *out) {
     const char *utf8_data = NULL;
     Py_ssize_t utf8_length = 0;
     if (!PyUnicode_Check(value)) {
@@ -141,14 +146,80 @@ static int boltffi_python_parse_string(PyObject *value, const uint8_t **out_ptr,
     if (utf8_data == NULL) {
         return 0;
     }
-    *out_ptr = (const uint8_t *)utf8_data;
-    *out_len = (uintptr_t)utf8_length;
+    out->ptr = (const uint8_t *)utf8_data;
+    out->len = (uintptr_t)utf8_length;
     return 1;
 }
 {% endif %}
-{% if !used_scalar_types.is_empty() %}
+{% if module.uses_buffer_parameters() %}
 
-{% for primitive in used_scalar_types %}
+typedef struct boltffi_python_buffer_input {
+    const void *ptr;
+    uintptr_t len;
+    Py_buffer view;
+    void *owned_copy;
+    int has_view;
+} boltffi_python_buffer_input;
+
+static void boltffi_python_init_buffer_input(boltffi_python_buffer_input *input) {
+    input->ptr = NULL;
+    input->len = 0;
+    input->owned_copy = NULL;
+    input->has_view = 0;
+    memset(&input->view, 0, sizeof(Py_buffer));
+}
+
+static void boltffi_python_release_buffer_input(boltffi_python_buffer_input *input) {
+    if (input->has_view) {
+        PyBuffer_Release(&input->view);
+    }
+    if (input->owned_copy != NULL) {
+        PyMem_Free(input->owned_copy);
+    }
+    boltffi_python_init_buffer_input(input);
+}
+
+static const char *boltffi_python_skip_native_buffer_format_prefix(const char *format) {
+    if (format == NULL) {
+        return NULL;
+    }
+    while (*format == '@' || *format == '=') {
+        format += 1;
+    }
+    return format;
+}
+
+static int boltffi_python_try_parse_bytes_like_buffer(
+    PyObject *value,
+    boltffi_python_buffer_input *out
+) {
+    if (PyObject_GetBuffer(value, &out->view, PyBUF_CONTIG_RO) != 0) {
+        return 0;
+    }
+    if (out->view.ndim != 1 || out->view.itemsize != 1) {
+        PyBuffer_Release(&out->view);
+        memset(&out->view, 0, sizeof(Py_buffer));
+        return 0;
+    }
+    out->ptr = out->view.buf;
+    out->len = (uintptr_t)out->view.len;
+    out->has_view = 1;
+    return 1;
+}
+
+static int boltffi_python_parse_bytes(PyObject *value, boltffi_python_buffer_input *out) {
+    boltffi_python_init_buffer_input(out);
+    if (!boltffi_python_try_parse_bytes_like_buffer(value, out)) {
+        PyErr_Clear();
+        PyErr_SetString(PyExc_TypeError, "expected bytes-like object");
+        return 0;
+    }
+    return 1;
+}
+{% endif %}
+{% if !used_primitive_types.is_empty() %}
+
+{% for primitive in used_primitive_types %}
 static int {{ primitive.parser_name() }}(PyObject *value, {{ primitive.c_type_name() }} *out) {
 {% if primitive.uses_bool_parser() %}
     if (!PyBool_Check(value)) {
@@ -221,15 +292,251 @@ static int {{ primitive.parser_name() }}(PyObject *value, {{ primitive.c_type_na
 {% endif %}
 }
 
+static PyObject *{{ primitive.boxer_name() }}({{ primitive.c_type_name() }} value) {
+{% if primitive.boxes_as_bool() %}
+    return PyBool_FromLong(value ? 1 : 0);
+{% elif primitive.boxes_as_signed_long() %}
+    return PyLong_FromLong((long)value);
+{% elif primitive.boxes_as_unsigned_long() %}
+    return PyLong_FromUnsignedLong((unsigned long)value);
+{% elif primitive.boxes_as_signed_long_long() %}
+    return PyLong_FromLongLong((long long)value);
+{% elif primitive.boxes_as_unsigned_long_long() %}
+    return PyLong_FromUnsignedLongLong((unsigned long long)value);
+{% elif primitive.boxes_as_ssize() %}
+    return PyLong_FromSsize_t((Py_ssize_t)value);
+{% elif primitive.boxes_as_size() %}
+    return PyLong_FromSize_t((size_t)value);
+{% elif primitive.boxes_as_double() %}
+    return PyFloat_FromDouble((double)value);
+{% endif %}
+}
+
 {% endfor %}
 {% endif %}
-{% if !module.functions.is_empty() %}
+{% if !module.used_primitive_vector_parameter_types().is_empty() %}
+
+typedef enum boltffi_python_buffer_kind {
+    BOLTFFI_PY_BUFFER_UNKNOWN = 0,
+    BOLTFFI_PY_BUFFER_BOOL,
+    BOLTFFI_PY_BUFFER_I8,
+    BOLTFFI_PY_BUFFER_U8,
+    BOLTFFI_PY_BUFFER_I16,
+    BOLTFFI_PY_BUFFER_U16,
+    BOLTFFI_PY_BUFFER_I32,
+    BOLTFFI_PY_BUFFER_U32,
+    BOLTFFI_PY_BUFFER_I64,
+    BOLTFFI_PY_BUFFER_U64,
+    BOLTFFI_PY_BUFFER_ISIZE,
+    BOLTFFI_PY_BUFFER_USIZE,
+    BOLTFFI_PY_BUFFER_F32,
+    BOLTFFI_PY_BUFFER_F64
+} boltffi_python_buffer_kind;
+
+static Py_ssize_t boltffi_python_buffer_kind_item_size(boltffi_python_buffer_kind kind) {
+    switch (kind) {
+        case BOLTFFI_PY_BUFFER_BOOL:
+            return (Py_ssize_t)sizeof(bool);
+        case BOLTFFI_PY_BUFFER_I8:
+            return (Py_ssize_t)sizeof(int8_t);
+        case BOLTFFI_PY_BUFFER_U8:
+            return (Py_ssize_t)sizeof(uint8_t);
+        case BOLTFFI_PY_BUFFER_I16:
+            return (Py_ssize_t)sizeof(int16_t);
+        case BOLTFFI_PY_BUFFER_U16:
+            return (Py_ssize_t)sizeof(uint16_t);
+        case BOLTFFI_PY_BUFFER_I32:
+            return (Py_ssize_t)sizeof(int32_t);
+        case BOLTFFI_PY_BUFFER_U32:
+            return (Py_ssize_t)sizeof(uint32_t);
+        case BOLTFFI_PY_BUFFER_I64:
+            return (Py_ssize_t)sizeof(int64_t);
+        case BOLTFFI_PY_BUFFER_U64:
+            return (Py_ssize_t)sizeof(uint64_t);
+        case BOLTFFI_PY_BUFFER_ISIZE:
+            return (Py_ssize_t)sizeof(intptr_t);
+        case BOLTFFI_PY_BUFFER_USIZE:
+            return (Py_ssize_t)sizeof(uintptr_t);
+        case BOLTFFI_PY_BUFFER_F32:
+            return (Py_ssize_t)sizeof(float);
+        case BOLTFFI_PY_BUFFER_F64:
+            return (Py_ssize_t)sizeof(double);
+        case BOLTFFI_PY_BUFFER_UNKNOWN:
+        default:
+            return -1;
+    }
+}
+
+static boltffi_python_buffer_kind boltffi_python_parse_buffer_kind(
+    const char *format,
+    Py_ssize_t item_size
+) {
+    const char *core = boltffi_python_skip_native_buffer_format_prefix(format);
+    if (core == NULL) {
+        return BOLTFFI_PY_BUFFER_UNKNOWN;
+    }
+    if (strcmp(core, "?") == 0 && item_size == (Py_ssize_t)sizeof(bool)) {
+        return BOLTFFI_PY_BUFFER_BOOL;
+    }
+    if (strcmp(core, "b") == 0 && item_size == (Py_ssize_t)sizeof(int8_t)) {
+        return BOLTFFI_PY_BUFFER_I8;
+    }
+    if (strcmp(core, "B") == 0 && item_size == (Py_ssize_t)sizeof(uint8_t)) {
+        return BOLTFFI_PY_BUFFER_U8;
+    }
+    if (strcmp(core, "h") == 0 && item_size == (Py_ssize_t)sizeof(int16_t)) {
+        return BOLTFFI_PY_BUFFER_I16;
+    }
+    if (strcmp(core, "H") == 0 && item_size == (Py_ssize_t)sizeof(uint16_t)) {
+        return BOLTFFI_PY_BUFFER_U16;
+    }
+    if (strcmp(core, "i") == 0 && item_size == (Py_ssize_t)sizeof(int32_t)) {
+        return BOLTFFI_PY_BUFFER_I32;
+    }
+    if (strcmp(core, "I") == 0 && item_size == (Py_ssize_t)sizeof(uint32_t)) {
+        return BOLTFFI_PY_BUFFER_U32;
+    }
+    if (strcmp(core, "q") == 0 && item_size == (Py_ssize_t)sizeof(int64_t)) {
+        return BOLTFFI_PY_BUFFER_I64;
+    }
+    if (strcmp(core, "Q") == 0 && item_size == (Py_ssize_t)sizeof(uint64_t)) {
+        return BOLTFFI_PY_BUFFER_U64;
+    }
+    if (strcmp(core, "n") == 0 && item_size == (Py_ssize_t)sizeof(intptr_t)) {
+        return BOLTFFI_PY_BUFFER_ISIZE;
+    }
+    if (strcmp(core, "N") == 0 && item_size == (Py_ssize_t)sizeof(uintptr_t)) {
+        return BOLTFFI_PY_BUFFER_USIZE;
+    }
+    if (strcmp(core, "f") == 0 && item_size == (Py_ssize_t)sizeof(float)) {
+        return BOLTFFI_PY_BUFFER_F32;
+    }
+    if (strcmp(core, "d") == 0 && item_size == (Py_ssize_t)sizeof(double)) {
+        return BOLTFFI_PY_BUFFER_F64;
+    }
+    if (strcmp(core, "l") == 0) {
+        if (item_size == (Py_ssize_t)sizeof(int32_t)) {
+            return BOLTFFI_PY_BUFFER_I32;
+        }
+        if (item_size == (Py_ssize_t)sizeof(int64_t)) {
+            return BOLTFFI_PY_BUFFER_I64;
+        }
+    }
+    if (strcmp(core, "L") == 0) {
+        if (item_size == (Py_ssize_t)sizeof(uint32_t)) {
+            return BOLTFFI_PY_BUFFER_U32;
+        }
+        if (item_size == (Py_ssize_t)sizeof(uint64_t)) {
+            return BOLTFFI_PY_BUFFER_U64;
+        }
+    }
+    return BOLTFFI_PY_BUFFER_UNKNOWN;
+}
+
+static int boltffi_python_try_parse_typed_buffer(
+    PyObject *value,
+    boltffi_python_buffer_input *out,
+    boltffi_python_buffer_kind expected_kind,
+    int allow_untyped_buffer
+) {
+    boltffi_python_buffer_kind actual_kind = BOLTFFI_PY_BUFFER_UNKNOWN;
+    Py_ssize_t expected_item_size = boltffi_python_buffer_kind_item_size(expected_kind);
+    if (PyObject_GetBuffer(value, &out->view, PyBUF_FORMAT | PyBUF_C_CONTIGUOUS) != 0) {
+        return 0;
+    }
+    if (out->view.ndim != 1 || out->view.itemsize != expected_item_size) {
+        PyBuffer_Release(&out->view);
+        memset(&out->view, 0, sizeof(Py_buffer));
+        return 0;
+    }
+    if (out->view.format != NULL) {
+        actual_kind = boltffi_python_parse_buffer_kind(out->view.format, out->view.itemsize);
+        if (actual_kind != expected_kind) {
+            PyBuffer_Release(&out->view);
+            memset(&out->view, 0, sizeof(Py_buffer));
+            return 0;
+        }
+    } else if (!allow_untyped_buffer) {
+        PyBuffer_Release(&out->view);
+        memset(&out->view, 0, sizeof(Py_buffer));
+        return 0;
+    }
+    out->ptr = out->view.buf;
+    out->len = (uintptr_t)((size_t)out->view.len / (size_t)out->view.itemsize);
+    out->has_view = 1;
+    return 1;
+}
+
+{% for primitive in module.used_primitive_vector_parameter_types() %}
+static int {{ primitive.vector_parser_name() }}(PyObject *value, boltffi_python_buffer_input *out) {
+    PyObject *sequence = NULL;
+    Py_ssize_t sequence_length = 0;
+    Py_ssize_t index = 0;
+    {{ primitive.c_type_name() }} *owned_copy = NULL;
+    boltffi_python_init_buffer_input(out);
+    if (boltffi_python_try_parse_typed_buffer(
+        value,
+        out,
+        {{ primitive.buffer_kind_constant() }},
+        {% if primitive.allows_untyped_vector_buffer() %}1{% else %}0{% endif %}
+    )) {
+        return 1;
+    }
+    PyErr_Clear();
+    sequence = PySequence_Fast(value, "expected sequence");
+    if (sequence == NULL) {
+        return 0;
+    }
+    sequence_length = PySequence_Fast_GET_SIZE(sequence);
+    if ((size_t)sequence_length > (size_t)UINTPTR_MAX) {
+        Py_DECREF(sequence);
+        PyErr_SetString(PyExc_OverflowError, "sequence is too large for Rust");
+        return 0;
+    }
+    if (sequence_length > 0) {
+        owned_copy = PyMem_Malloc((size_t)sequence_length * sizeof({{ primitive.c_type_name() }}));
+        if (owned_copy == NULL) {
+            Py_DECREF(sequence);
+            PyErr_NoMemory();
+            return 0;
+        }
+    }
+    for (index = 0; index < sequence_length; index += 1) {
+        if (!{{ primitive.parser_name() }}(PySequence_Fast_GET_ITEM(sequence, index), &owned_copy[index])) {
+            PyMem_Free(owned_copy);
+            Py_DECREF(sequence);
+            return 0;
+        }
+    }
+    Py_DECREF(sequence);
+    out->ptr = owned_copy;
+    out->len = (uintptr_t)sequence_length;
+    out->owned_copy = owned_copy;
+    return 1;
+}
+
+{% endfor %}
+{% endif %}
+{% if module.uses_owned_buffer_returns() %}
+
+static int boltffi_python_validate_owned_buffer(FfiBuf_u8 buffer) {
+    if (buffer.ptr == NULL && buffer.len != 0) {
+        PyErr_SetString(PyExc_RuntimeError, "native buffer is invalid");
+        return 0;
+    }
+    return 1;
+}
+{% endif %}
 {% if module.uses_string_returns() %}
 static PyObject *boltffi_python_decode_owned_utf8(FfiBuf_u8 buffer) {
     PyObject *decoded = NULL;
     uint32_t utf8_length = 0;
     const char *utf8_data = "";
-    if (buffer.ptr == NULL || buffer.len < sizeof(uint32_t)) {
+    if (!boltffi_python_validate_owned_buffer(buffer)) {
+        boltffi_python_free_buf_symbol(buffer);
+        return NULL;
+    }
+    if (buffer.len < sizeof(uint32_t)) {
         boltffi_python_free_buf_symbol(buffer);
         PyErr_SetString(PyExc_RuntimeError, "native string buffer is invalid");
         return NULL;
@@ -253,16 +560,80 @@ static PyObject *boltffi_python_decode_owned_utf8(FfiBuf_u8 buffer) {
     return decoded;
 }
 {% endif %}
+{% if module.uses_bytes_returns() %}
+static PyObject *boltffi_python_decode_owned_bytes(FfiBuf_u8 buffer) {
+    PyObject *decoded = NULL;
+    const char *byte_data = "";
+    if (!boltffi_python_validate_owned_buffer(buffer)) {
+        boltffi_python_free_buf_symbol(buffer);
+        return NULL;
+    }
+    if ((size_t)buffer.len > (size_t)PY_SSIZE_T_MAX) {
+        boltffi_python_free_buf_symbol(buffer);
+        PyErr_SetString(PyExc_OverflowError, "byte result is too large for Python");
+        return NULL;
+    }
+    if (buffer.len != 0) {
+        byte_data = (const char *)buffer.ptr;
+    }
+    decoded = PyBytes_FromStringAndSize(byte_data, (Py_ssize_t)buffer.len);
+    boltffi_python_free_buf_symbol(buffer);
+    return decoded;
+}
+{% endif %}
+{% for primitive in module.used_primitive_vector_return_types() %}
+static PyObject *boltffi_python_decode_owned_vec_{{ primitive.rust_name() }}(FfiBuf_u8 buffer) {
+    PyObject *decoded = NULL;
+    PyObject *item = NULL;
+    Py_ssize_t item_count = 0;
+    Py_ssize_t index = 0;
+    const {{ primitive.c_type_name() }} *values = NULL;
+    if (!boltffi_python_validate_owned_buffer(buffer)) {
+        boltffi_python_free_buf_symbol(buffer);
+        return NULL;
+    }
+    if (buffer.len % sizeof({{ primitive.c_type_name() }}) != 0) {
+        boltffi_python_free_buf_symbol(buffer);
+        PyErr_SetString(PyExc_RuntimeError, "native vector buffer is invalid");
+        return NULL;
+    }
+    if (buffer.len / sizeof({{ primitive.c_type_name() }}) > (size_t)PY_SSIZE_T_MAX) {
+        boltffi_python_free_buf_symbol(buffer);
+        PyErr_SetString(PyExc_OverflowError, "vector result is too large for Python");
+        return NULL;
+    }
+    item_count = (Py_ssize_t)(buffer.len / sizeof({{ primitive.c_type_name() }}));
+    decoded = PyList_New(item_count);
+    if (decoded == NULL) {
+        boltffi_python_free_buf_symbol(buffer);
+        return NULL;
+    }
+    values = (const {{ primitive.c_type_name() }} *)buffer.ptr;
+    for (index = 0; index < item_count; index += 1) {
+        item = {{ primitive.boxer_name() }}(values[index]);
+        if (item == NULL) {
+            Py_DECREF(decoded);
+            boltffi_python_free_buf_symbol(buffer);
+            return NULL;
+        }
+        PyList_SET_ITEM(decoded, index, item);
+    }
+    boltffi_python_free_buf_symbol(buffer);
+    return decoded;
+}
+{% endfor %}
+{% if !module.functions.is_empty() %}
 {% for function in module.functions %}
 static PyObject *{{ function.wrapper_name() }}(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
 {% for parameter in function.parameters %}
-{% for binding in parameter.c_bindings() %}
+{% for binding in parameter.local_bindings() %}
     {{ binding.c_type_name }} {{ binding.name }};
 {% endfor %}
 {% endfor %}
 {% if !function.returns_void() %}
     {{ function.return_type.c_type_name() }} result;
 {% endif %}
+    PyObject *python_result = NULL;
     (void)self;
     if (nargs != {{ function.parameter_count() }}) {
         PyErr_Format(PyExc_TypeError, "{{ function.python_name }}() takes {{ function.parameter_count() }} positional arguments but %zd were given", nargs);
@@ -273,38 +644,36 @@ static PyObject *{{ function.wrapper_name() }}(PyObject *self, PyObject *const *
         return NULL;
     }
 {% for parameter in function.parameters %}
+{% if parameter.is_buffer_input() %}
+    boltffi_python_init_buffer_input(&{{ parameter.parser_state_name() }});
+{% endif %}
     if (!{{ parameter.parser_name() }}(args[{{ loop.index0 }}], {% for parser_output in parameter.parser_output_arguments() %}{{ parser_output }}{% if !loop.last %}, {% endif %}{% endfor %})) {
-        return NULL;
+        goto cleanup;
     }
 {% endfor %}
 {% if function.returns_void() %}
-    {{ function.function_pointer_name() }}({% for ffi_argument in function.ffi_arguments() %}{{ ffi_argument.name }}{% if !loop.last %}, {% endif %}{% endfor %});
-    Py_RETURN_NONE;
+    {{ function.function_pointer_name() }}({% for ffi_argument in function.call_argument_expressions() %}{{ ffi_argument }}{% if !loop.last %}, {% endif %}{% endfor %});
+    Py_INCREF(Py_None);
+    python_result = Py_None;
 {% else %}
-    result = {{ function.function_pointer_name() }}({% for ffi_argument in function.ffi_arguments() %}{{ ffi_argument.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+    result = {{ function.function_pointer_name() }}({% for ffi_argument in function.call_argument_expressions() %}{{ ffi_argument }}{% if !loop.last %}, {% endif %}{% endfor %});
 {% if function.returns_string() %}
-    return boltffi_python_decode_owned_utf8(result);
+    python_result = boltffi_python_decode_owned_utf8(result);
+{% elif function.returns_bytes() %}
+    python_result = boltffi_python_decode_owned_bytes(result);
+{% elif function.returns_primitive_vector() %}
+{% let return_primitive = function.return_vector_primitive().unwrap() %}
+    python_result = boltffi_python_decode_owned_vec_{{ return_primitive.rust_name() }}(result);
 {% else %}
 {% let return_primitive = function.return_primitive().unwrap() %}
-{% if return_primitive.boxes_as_bool() %}
-    return PyBool_FromLong(result ? 1 : 0);
-{% elif return_primitive.boxes_as_signed_long() %}
-    return PyLong_FromLong((long)result);
-{% elif return_primitive.boxes_as_unsigned_long() %}
-    return PyLong_FromUnsignedLong((unsigned long)result);
-{% elif return_primitive.boxes_as_signed_long_long() %}
-    return PyLong_FromLongLong((long long)result);
-{% elif return_primitive.boxes_as_unsigned_long_long() %}
-    return PyLong_FromUnsignedLongLong((unsigned long long)result);
-{% elif return_primitive.boxes_as_ssize() %}
-    return PyLong_FromSsize_t((Py_ssize_t)result);
-{% elif return_primitive.boxes_as_size() %}
-    return PyLong_FromSize_t((size_t)result);
-{% elif return_primitive.boxes_as_double() %}
-    return PyFloat_FromDouble((double)result);
+    python_result = {{ return_primitive.boxer_name() }}(result);
 {% endif %}
 {% endif %}
-{% endif %}
+cleanup:
+{% for cleanup_statement in function.cleanup_statements() %}
+    {{ cleanup_statement }}
+{% endfor %}
+    return python_result;
 }
 
 {% endfor %}
