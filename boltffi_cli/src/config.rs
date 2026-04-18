@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 pub enum Target {
     Swift,
     Kotlin,
+    Kmp,
     Java,
     TypeScript,
     Header,
@@ -25,6 +26,7 @@ impl Target {
         match self {
             Target::Swift => "swift",
             Target::Kotlin => "kotlin",
+            Target::Kmp => "kmp",
             Target::Java => "java",
             Target::TypeScript => "typescript",
             Target::Header => "header",
@@ -47,6 +49,7 @@ impl Experimental {
             target: Target::TypeScript,
             name: "async_streams",
         },
+        Experimental::WholeTarget(Target::Kmp),
         Experimental::WholeTarget(Target::Dart),
         Experimental::WholeTarget(Target::Python),
         Experimental::WholeTarget(Target::CSharp),
@@ -96,6 +99,8 @@ pub struct TargetsConfig {
     pub apple: AppleConfig,
     #[serde(default)]
     pub android: AndroidConfig,
+    #[serde(default)]
+    pub kmp: KmpConfig,
     #[serde(default)]
     pub wasm: WasmConfig,
     #[serde(default)]
@@ -278,6 +283,29 @@ pub struct AndroidConfig {
     pub pack: AndroidPackConfig,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct KmpConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_kmp_output")]
+    pub output: PathBuf,
+    pub package: Option<String>,
+    pub module_name: Option<String>,
+    pub library_name: Option<String>,
+}
+
+impl Default for KmpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            output: default_kmp_output(),
+            package: None,
+            module_name: None,
+            library_name: None,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct HeaderConfig {
     pub output: Option<PathBuf>,
@@ -371,6 +399,10 @@ impl Default for JavaAndroidConfig {
 
 fn default_java_jvm_output() -> PathBuf {
     PathBuf::from("dist/java")
+}
+
+fn default_kmp_output() -> PathBuf {
+    PathBuf::from("dist/kmp")
 }
 
 fn default_java_android_output() -> PathBuf {
@@ -815,6 +847,10 @@ impl Config {
         self.targets.wasm.enabled
     }
 
+    pub fn is_kmp_enabled(&self) -> bool {
+        self.targets.kmp.enabled
+    }
+
     pub fn is_dart_enabled(&self) -> bool {
         self.targets.dart.enabled
     }
@@ -1025,6 +1061,33 @@ impl Config {
         to_pascal_case(&self.package.name)
     }
 
+    pub fn kmp_package(&self) -> String {
+        self.targets
+            .kmp
+            .package
+            .clone()
+            .unwrap_or_else(|| {
+                let normalized_name = self.package.name.replace('-', "_");
+                format!("com.example.{}", normalized_name)
+            })
+    }
+
+    pub fn kmp_module_name(&self) -> String {
+        self.targets
+            .kmp
+            .module_name
+            .clone()
+            .unwrap_or_else(|| format!("{}Kmp", self.kotlin_class_name()))
+    }
+
+    pub fn kmp_library_name(&self) -> Option<&str> {
+        self.targets.kmp.library_name.as_deref()
+    }
+
+    pub fn kmp_output(&self) -> PathBuf {
+        self.targets.kmp.output.clone()
+    }
+
     pub fn apple_spm_distribution(&self) -> SpmDistribution {
         self.targets.apple.spm.distribution
     }
@@ -1065,6 +1128,7 @@ impl Config {
         match target {
             Target::Swift => self.is_apple_enabled(),
             Target::Kotlin => self.is_android_enabled(),
+            Target::Kmp => self.is_kmp_enabled(),
             Target::Java => self.is_java_jvm_enabled(),
             Target::TypeScript => self.is_wasm_enabled(),
             Target::Header => self.is_apple_enabled() || self.is_android_enabled(),

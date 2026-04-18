@@ -4,6 +4,7 @@ use crate::cli::Result;
 use crate::config::{
     AndroidConfig, AndroidKotlinConfig, AndroidPackConfig, AppleConfig, AppleSwiftConfig,
     CSharpConfig, CargoConfig, Config, DartConfig, ErrorStyle, FactoryStyle, HeaderConfig,
+    KmpConfig,
     JavaConfig, PackageConfig, PythonConfig, SpmConfig, TargetsConfig, WasmConfig,
     XcframeworkConfig,
 };
@@ -125,6 +126,7 @@ fn create_default_config(package_name: &str) -> Config {
                 header: HeaderConfig { output: None },
                 pack: AndroidPackConfig { output: None },
             },
+            kmp: KmpConfig::default(),
             wasm: WasmConfig::default(),
             java: JavaConfig::default(),
             dart: DartConfig::default(),

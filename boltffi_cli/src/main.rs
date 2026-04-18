@@ -164,6 +164,8 @@ enum GenerateTargetArg {
     Swift,
     #[value(help = "Generate Kotlin bindings + JNI glue")]
     Kotlin,
+    #[value(help = "Generate experimental Kotlin Multiplatform bindings")]
+    Kmp,
     #[value(help = "Generate Java bindings + JNI glue")]
     Java,
     #[value(help = "Generate C header")]
@@ -443,6 +445,7 @@ fn execute_command(
                     .map(|t| match t {
                         GenerateTargetArg::Swift => GenerateTarget::Swift,
                         GenerateTargetArg::Kotlin => GenerateTarget::Kotlin,
+                        GenerateTargetArg::Kmp => GenerateTarget::Kmp,
                         GenerateTargetArg::Java => GenerateTarget::Java,
                         GenerateTargetArg::Header => GenerateTarget::Header,
                         GenerateTargetArg::Typescript => GenerateTarget::Typescript,

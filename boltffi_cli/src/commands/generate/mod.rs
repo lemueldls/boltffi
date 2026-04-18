@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use generator::{GenerateRequest, run_generator};
 use header::HeaderGenerator;
 use languages::{
-    CSharpGenerator, DartGenerator, JavaGenerator, KotlinGenerator, PythonGenerator,
+    CSharpGenerator, DartGenerator, JavaGenerator, KmpGenerator, KotlinGenerator, PythonGenerator,
     SwiftGenerator, TypeScriptGenerator,
 };
 
@@ -17,6 +17,7 @@ use crate::config::{Config, Target};
 pub enum GenerateTarget {
     Swift,
     Kotlin,
+    Kmp,
     Java,
     Header,
     Typescript,
@@ -38,6 +39,7 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
     match options.target {
         GenerateTarget::Swift => run_generator::<SwiftGenerator>(&request, options.experimental),
         GenerateTarget::Kotlin => run_generator::<KotlinGenerator>(&request, options.experimental),
+        GenerateTarget::Kmp => run_generator::<KmpGenerator>(&request, options.experimental),
         GenerateTarget::Java => run_generator::<JavaGenerator>(&request, options.experimental),
         GenerateTarget::Header => run_generator::<HeaderGenerator>(&request, options.experimental),
         GenerateTarget::Typescript => {
@@ -53,6 +55,10 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
 
             if config.should_process(Target::Kotlin, options.experimental) {
                 run_generator::<KotlinGenerator>(&request, options.experimental)?;
+            }
+
+            if config.should_process(Target::Kmp, options.experimental) {
+                run_generator::<KmpGenerator>(&request, options.experimental)?;
             }
 
             if config.should_process(Target::Java, options.experimental) {
