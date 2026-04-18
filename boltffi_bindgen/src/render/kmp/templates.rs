@@ -29,8 +29,8 @@ fn render_common_main(module: &KmpModule) -> String {
     out.push_str("import kotlin.Result\n\n");
 
     for record in &module.records {
-        let fields = render_params(&record.fields);
-        out.push_str(&format!("data class {}({})\n\n", record.name, fields));
+        let fields = render_property_params(&record.fields);
+        out.push_str(&format!("expect class {}({})\n\n", record.name, fields));
     }
 
     for enumeration in &module.enums {
@@ -56,9 +56,9 @@ fn render_common_main(module: &KmpModule) -> String {
                             variant.name, enumeration.name
                         ));
                     } else {
-                        let fields = render_params(&variant.fields);
+                        let fields = render_property_params(&variant.fields);
                         out.push_str(&format!(
-                            "    data class {}({}) : {}\n",
+                            "    expect class {}({}) : {}\n",
                             variant.name, fields, enumeration.name
                         ));
                     }
@@ -134,6 +134,16 @@ fn render_platform_main(module: &KmpModule, platform: Platform) -> String {
         out.push('\n');
     }
 
+    out.push_str(&render_platform_data_classes(module));
+    if !module.records.is_empty()
+        || module
+            .enums
+            .iter()
+            .any(|enumeration| matches!(enumeration.kind, KmpEnumKind::Data))
+    {
+        out.push('\n');
+    }
+
     for class in &module.classes {
         out.push_str(&render_actual_class(class, platform));
         out.push('\n');
@@ -162,6 +172,39 @@ fn render_platform_main(module: &KmpModule, platform: Platform) -> String {
         "internal const val BOLTFFI_LIBRARY = \"{}\"\n",
         module.library_name
     ));
+
+    out
+}
+
+fn render_platform_data_classes(module: &KmpModule) -> String {
+    let mut out = String::new();
+
+    for record in &module.records {
+        out.push_str(&format!(
+            "actual data class {} actual constructor({})\n\n",
+            record.name,
+            render_actual_property_params(&record.fields)
+        ));
+    }
+
+    for enumeration in &module.enums {
+        if !matches!(enumeration.kind, KmpEnumKind::Data) {
+            continue;
+        }
+
+        for variant in &enumeration.variants {
+            if variant.fields.is_empty() {
+                continue;
+            }
+
+            out.push_str(&format!(
+                "actual data class {} actual constructor({}) : {}\n\n",
+                variant.name,
+                render_actual_property_params(&variant.fields),
+                enumeration.name
+            ));
+        }
+    }
 
     out
 }
@@ -262,6 +305,22 @@ fn render_params(params: &[KmpParam]) -> String {
     params
         .iter()
         .map(|param| format!("{}: {}", param.name, param.kotlin_type))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn render_property_params(params: &[KmpParam]) -> String {
+    params
+        .iter()
+        .map(|param| format!("val {}: {}", param.name, param.kotlin_type))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn render_actual_property_params(params: &[KmpParam]) -> String {
+    params
+        .iter()
+        .map(|param| format!("actual val {}: {}", param.name, param.kotlin_type))
         .collect::<Vec<_>>()
         .join(", ")
 }
