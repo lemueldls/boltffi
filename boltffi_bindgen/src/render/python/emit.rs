@@ -29,7 +29,7 @@ impl PythonEmitter {
             format!("{:?}", format!("{}._native", module.module_name));
         let native_source_path_literal =
             format!("{:?}", format!("{}/_native.c", module.module_name));
-        let used_scalar_types = module.used_scalar_types();
+        let used_primitive_types = module.used_primitive_types();
 
         PythonPackageSources {
             files: vec![
@@ -64,7 +64,7 @@ impl PythonEmitter {
                     relative_path: package_directory.join("_native.c"),
                     contents: NativeModuleTemplate {
                         module,
-                        used_scalar_types: &used_scalar_types,
+                        used_primitive_types: &used_primitive_types,
                     }
                     .render()
                     .unwrap(),
@@ -88,7 +88,9 @@ mod tests {
 
     use super::PythonEmitter;
     use crate::ir::types::PrimitiveType;
-    use crate::render::python::{PythonFunction, PythonModule, PythonParameter, PythonType};
+    use crate::render::python::{
+        PythonFunction, PythonModule, PythonParameter, PythonSequenceType, PythonType,
+    };
 
     fn rendered_file<'a>(
         rendered: &'a super::PythonPackageSources,
@@ -103,12 +105,13 @@ mod tests {
     }
 
     #[test]
-    fn emits_native_scalar_python_package_sources() {
+    fn emits_native_scalar_string_and_sequence_python_package_sources() {
         let module = PythonModule {
             module_name: "demo_lib".to_string(),
             package_name: "demo-lib".to_string(),
             package_version: Some("0.1.0".to_string()),
             library_name: "demo".to_string(),
+            free_buffer_symbol: "boltffi_free_buf".to_string(),
             functions: vec![
                 PythonFunction {
                     python_name: "echo_i32".to_string(),
@@ -137,6 +140,37 @@ mod tests {
                     }],
                     return_type: PythonType::Primitive(PrimitiveType::F32),
                 },
+                PythonFunction {
+                    python_name: "echo_string".to_string(),
+                    ffi_symbol: "boltffi_echo_string".to_string(),
+                    parameters: vec![PythonParameter {
+                        name: "value".to_string(),
+                        type_ref: PythonType::String,
+                    }],
+                    return_type: PythonType::String,
+                },
+                PythonFunction {
+                    python_name: "echo_bytes".to_string(),
+                    ffi_symbol: "boltffi_echo_bytes".to_string(),
+                    parameters: vec![PythonParameter {
+                        name: "value".to_string(),
+                        type_ref: PythonType::Sequence(PythonSequenceType::Bytes),
+                    }],
+                    return_type: PythonType::Sequence(PythonSequenceType::Bytes),
+                },
+                PythonFunction {
+                    python_name: "echo_vec_i32".to_string(),
+                    ffi_symbol: "boltffi_echo_vec_i32".to_string(),
+                    parameters: vec![PythonParameter {
+                        name: "values".to_string(),
+                        type_ref: PythonType::Sequence(PythonSequenceType::PrimitiveVec(
+                            PrimitiveType::I32,
+                        )),
+                    }],
+                    return_type: PythonType::Sequence(PythonSequenceType::PrimitiveVec(
+                        PrimitiveType::I32,
+                    )),
+                },
             ],
         };
 
@@ -154,14 +188,35 @@ mod tests {
         assert!(init_source.contains("from pathlib import Path"));
         assert!(init_source.contains("from . import _native"));
         assert!(init_source.contains("_native._initialize_loader"));
+        assert!(init_source.contains("echo_string = _native.echo_string"));
         assert!(init_source.contains("PACKAGE_NAME = \"demo-lib\""));
         assert!(
             native_source
                 .contains("typedef int32_t (*boltffi_python_echo_i32_symbol_fn)(int32_t);")
         );
+        assert!(native_source.contains(
+            "typedef FfiBuf_u8 (*boltffi_python_echo_string_symbol_fn)(const uint8_t *, uintptr_t);"
+        ));
+        assert!(native_source.contains(
+            "typedef FfiBuf_u8 (*boltffi_python_echo_bytes_symbol_fn)(const uint8_t *, uintptr_t);"
+        ));
+        assert!(native_source.contains(
+            "typedef FfiBuf_u8 (*boltffi_python_echo_vec_i32_symbol_fn)(const int32_t *, uintptr_t);"
+        ));
         assert!(native_source.contains("static PyObject *boltffi_python_initialize_loader"));
         assert!(native_source.contains("static int boltffi_python_parse_i32"));
+        assert!(native_source.contains("static int boltffi_python_parse_string"));
+        assert!(native_source.contains("static int boltffi_python_parse_bytes"));
+        assert!(native_source.contains("static int boltffi_python_parse_vec_i32"));
         assert!(native_source.contains("static PyObject *boltffi_python_echo_bool"));
+        assert!(native_source.contains("static PyObject *boltffi_python_decode_owned_utf8"));
+        assert!(native_source.contains("static PyObject *boltffi_python_decode_owned_bytes"));
+        assert!(native_source.contains("static PyObject *boltffi_python_decode_owned_vec_i32"));
+        assert!(native_source.contains("boltffi_python_free_buf_symbol"));
+        assert!(native_source.contains("boltffi_python_buffer_input"));
+        assert!(native_source.contains("boltffi_python_release_buffer_input"));
+        assert!(native_source.contains("PyUnicode_AsUTF8AndSize"));
+        assert!(native_source.contains("PyUnicode_DecodeUTF8"));
         assert!(native_source.contains("wchar_t *wide_library_path = NULL;"));
         assert!(native_source.contains("dlsym"));
         assert!(native_source.contains("GetProcAddress"));
