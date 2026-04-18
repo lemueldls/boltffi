@@ -127,7 +127,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     defaults:
       run:
-        working-directory: benchmarks/rust-boltffi
+        working-directory: examples/demo
     strategy:
       fail-fast: false
       matrix:
@@ -142,9 +142,7 @@ jobs:
         with:
           cache-on-failure: true
           key: android-packaging-${{ matrix.os }}
-          workspaces: |
-            .
-            benchmarks/rust-boltffi
+          workspaces: .
       - run: cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- check --android --fix
       - run: cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- -v pack android
 

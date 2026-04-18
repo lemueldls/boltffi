@@ -1035,10 +1035,20 @@ pub(crate) fn resolve_jni_include_directories_with_overrides(
         target_specific_java_home_env_key(&cargo_context.rust_target_triple);
     let include_override_env =
         target_specific_java_include_env_key(&cargo_context.rust_target_triple);
+    let resolved_java_home = target_java_home_override
+        .as_deref()
+        .and_then(|java_home| resolve_java_home_for_target(java_home, cargo_context.host_target))
+        .or_else(|| {
+            default_java_home.as_deref().and_then(|java_home| {
+                resolve_java_home_for_target(java_home, cargo_context.host_target)
+            })
+        })
+        .or(target_java_home_override.clone())
+        .or(default_java_home.clone());
+
     let platform_include = target_include_override.clone().unwrap_or_else(|| {
-        target_java_home_override
+        resolved_java_home
             .clone()
-            .or(default_java_home.clone())
             .map(|java_home| {
                 java_home
                     .join("include")
@@ -1050,11 +1060,7 @@ pub(crate) fn resolve_jni_include_directories_with_overrides(
     let shared_include = target_include_override
         .as_ref()
         .and_then(|platform_include| platform_include.parent().map(Path::to_path_buf))
-        .or_else(|| {
-            target_java_home_override
-                .or(default_java_home)
-                .map(|java_home| java_home.join("include"))
-        })
+        .or_else(|| resolved_java_home.map(|java_home| java_home.join("include")))
         .or_else(|| platform_include.parent().map(Path::to_path_buf))
         .ok_or_else(|| CliError::CommandFailed {
             command: format!(
@@ -1095,6 +1101,45 @@ pub(crate) fn resolve_jni_include_directories_with_overrides(
         shared: shared_include,
         platform: platform_include,
     })
+}
+
+fn resolve_java_home_for_target(java_home: &Path, host_target: JavaHostTarget) -> Option<PathBuf> {
+    candidate_java_home_roots(java_home).find(|candidate| {
+        let include_root = candidate.join("include");
+        include_root.join("jni.h").exists()
+            && include_root
+                .join(host_target.jni_platform())
+                .join("jni_md.h")
+                .exists()
+    })
+}
+
+fn candidate_java_home_roots(java_home: &Path) -> impl Iterator<Item = PathBuf> {
+    let java_home = java_home.to_path_buf();
+    let macos_bundle_home = java_home.join("Contents").join("Home");
+    let homebrew_bundle_home = java_home
+        .join("libexec")
+        .join("openjdk.jdk")
+        .join("Contents")
+        .join("Home");
+
+    [
+        java_home.clone(),
+        macos_bundle_home.clone(),
+        homebrew_bundle_home,
+        java_home.join("Home"),
+        macos_bundle_home.join("Home"),
+    ]
+    .into_iter()
+    .scan(Vec::<PathBuf>::new(), |seen, candidate| {
+        if seen.iter().any(|existing| existing == &candidate) {
+            Some(None)
+        } else {
+            seen.push(candidate.clone());
+            Some(Some(candidate))
+        }
+    })
+    .flatten()
 }
 
 pub(crate) fn target_specific_java_home_env_key(rust_target_triple: &str) -> String {
@@ -2112,6 +2157,35 @@ mod tests {
 
         assert_eq!(include_directories.shared, target_include_root);
         assert_eq!(include_directories.platform, target_platform_include);
+
+        fs::remove_dir_all(&temp_root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn resolves_homebrew_java_home_layout_for_host_headers() {
+        let temp_root = temporary_directory("boltffi-java-homebrew-layout-test");
+        let homebrew_prefix = temp_root.join("openjdk@17");
+        let resolved_home = homebrew_prefix
+            .join("libexec")
+            .join("openjdk.jdk")
+            .join("Contents")
+            .join("Home");
+        let include_root = resolved_home.join("include");
+        let platform_include = include_root.join("darwin");
+        fs::create_dir_all(&platform_include).expect("create homebrew include dirs");
+        fs::write(include_root.join("jni.h"), []).expect("write jni.h");
+        fs::write(platform_include.join("jni_md.h"), []).expect("write jni_md.h");
+
+        let include_directories = resolve_jni_include_directories_with_overrides(
+            &cargo_context(&temp_root, JavaHostTarget::DarwinArm64),
+            Some(homebrew_prefix),
+            None,
+            None,
+        )
+        .expect("homebrew java layout should resolve");
+
+        assert_eq!(include_directories.shared, include_root);
+        assert_eq!(include_directories.platform, platform_include);
 
         fs::remove_dir_all(&temp_root).expect("cleanup temp dir");
     }
