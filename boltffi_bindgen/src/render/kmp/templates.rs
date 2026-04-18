@@ -29,8 +29,12 @@ fn render_common_main(module: &KmpModule) -> String {
     out.push_str("import kotlin.Result\n\n");
 
     for record in &module.records {
-        let fields = render_property_params(&record.fields);
-        out.push_str(&format!("expect class {}({})\n\n", record.name, fields));
+        let fields = render_params(&record.fields);
+        out.push_str(&format!("expect class {}({}) {{\n", record.name, fields));
+        for field in &record.fields {
+            out.push_str(&format!("    val {}: {}\n", field.name, field.kotlin_type));
+        }
+        out.push_str("}\n\n");
     }
 
     for enumeration in &module.enums {
@@ -56,11 +60,18 @@ fn render_common_main(module: &KmpModule) -> String {
                             variant.name, enumeration.name
                         ));
                     } else {
-                        let fields = render_property_params(&variant.fields);
+                        let fields = render_params(&variant.fields);
                         out.push_str(&format!(
-                            "    expect class {}({}) : {}\n",
+                            "    expect class {}({}) : {} {{\n",
                             variant.name, fields, enumeration.name
                         ));
+                        for field in &variant.fields {
+                            out.push_str(&format!(
+                                "        val {}: {}\n",
+                                field.name, field.kotlin_type
+                            ));
+                        }
+                        out.push_str("    }\n");
                     }
                 }
                 out.push_str("}\n\n");
@@ -305,14 +316,6 @@ fn render_params(params: &[KmpParam]) -> String {
     params
         .iter()
         .map(|param| format!("{}: {}", param.name, param.kotlin_type))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn render_property_params(params: &[KmpParam]) -> String {
-    params
-        .iter()
-        .map(|param| format!("val {}: {}", param.name, param.kotlin_type))
         .collect::<Vec<_>>()
         .join(", ")
 }
