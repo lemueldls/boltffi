@@ -56,18 +56,20 @@ impl LanguageGenerator for KmpGenerator {
         .lower();
         let outputs = KmpEmitter::emit(&module);
 
-        let output_file_name = format!("{module_name}.kt");
+        let common_output_file_name = format!("{module_name}.kt");
+        let jvm_output_file_name = format!("{module_name}Jvm.kt");
+        let native_output_file_name = format!("{module_name}Native.kt");
 
         request.write_output(
-            &common_directory.join(&output_file_name),
+            &common_directory.join(&common_output_file_name),
             outputs.common_main_source,
         )?;
         request.write_output(
-            &jvm_directory.join(&output_file_name),
+            &jvm_directory.join(&jvm_output_file_name),
             outputs.jvm_main_source,
         )?;
         request.write_output(
-            &native_directory.join(output_file_name),
+            &native_directory.join(native_output_file_name),
             outputs.native_main_source,
         )?;
         request.write_output(
