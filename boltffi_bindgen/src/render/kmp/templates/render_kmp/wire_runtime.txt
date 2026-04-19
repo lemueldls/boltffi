@@ -20,9 +20,11 @@ interface WireCodec<T> {
 
 class WireReader(private var data: ByteArray) {
     internal fun reset(next: ByteArray) {
-        // Rebind to a different backing array when borrowed from the pool.
         data = next
+        pos = 0
     }
+
+    private var pos: Int = 0
 
     private fun byteAt(offset: Int): Byte = data[offset]
 
@@ -50,9 +52,123 @@ class WireReader(private var data: ByteArray) {
     fun readULongAt(offset: Int): ULong = readLongAt(offset).toULong()
     fun readFloatAt(offset: Int): Float = Float.fromBits(readIntAt(offset))
     fun readDoubleAt(offset: Int): Double = Double.fromBits(readLongAt(offset))
+
+    fun readBool(): Boolean {
+        val value = readBooleanAt(pos)
+        pos += 1
+        return value
+    }
+
+    fun readI8(): Byte {
+        val value = readByteAt(pos)
+        pos += 1
+        return value
+    }
+
+    fun readU8(): UByte {
+        val value = readUByteAt(pos)
+        pos += 1
+        return value
+    }
+
+    fun readI16(): Short {
+        val value = readShortAt(pos)
+        pos += 2
+        return value
+    }
+
+    fun readU16(): UShort {
+        val value = readUShortAt(pos)
+        pos += 2
+        return value
+    }
+
+    fun readI32(): Int {
+        val value = readIntAt(pos)
+        pos += 4
+        return value
+    }
+
+    fun readU32(): UInt {
+        val value = readUIntAt(pos)
+        pos += 4
+        return value
+    }
+
+    fun readI64(): Long {
+        val value = readLongAt(pos)
+        pos += 8
+        return value
+    }
+
+    fun readU64(): ULong {
+        val value = readULongAt(pos)
+        pos += 8
+        return value
+    }
+
+    fun readF32(): Float {
+        val value = readFloatAt(pos)
+        pos += 4
+        return value
+    }
+
+    fun readF64(): Double {
+        val value = readDoubleAt(pos)
+        pos += 8
+        return value
+    }
+
+    fun readString(): String {
+        val len = readU32().toInt()
+        if (len == 0) return ""
+        val start = pos
+        pos += len
+        return data.decodeToString(start, start + len)
+    }
+
+    fun readBytes(): ByteArray {
+        val len = readU32().toInt()
+        if (len == 0) return ByteArray(0)
+        val start = pos
+        pos += len
+        return data.copyOfRange(start, start + len)
+    }
+
+    inline fun <T> readOption(reader: (WireReader) -> T): T? {
+        val tag = readU8().toInt()
+        return if (tag == 0) null else reader(this)
+    }
+
+    inline fun <T> readOptional(reader: (WireReader) -> T): T? = readOption(reader)
+
+    inline fun <T> readList(reader: (WireReader) -> T): List<T> {
+        val count = readU32().toInt()
+        if (count == 0) return emptyList()
+        return ArrayList<T>(count).also { list -> repeat(count) { list.add(reader(this)) } }
+    }
+
+    inline fun <T, E> readResult(
+        okReader: (WireReader) -> T,
+        errReader: (WireReader) -> E,
+    ): BoltFFIResult<T, E> {
+        val tag = readU8().toInt()
+        return if (tag == 0) {
+            BoltFFIResult.Ok(okReader(this))
+        } else {
+            BoltFFIResult.Err(errReader(this))
+        }
+    }
+
+    fun skip(count: Int) {
+        pos += count
+    }
 }
 
-class WireWriter(private var data: ByteArray) {
+class WireWriter(initialCapacity: Int = 256) {
+    private var data: ByteArray = ByteArray(initialCapacity.coerceAtLeast(0))
+    private var pos: Int = 0
+
     internal fun reset(requiredCapacity: Int) {
         if (requiredCapacity < 0) {
             throw IllegalArgumentException("requiredCapacity must be >= 0")
@@ -60,13 +176,20 @@ class WireWriter(private var data: ByteArray) {
 
         if (data.size < requiredCapacity) {
             data = ByteArray(requiredCapacity)
-        } else if (requiredCapacity > 0) {
-            data.fill(0, 0, requiredCapacity)
         }
+        pos = 0
     }
 
     internal val capacity: Int
         get() = data.size
+
+    private fun ensureCapacity(needed: Int) {
+        val required = pos + needed
+        if (required <= data.size) return
+
+        val nextSize = maxOf(data.size * 2, required)
+        data = data.copyOf(nextSize)
+    }
 
     fun writeBooleanAt(offset: Int, value: Boolean) {
         data[offset] = if (value) 1 else 0
@@ -110,6 +233,153 @@ class WireWriter(private var data: ByteArray) {
     fun writeULongAt(offset: Int, value: ULong) = writeLongAt(offset, value.toLong())
     fun writeFloatAt(offset: Int, value: Float) = writeIntAt(offset, value.toBits())
     fun writeDoubleAt(offset: Int, value: Double) = writeLongAt(offset, value.toBits())
+
+    fun writeBool(value: Boolean) {
+        ensureCapacity(1)
+        data[pos] = if (value) 1 else 0
+        pos += 1
+    }
+
+    fun writeI8(value: Byte) {
+        ensureCapacity(1)
+        data[pos] = value
+        pos += 1
+    }
+
+    fun writeU8(value: UByte) = writeI8(value.toByte())
+
+    fun writeI16(value: Short) {
+        ensureCapacity(2)
+        writeShortAt(pos, value)
+        pos += 2
+    }
+
+    fun writeU16(value: UShort) = writeI16(value.toShort())
+
+    fun writeI32(value: Int) {
+        ensureCapacity(4)
+        writeIntAt(pos, value)
+        pos += 4
+    }
+
+    fun writeU32(value: UInt) = writeI32(value.toInt())
+
+    fun writeI64(value: Long) {
+        ensureCapacity(8)
+        writeLongAt(pos, value)
+        pos += 8
+    }
+
+    fun writeU64(value: ULong) = writeI64(value.toLong())
+    fun writeF32(value: Float) = writeI32(value.toBits())
+    fun writeF64(value: Double) = writeI64(value.toBits())
+
+    fun writePadding(count: Int) {
+        if (count <= 0) return
+        ensureCapacity(count)
+        data.fill(0, pos, pos + count)
+        pos += count
+    }
+
+    fun writeString(value: String) {
+        val bytes = value.encodeToByteArray()
+        writeU32(bytes.size.toUInt())
+        ensureCapacity(bytes.size)
+        bytes.copyInto(data, destinationOffset = pos)
+        pos += bytes.size
+    }
+
+    fun writeBytes(value: ByteArray) {
+        writeU32(value.size.toUInt())
+        ensureCapacity(value.size)
+        value.copyInto(data, destinationOffset = pos)
+        pos += value.size
+    }
+
+    inline fun <T> writeOption(value: T?, writer: (WireWriter, T) -> Unit) {
+        if (value == null) {
+            writeU8(0u)
+            return
+        }
+
+        writeU8(1u)
+        writer(this, value)
+    }
+
+    inline fun <T> writeOptional(value: T?, writer: (WireWriter, T) -> Unit) =
+        writeOption(value, writer)
+
+    inline fun <T> writeList(values: List<T>, writer: (WireWriter, T) -> Unit) {
+        writeU32(values.size.toUInt())
+        values.forEach { writer(this, it) }
+    }
+
+    inline fun <T, E> writeResult(
+        value: BoltFFIResult<T, E>,
+        okWriter: (WireWriter, T) -> Unit,
+        errWriter: (WireWriter, E) -> Unit,
+    ) {
+        when (value) {
+            is BoltFFIResult.Ok -> {
+                writeU8(0u)
+                okWriter(this, value.value)
+            }
+
+            is BoltFFIResult.Err -> {
+                writeU8(1u)
+                errWriter(this, value.error)
+            }
+        }
+    }
+
+    fun writePrimitiveList(v: IntArray) {
+        writeU32(v.size.toUInt())
+        v.forEach(::writeI32)
+    }
+
+    fun writePrimitiveList(v: LongArray) {
+        writeU32(v.size.toUInt())
+        v.forEach(::writeI64)
+    }
+
+    fun writePrimitiveList(v: FloatArray) {
+        writeU32(v.size.toUInt())
+        v.forEach(::writeF32)
+    }
+
+    fun writePrimitiveList(v: DoubleArray) {
+        writeU32(v.size.toUInt())
+        v.forEach(::writeF64)
+    }
+
+    fun writePrimitiveList(v: ShortArray) {
+        writeU32(v.size.toUInt())
+        v.forEach(::writeI16)
+    }
+
+    fun writePrimitiveList(v: ByteArray) {
+        writeU32(v.size.toUInt())
+        ensureCapacity(v.size)
+        v.copyInto(data, destinationOffset = pos)
+        pos += v.size
+    }
+
+    fun writePrimitiveList(v: BooleanArray) {
+        writeU32(v.size.toUInt())
+        v.forEach(::writeBool)
+    }
+
+    fun writePrimitiveList(v: List<Int>) {
+        writeU32(v.size.toUInt())
+        v.forEach(::writeI32)
+    }
+
+    fun writePrimitiveList(v: List<Long>) {
+        writeU32(v.size.toUInt())
+        v.forEach(::writeI64)
+    }
+
+    fun toByteArray(): ByteArray = data.copyOf(pos)
 
     fun toByteArray(size: Int): ByteArray {
         if (size < 0 || size > data.size) {
@@ -167,9 +437,9 @@ class WireWriterPoolState(private val cacheSize: Int = 4) {
         depth = slot + 1
         val shouldCache = requiredCapacity <= MAX_CACHED_WIRE_BUFFER_BYTES && slot < cacheSize
         val writer = if (shouldCache) {
-            cachedWriters[slot] ?: WireWriter(ByteArray(requiredCapacity)).also { cachedWriters[slot] = it }
+            cachedWriters[slot] ?: WireWriter(requiredCapacity).also { cachedWriters[slot] = it }
         } else {
-            WireWriter(ByteArray(requiredCapacity))
+            WireWriter(requiredCapacity)
         }
         writer.reset(requiredCapacity)
         return BorrowedWireWriter(this, writer)
@@ -184,6 +454,8 @@ class BorrowedWireWriter(
     private val state: WireWriterPoolState,
     val writer: WireWriter,
 ) {
+    fun toByteArray(): ByteArray = writer.toByteArray()
+
     fun close() {
         state.release()
     }
