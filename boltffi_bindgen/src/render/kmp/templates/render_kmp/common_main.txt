@@ -2,11 +2,95 @@ package {{ module.package_name }}
 
 import kotlin.Result
 
+class WireReader(private val buffer: ByteArray) {
+    private fun byteAt(offset: Int): Byte = buffer[offset]
+
+    fun readBooleanAt(offset: Int): Boolean = byteAt(offset) != 0.toByte()
+    fun readByteAt(offset: Int): Byte = byteAt(offset)
+    fun readUByteAt(offset: Int): UByte = byteAt(offset).toUByte()
+    fun readShortAt(offset: Int): Short =
+        ((buffer[offset].toInt() and 0xFF) or ((buffer[offset + 1].toInt() and 0xFF) shl 8)).toShort()
+    fun readUShortAt(offset: Int): UShort = readShortAt(offset).toUShort()
+    fun readIntAt(offset: Int): Int =
+        (buffer[offset].toInt() and 0xFF) or
+            ((buffer[offset + 1].toInt() and 0xFF) shl 8) or
+            ((buffer[offset + 2].toInt() and 0xFF) shl 16) or
+            ((buffer[offset + 3].toInt() and 0xFF) shl 24)
+    fun readUIntAt(offset: Int): UInt = readIntAt(offset).toUInt()
+    fun readLongAt(offset: Int): Long =
+        (buffer[offset].toLong() and 0xFFL) or
+            ((buffer[offset + 1].toLong() and 0xFFL) shl 8) or
+            ((buffer[offset + 2].toLong() and 0xFFL) shl 16) or
+            ((buffer[offset + 3].toLong() and 0xFFL) shl 24) or
+            ((buffer[offset + 4].toLong() and 0xFFL) shl 32) or
+            ((buffer[offset + 5].toLong() and 0xFFL) shl 40) or
+            ((buffer[offset + 6].toLong() and 0xFFL) shl 48) or
+            ((buffer[offset + 7].toLong() and 0xFFL) shl 56)
+    fun readULongAt(offset: Int): ULong = readLongAt(offset).toULong()
+    fun readFloatAt(offset: Int): Float = Float.fromBits(readIntAt(offset))
+    fun readDoubleAt(offset: Int): Double = Double.fromBits(readLongAt(offset))
+}
+
+class WireWriter(private val buffer: ByteArray) {
+    fun writeBooleanAt(offset: Int, value: Boolean) {
+        buffer[offset] = if (value) 1 else 0
+    }
+
+    fun writeByteAt(offset: Int, value: Byte) {
+        buffer[offset] = value
+    }
+
+    fun writeUByteAt(offset: Int, value: UByte) {
+        buffer[offset] = value.toByte()
+    }
+
+    fun writeShortAt(offset: Int, value: Short) {
+        buffer[offset] = (value.toInt() and 0xFF).toByte()
+        buffer[offset + 1] = ((value.toInt() ushr 8) and 0xFF).toByte()
+    }
+
+    fun writeUShortAt(offset: Int, value: UShort) = writeShortAt(offset, value.toShort())
+
+    fun writeIntAt(offset: Int, value: Int) {
+        buffer[offset] = (value and 0xFF).toByte()
+        buffer[offset + 1] = ((value ushr 8) and 0xFF).toByte()
+        buffer[offset + 2] = ((value ushr 16) and 0xFF).toByte()
+        buffer[offset + 3] = ((value ushr 24) and 0xFF).toByte()
+    }
+
+    fun writeUIntAt(offset: Int, value: UInt) = writeIntAt(offset, value.toInt())
+
+    fun writeLongAt(offset: Int, value: Long) {
+        buffer[offset] = (value and 0xFFL).toByte()
+        buffer[offset + 1] = ((value ushr 8) and 0xFFL).toByte()
+        buffer[offset + 2] = ((value ushr 16) and 0xFFL).toByte()
+        buffer[offset + 3] = ((value ushr 24) and 0xFFL).toByte()
+        buffer[offset + 4] = ((value ushr 32) and 0xFFL).toByte()
+        buffer[offset + 5] = ((value ushr 40) and 0xFFL).toByte()
+        buffer[offset + 6] = ((value ushr 48) and 0xFFL).toByte()
+        buffer[offset + 7] = ((value ushr 56) and 0xFFL).toByte()
+    }
+
+    fun writeULongAt(offset: Int, value: ULong) = writeLongAt(offset, value.toLong())
+    fun writeFloatAt(offset: Int, value: Float) = writeIntAt(offset, value.toBits())
+    fun writeDoubleAt(offset: Int, value: Double) = writeLongAt(offset, value.toBits())
+}
+
 {%- for record in module.records %}
 expect class {{ record.name }}({% for field in record.fields %}{{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) {
 {%- for field in record.fields %}
     val {{ field.name }}: {{ field.kotlin_type }}
 {%- endfor %}
+{%- if record.is_blittable %}
+
+    companion object {
+        fun decode(reader: WireReader): {{ record.name }} = {{ self::render_record_wire_decode(record, "reader") }}
+    }
+
+    fun wireEncodedSize(): Int
+
+    fun wireEncodeTo(wire: WireWriter)
+{%- endif %}
 }
 
 {%- endfor %}

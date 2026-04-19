@@ -4,7 +4,7 @@ use askama::Template;
 
 use super::plan::{
     KmpClass, KmpClassFactory, KmpClassMethod, KmpEnumKind, KmpFunction, KmpModule, KmpOutputs,
-    KmpParam,
+    KmpParam, KmpRecord, KmpRecordField,
 };
 
 pub struct KmpTemplates;
@@ -15,8 +15,6 @@ impl KmpTemplates {
             common_main_source: render_common_main(module),
             jvm_main_source: render_platform_main(module, Platform::Jvm),
             native_main_source: render_platform_main(module, Platform::Native),
-            jvm_ffi_source: render_jvm_ffi(module),
-            native_ffi_source: render_native_ffi(module),
             native_def_source: render_native_def(module),
         }
     }
@@ -40,18 +38,6 @@ struct PlatformMainTemplate<'a> {
 #[derive(Template)]
 #[template(path = "render_kmp/native_def.txt", escape = "none")]
 struct NativeDefTemplate<'a> {
-    module: &'a KmpModule,
-}
-
-#[derive(Template)]
-#[template(path = "render_kmp/jvm_ffi.txt", escape = "none")]
-struct JvmFfiTemplate<'a> {
-    module: &'a KmpModule,
-}
-
-#[derive(Template)]
-#[template(path = "render_kmp/native_ffi.txt", escape = "none")]
-struct NativeFfiTemplate<'a> {
     module: &'a KmpModule,
 }
 
@@ -97,23 +83,27 @@ fn render_native_def(module: &KmpModule) -> String {
     NativeDefTemplate { module }.render().unwrap()
 }
 
-fn render_jvm_ffi(module: &KmpModule) -> String {
-    JvmFfiTemplate { module }.render().unwrap()
-}
-
-fn render_native_ffi(module: &KmpModule) -> String {
-    NativeFfiTemplate { module }.render().unwrap()
-}
-
 fn render_platform_data_classes(module: &KmpModule) -> String {
     let mut out = String::new();
 
     for record in &module.records {
-        out.push_str(&format!(
-            "actual data class {} actual constructor({})\n\n",
-            record.name,
-            render_actual_property_params(&record.fields)
-        ));
+        if record.is_blittable {
+            out.push_str(&format!(
+                "actual data class {} actual constructor({}) {{\n\n    actual companion object {{\n        actual fun decode(reader: WireReader): {} = {}\n    }}\n\n    actual fun wireEncodedSize(): Int = {}\n\n    actual fun wireEncodeTo(wire: WireWriter) {{\n{}    }}\n}}\n\n",
+                record.name,
+                render_record_property_params(&record.fields),
+                record.name,
+                render_record_wire_decode(record, "reader"),
+                record.struct_size,
+                render_record_wire_encode(record, "        ")
+            ));
+        } else {
+            out.push_str(&format!(
+                "actual data class {} actual constructor({})\n\n",
+                record.name,
+                render_record_property_params(&record.fields)
+            ));
+        }
     }
 
     for enumeration in &module.enums {
@@ -201,6 +191,30 @@ fn render_actual_class_with_alias_prefix(class: &KmpClass, alias_prefix: &str) -
     out
 }
 
+fn render_record_wire_decode(record: &KmpRecord, reader_name: &str) -> String {
+    let args = record
+        .fields
+        .iter()
+        .map(|field| format!("{reader_name}.{}({})", field.read_method, field.offset))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!("{}({})", record.name, args)
+}
+
+fn render_record_wire_encode(record: &KmpRecord, indent: &str) -> String {
+    record
+        .fields
+        .iter()
+        .map(|field| {
+            format!(
+                "{indent}wire.{}({}, {})\n",
+                field.write_method, field.offset, field.name
+            )
+        })
+        .collect()
+}
+
 fn render_function_signature(function: &KmpFunction) -> String {
     let suspend_kw = if function.is_async { "suspend " } else { "" };
     format!(
@@ -243,6 +257,14 @@ fn render_params(params: &[KmpParam]) -> String {
 }
 
 fn render_actual_property_params(params: &[KmpParam]) -> String {
+    params
+        .iter()
+        .map(|param| format!("actual val {}: {}", param.name, param.kotlin_type))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn render_record_property_params(params: &[KmpRecordField]) -> String {
     params
         .iter()
         .map(|param| format!("actual val {}: {}", param.name, param.kotlin_type))

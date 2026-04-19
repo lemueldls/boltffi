@@ -5,7 +5,6 @@ pub struct KmpModule {
     pub library_name: String,
     pub jvm_binding_package: String,
     pub native_binding_package: String,
-    pub native_interop_package: String,
     pub records: Vec<KmpRecord>,
     pub enums: Vec<KmpEnum>,
     pub callbacks: Vec<KmpCallback>,
@@ -18,9 +17,16 @@ pub struct KmpOutputs {
     pub common_main_source: String,
     pub jvm_main_source: String,
     pub native_main_source: String,
-    pub jvm_ffi_source: String,
-    pub native_ffi_source: String,
     pub native_def_source: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct KmpRecordField {
+    pub name: String,
+    pub kotlin_type: String,
+    pub offset: usize,
+    pub read_method: String,
+    pub write_method: String,
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +47,9 @@ pub struct KmpFunction {
 #[derive(Debug, Clone)]
 pub struct KmpRecord {
     pub name: String,
-    pub fields: Vec<KmpParam>,
+    pub is_blittable: bool,
+    pub struct_size: usize,
+    pub fields: Vec<KmpRecordField>,
 }
 
 #[derive(Debug, Clone)]
