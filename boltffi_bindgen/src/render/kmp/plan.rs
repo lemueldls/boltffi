@@ -3,8 +3,6 @@ pub struct KmpModule {
     pub package_name: String,
     pub module_name: String,
     pub library_name: String,
-    pub jvm_binding_package: String,
-    pub native_binding_package: String,
     pub records: Vec<KmpRecord>,
     pub enums: Vec<KmpEnum>,
     pub callbacks: Vec<KmpCallback>,
@@ -42,10 +40,6 @@ pub struct KmpFunction {
     pub return_type: String,
     pub is_async: bool,
     pub ffi_symbol: String,
-    pub call_args: Vec<String>,
-    pub setup_lines: Vec<String>,
-    pub cleanup_lines: Vec<String>,
-    pub decode_record_return: Option<String>,
 }
 
 #[derive(Debug, Clone)]

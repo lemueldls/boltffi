@@ -9,6 +9,10 @@ private object Native {
     }
 
     fun ensureLoaded() = Unit
+
+{%- for function in module.functions %}
+    @JvmStatic external fun {{ function.ffi_symbol }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }}
+{%- endfor %}
 }
 {%- endif %}
 
@@ -30,31 +34,9 @@ actual object {{ module.module_name }} {
     actual {% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }} {
 {%- if is_jvm %}
         Native.ensureLoaded()
-{%- endif %}
-{%- for line in function.setup_lines %}
-    {{ line }}
-{%- endfor %}
-{%- if !function.cleanup_lines.is_empty() %}
-    try {
-{%- endif %}
-    val callResult = {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for arg in function.call_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- match function.decode_record_return %}
-{%- when Some with (record_type) %}
-    val callResultReader = WireReaderPool.acquire(callResult)
-    try {
-        return {{ record_type }}.decode(callResultReader.reader)
-    } finally {
-        callResultReader.close()
-    }
-{%- when None %}
-    return callResult
-{%- endmatch %}
-{%- if !function.cleanup_lines.is_empty() %}
-    } finally {
-{%- for line in function.cleanup_lines %}
-        {{ line }}
-{%- endfor %}
-    }
+    return Native.{{ function.ffi_symbol }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- else %}
+    return {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- endif %}
     }
 {%- endfor %}

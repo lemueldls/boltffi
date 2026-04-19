@@ -39,10 +39,6 @@ impl<'a> KmpLowerer<'a> {
     }
 
     pub fn lower(self) -> KmpModule {
-        let package_name = self.package_name.clone();
-        let jvm_binding_package = format!("{}.jvmffi", package_name);
-        let native_binding_package = format!("{}.native", package_name);
-
         let records = self
             .ffi_contract
             .catalog
@@ -265,53 +261,19 @@ impl<'a> KmpLowerer<'a> {
             .ffi_contract
             .functions
             .iter()
-            .map(|function| {
-                let mut setup_lines = Vec::new();
-                let mut cleanup_lines = Vec::new();
-                let mut call_args = Vec::new();
-
-                let params = function
+            .map(|function| KmpFunction {
+                name: NamingConvention::method_name(function.id.as_str()),
+                params: function
                     .params
                     .iter()
-                    .map(|param| {
-                        let param_name = NamingConvention::param_name(param.name.as_str());
-                        let kotlin_type = self.kotlin_type(&param.type_expr);
-
-                        if self.is_blittable_record_type(&param.type_expr) {
-                            let wire_var = format!("{}Wire", param_name);
-                            setup_lines.push(format!(
-                                "val {wire_var} = WireWriterPool.acquire({param_name}.wireEncodedSize())"
-                            ));
-                            setup_lines.push("kotlin.run {".to_string());
-                            setup_lines.push(format!("    val wire = {wire_var}.writer"));
-                            setup_lines.push(format!("    {param_name}.wireEncodeTo(wire)"));
-                            setup_lines.push("}".to_string());
-                            cleanup_lines.push(format!("{wire_var}.close()"));
-                            call_args.push(format!(
-                                "{wire_var}.writer.toByteArray({param_name}.wireEncodedSize())"
-                            ));
-                        } else {
-                            call_args.push(param_name.clone());
-                        }
-
-                        KmpParam {
-                            name: param_name,
-                            kotlin_type,
-                        }
+                    .map(|param| KmpParam {
+                        name: NamingConvention::param_name(param.name.as_str()),
+                        kotlin_type: self.kotlin_type(&param.type_expr),
                     })
-                    .collect();
-
-                KmpFunction {
-                    name: NamingConvention::method_name(function.id.as_str()),
-                    params,
-                    return_type: self.kotlin_return_type(&function.returns),
-                    is_async: function.execution_kind == ExecutionKind::Async,
-                    ffi_symbol: self.call_symbol(CallId::Function(function.id.clone())),
-                    call_args,
-                    setup_lines,
-                    cleanup_lines,
-                    decode_record_return: self.blittable_record_return_type(&function.returns),
-                }
+                    .collect(),
+                return_type: self.kotlin_return_type(&function.returns),
+                is_async: function.execution_kind == ExecutionKind::Async,
+                ffi_symbol: self.call_symbol(CallId::Function(function.id.clone())),
             })
             .collect();
 
@@ -319,8 +281,6 @@ impl<'a> KmpLowerer<'a> {
             package_name: self.package_name,
             module_name: self.module_name,
             library_name: self.library_name,
-            jvm_binding_package,
-            native_binding_package,
             records,
             enums,
             callbacks,
@@ -401,33 +361,6 @@ impl<'a> KmpLowerer<'a> {
             ReturnDef::Void => "Unit".to_string(),
             ReturnDef::Value(type_expr) => self.kotlin_type(type_expr),
             ReturnDef::Result { ok, .. } => self.kotlin_type(ok),
-        }
-    }
-
-    fn is_blittable_record_type(&self, type_expr: &TypeExpr) -> bool {
-        match type_expr {
-            TypeExpr::Record(record_id) => self
-                .abi_record_for(record_id)
-                .is_some_and(|record| record.is_blittable),
-            _ => false,
-        }
-    }
-
-    fn blittable_record_return_type(&self, returns: &ReturnDef) -> Option<String> {
-        let type_expr = match returns {
-            ReturnDef::Value(type_expr) => type_expr,
-            _ => return None,
-        };
-
-        match type_expr {
-            TypeExpr::Record(record_id)
-                if self
-                    .abi_record_for(record_id)
-                    .is_some_and(|record| record.is_blittable) =>
-            {
-                Some(NamingConvention::class_name(record_id.as_str()))
-            }
-            _ => None,
         }
     }
 

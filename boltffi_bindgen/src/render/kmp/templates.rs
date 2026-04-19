@@ -253,20 +253,8 @@ fn module_has_data_classes(module: &KmpModule) -> bool {
 }
 
 fn collect_imports(module: &KmpModule, platform: Platform) -> Vec<String> {
-    let import_package = match platform {
-        Platform::Jvm => &module.jvm_binding_package,
-        Platform::Native => &module.native_binding_package,
-    };
+    let import_package = &module.package_name;
     let mut imports = BTreeSet::new();
-
-    for function in &module.functions {
-        imports.insert(format!(
-            "import {}.{} as {}",
-            import_package,
-            function.ffi_symbol,
-            symbol_alias(&function.ffi_symbol, alias_prefix(platform))
-        ));
-    }
 
     for class in &module.classes {
         for constructor in &class.constructors {
