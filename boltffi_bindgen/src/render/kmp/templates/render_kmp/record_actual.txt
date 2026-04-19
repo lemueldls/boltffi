@@ -1,0 +1,14 @@
+actual data class {{ record.name }} actual constructor({% for field in record.fields %}actual val {{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% if record.is_blittable %} {
+
+    actual companion object {
+        actual fun decode(reader: WireReader): {{ record.name }} = {{ record.name }}({% for field in record.fields %}reader.{{ field.read_method }}({{ field.offset }}){% if !loop.last %}, {% endif %}{% endfor %})
+    }
+
+    actual fun wireEncodedSize(): Int = {{ record.struct_size }}
+
+    actual fun wireEncodeTo(wire: WireWriter) {
+{%- for field in record.fields %}
+        wire.{{ field.write_method }}({{ field.offset }}, {{ field.name }})
+{%- endfor %}
+    }
+}{% endif %}

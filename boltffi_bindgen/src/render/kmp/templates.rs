@@ -4,7 +4,7 @@ use askama::Template;
 
 use super::plan::{
     KmpClass, KmpClassFactory, KmpClassMethod, KmpEnumKind, KmpFunction, KmpModule, KmpOutputs,
-    KmpParam, KmpRecord, KmpRecordField,
+    KmpParam, KmpRecord,
 };
 
 pub struct KmpTemplates;
@@ -27,6 +27,10 @@ struct CommonMainTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "render_kmp/wire_runtime.txt", escape = "none")]
+struct WireRuntimeTemplate;
+
+#[derive(Template)]
 #[template(path = "render_kmp/platform_main.txt", escape = "none")]
 struct PlatformMainTemplate<'a> {
     module: &'a KmpModule,
@@ -39,6 +43,12 @@ struct PlatformMainTemplate<'a> {
 #[template(path = "render_kmp/native_def.txt", escape = "none")]
 struct NativeDefTemplate<'a> {
     module: &'a KmpModule,
+}
+
+#[derive(Template)]
+#[template(path = "render_kmp/record_actual.txt", escape = "none")]
+struct RecordActualTemplate<'a> {
+    record: &'a KmpRecord,
 }
 
 struct PlatformTemplateContext {
@@ -67,6 +77,10 @@ fn render_common_main(module: &KmpModule) -> String {
     CommonMainTemplate { module }.render().unwrap()
 }
 
+fn render_wire_runtime() -> String {
+    WireRuntimeTemplate.render().unwrap()
+}
+
 fn render_platform_main(module: &KmpModule, platform: Platform) -> String {
     let context = PlatformTemplateContext::for_platform(module, platform);
     PlatformMainTemplate {
@@ -87,23 +101,12 @@ fn render_platform_data_classes(module: &KmpModule) -> String {
     let mut out = String::new();
 
     for record in &module.records {
-        if record.is_blittable {
-            out.push_str(&format!(
-                "actual data class {} actual constructor({}) {{\n\n    actual companion object {{\n        actual fun decode(reader: WireReader): {} = {}\n    }}\n\n    actual fun wireEncodedSize(): Int = {}\n\n    actual fun wireEncodeTo(wire: WireWriter) {{\n{}    }}\n}}\n\n",
-                record.name,
-                render_record_property_params(&record.fields),
-                record.name,
-                render_record_wire_decode(record, "reader"),
-                record.struct_size,
-                render_record_wire_encode(record, "        ")
-            ));
-        } else {
-            out.push_str(&format!(
-                "actual data class {} actual constructor({})\n\n",
-                record.name,
-                render_record_property_params(&record.fields)
-            ));
-        }
+        out.push_str(
+            &RecordActualTemplate { record }
+                .render()
+                .expect("render kmp record actual"),
+        );
+        out.push('\n');
     }
 
     for enumeration in &module.enums {
@@ -191,30 +194,6 @@ fn render_actual_class_with_alias_prefix(class: &KmpClass, alias_prefix: &str) -
     out
 }
 
-fn render_record_wire_decode(record: &KmpRecord, reader_name: &str) -> String {
-    let args = record
-        .fields
-        .iter()
-        .map(|field| format!("{reader_name}.{}({})", field.read_method, field.offset))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    format!("{}({})", record.name, args)
-}
-
-fn render_record_wire_encode(record: &KmpRecord, indent: &str) -> String {
-    record
-        .fields
-        .iter()
-        .map(|field| {
-            format!(
-                "{indent}wire.{}({}, {})\n",
-                field.write_method, field.offset, field.name
-            )
-        })
-        .collect()
-}
-
 fn render_function_signature(function: &KmpFunction) -> String {
     let suspend_kw = if function.is_async { "suspend " } else { "" };
     format!(
@@ -257,14 +236,6 @@ fn render_params(params: &[KmpParam]) -> String {
 }
 
 fn render_actual_property_params(params: &[KmpParam]) -> String {
-    params
-        .iter()
-        .map(|param| format!("actual val {}: {}", param.name, param.kotlin_type))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn render_record_property_params(params: &[KmpRecordField]) -> String {
     params
         .iter()
         .map(|param| format!("actual val {}: {}", param.name, param.kotlin_type))
