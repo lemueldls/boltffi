@@ -1,16 +1,17 @@
 use boltffi_ffi_rules::callable::ExecutionKind;
 
 use crate::ir::abi::{AbiRecord, CallId};
+use crate::ir::abi::ParamRole;
 use crate::ir::definitions::{ConstructorDef, EnumRepr, Receiver, ReturnDef, VariantPayload};
 use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq};
 use crate::ir::types::TypeExpr;
 use crate::ir::{AbiContract, FfiContract};
-use crate::render::kotlin::NamingConvention;
+use crate::render::kotlin::{emit_size_expr_for_write_seq, emit_write_expr, NamingConvention};
 
 use super::plan::{
     KmpCallback, KmpCallbackMethod, KmpClass, KmpClassConstructor, KmpClassFactory, KmpClassMethod,
     KmpEnum, KmpEnumKind, KmpEnumVariant, KmpFunction, KmpModule, KmpParam, KmpRecord,
-    KmpRecordField,
+    KmpRecordField, KmpWireWriter,
 };
 
 pub struct KmpLowerer<'a> {
@@ -265,19 +266,70 @@ impl<'a> KmpLowerer<'a> {
             .ffi_contract
             .functions
             .iter()
-            .map(|function| KmpFunction {
-                name: NamingConvention::method_name(function.id.as_str()),
-                params: function
-                    .params
+            .map(|function| {
+                let call_id = CallId::Function(function.id.clone());
+                let call = self
+                    .abi_contract
+                    .calls
                     .iter()
-                    .map(|param| KmpParam {
-                        name: NamingConvention::param_name(param.name.as_str()),
-                        kotlin_type: self.kotlin_type(&param.type_expr),
-                    })
-                    .collect(),
-                return_type: self.kotlin_return_type(&function.returns),
-                is_async: function.execution_kind == ExecutionKind::Async,
-                ffi_symbol: self.call_symbol(CallId::Function(function.id.clone())),
+                    .find(|call| call.id == call_id);
+
+                let mut params = Vec::new();
+                let mut ffi_params = Vec::new();
+                let mut native_args = Vec::new();
+                let mut wire_writers = Vec::new();
+
+                for param in &function.params {
+                    let param_name = NamingConvention::param_name(param.name.as_str());
+                    let kotlin_type = self.kotlin_type(&param.type_expr);
+                    params.push(KmpParam {
+                        name: param_name.clone(),
+                        kotlin_type: kotlin_type.clone(),
+                    });
+
+                    let abi_param = call.and_then(|call| {
+                        call.params.iter().find(|abi_param| {
+                            abi_param.name.as_str() == param.name.as_str()
+                                && matches!(abi_param.role, ParamRole::Input { .. })
+                        })
+                    });
+
+                    if let Some(abi_param)
+                        = abi_param && let ParamRole::Input {
+                            encode_ops: Some(encode_ops),
+                            ..
+                        } = &abi_param.role
+                    {
+                        let binding_name = format!("wire_writer_{}", param.name.as_str());
+                        wire_writers.push(KmpWireWriter {
+                            binding_name: binding_name.clone(),
+                            size_expr: emit_size_expr_for_write_seq(encode_ops),
+                            encode_expr: emit_write_expr(encode_ops),
+                        });
+                        ffi_params.push(KmpParam {
+                            name: param_name,
+                            kotlin_type: "ByteArray".to_string(),
+                        });
+                        native_args.push(format!("{}.toByteArray()", binding_name));
+                    } else {
+                        ffi_params.push(KmpParam {
+                            name: param_name.clone(),
+                            kotlin_type,
+                        });
+                        native_args.push(param_name);
+                    }
+                }
+
+                KmpFunction {
+                    name: NamingConvention::method_name(function.id.as_str()),
+                    params,
+                    ffi_params,
+                    native_args,
+                    wire_writers,
+                    return_type: self.kotlin_return_type(&function.returns),
+                    is_async: function.execution_kind == ExecutionKind::Async,
+                    ffi_symbol: self.call_symbol(call_id),
+                }
             })
             .collect();
 

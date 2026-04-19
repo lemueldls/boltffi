@@ -36,9 +36,19 @@ pub struct KmpParam {
 }
 
 #[derive(Debug, Clone)]
+pub struct KmpWireWriter {
+    pub binding_name: String,
+    pub size_expr: String,
+    pub encode_expr: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct KmpFunction {
     pub name: String,
     pub params: Vec<KmpParam>,
+    pub ffi_params: Vec<KmpParam>,
+    pub native_args: Vec<String>,
+    pub wire_writers: Vec<KmpWireWriter>,
     pub return_type: String,
     pub is_async: bool,
     pub ffi_symbol: String,
