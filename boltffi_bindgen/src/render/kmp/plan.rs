@@ -5,6 +5,7 @@ pub struct KmpModule {
     pub library_name: String,
     pub jvm_binding_package: String,
     pub native_binding_package: String,
+    pub native_interop_package: String,
     pub records: Vec<KmpRecord>,
     pub enums: Vec<KmpEnum>,
     pub callbacks: Vec<KmpCallback>,
@@ -17,6 +18,8 @@ pub struct KmpOutputs {
     pub common_main_source: String,
     pub jvm_main_source: String,
     pub native_main_source: String,
+    pub jvm_ffi_source: String,
+    pub native_ffi_source: String,
     pub native_def_source: String,
 }
 

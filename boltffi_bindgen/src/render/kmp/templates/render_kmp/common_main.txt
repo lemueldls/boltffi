@@ -71,8 +71,3 @@ expect object {{ module.module_name }} {
     {% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }}
 {%- endfor %}
 }
-
-{%- for function in module.functions %}
-{% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }} = {{ module.module_name }}.{{ function.name }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
-
-{%- endfor %}

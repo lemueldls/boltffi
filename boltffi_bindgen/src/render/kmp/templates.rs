@@ -15,6 +15,8 @@ impl KmpTemplates {
             common_main_source: render_common_main(module),
             jvm_main_source: render_platform_main(module, Platform::Jvm),
             native_main_source: render_platform_main(module, Platform::Native),
+            jvm_ffi_source: render_jvm_ffi(module),
+            native_ffi_source: render_native_ffi(module),
             native_def_source: render_native_def(module),
         }
     }
@@ -38,6 +40,18 @@ struct PlatformMainTemplate<'a> {
 #[derive(Template)]
 #[template(path = "render_kmp/native_def.txt", escape = "none")]
 struct NativeDefTemplate<'a> {
+    module: &'a KmpModule,
+}
+
+#[derive(Template)]
+#[template(path = "render_kmp/jvm_ffi.txt", escape = "none")]
+struct JvmFfiTemplate<'a> {
+    module: &'a KmpModule,
+}
+
+#[derive(Template)]
+#[template(path = "render_kmp/native_ffi.txt", escape = "none")]
+struct NativeFfiTemplate<'a> {
     module: &'a KmpModule,
 }
 
@@ -81,6 +95,14 @@ fn render_platform_main(module: &KmpModule, platform: Platform) -> String {
 
 fn render_native_def(module: &KmpModule) -> String {
     NativeDefTemplate { module }.render().unwrap()
+}
+
+fn render_jvm_ffi(module: &KmpModule) -> String {
+    JvmFfiTemplate { module }.render().unwrap()
+}
+
+fn render_native_ffi(module: &KmpModule) -> String {
+    NativeFfiTemplate { module }.render().unwrap()
 }
 
 fn render_platform_data_classes(module: &KmpModule) -> String {

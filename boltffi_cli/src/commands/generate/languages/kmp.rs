@@ -32,16 +32,6 @@ impl LanguageGenerator for KmpGenerator {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| request.config().kmp_output());
 
-        let common_directory = output_root.join("commonMain/kotlin").join(&package_path);
-        let jvm_directory = output_root.join("jvmMain/kotlin").join(&package_path);
-        let native_directory = output_root.join("nativeMain/kotlin").join(package_path);
-        let include_directory = output_root.join("include");
-
-        request.ensure_output_directory(&common_directory)?;
-        request.ensure_output_directory(&jvm_directory)?;
-        request.ensure_output_directory(&native_directory)?;
-        request.ensure_output_directory(&include_directory)?;
-
         let lowered_crate = request.lowered_crate(ScanPointerWidth::Flexible)?;
         let header_source =
             CHeaderLowerer::new(&lowered_crate.ffi_contract, &lowered_crate.abi_contract)
@@ -56,6 +46,24 @@ impl LanguageGenerator for KmpGenerator {
         .lower();
         let outputs = KmpEmitter::emit(&module);
 
+        let common_directory = output_root.join("commonMain/kotlin").join(&package_path);
+        let jvm_directory = output_root.join("jvmMain/kotlin").join(&package_path);
+        let native_directory = output_root.join("nativeMain/kotlin").join(package_path);
+        let jvm_ffi_directory = output_root
+            .join("jvmMain/kotlin")
+            .join(module.jvm_binding_package.replace('.', "/"));
+        let native_ffi_directory = output_root
+            .join("nativeMain/kotlin")
+            .join(module.native_binding_package.replace('.', "/"));
+        let include_directory = output_root.join("include");
+
+        request.ensure_output_directory(&common_directory)?;
+        request.ensure_output_directory(&jvm_directory)?;
+        request.ensure_output_directory(&native_directory)?;
+        request.ensure_output_directory(&jvm_ffi_directory)?;
+        request.ensure_output_directory(&native_ffi_directory)?;
+        request.ensure_output_directory(&include_directory)?;
+
         let output_file_name = format!("{module_name}.kt");
 
         request.write_output(
@@ -69,6 +77,14 @@ impl LanguageGenerator for KmpGenerator {
         request.write_output(
             &native_directory.join(output_file_name),
             outputs.native_main_source,
+        )?;
+        request.write_output(
+            &jvm_ffi_directory.join(format!("{module_name}JvmFfi.kt")),
+            outputs.jvm_ffi_source,
+        )?;
+        request.write_output(
+            &native_ffi_directory.join(format!("{module_name}NativeFfi.kt")),
+            outputs.native_ffi_source,
         )?;
         request.write_output(
             &include_directory.join(format!("{library_name}.h")),

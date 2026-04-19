@@ -1,0 +1,36 @@
+package {{ module.jvm_binding_package }}
+
+private object Native {
+    init {
+        System.loadLibrary("{{ module.library_name }}")
+    }
+{%- for function in module.functions %}
+    @JvmStatic external fun {{ function.ffi_symbol }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }}
+{%- endfor %}
+{%- for class in module.classes %}
+{%- for constructor in class.constructors %}
+    @JvmStatic external fun {{ constructor.ffi_symbol }}({% for param in constructor.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): Long
+{%- endfor %}
+{%- for factory in class.factories %}
+    @JvmStatic external fun {{ factory.ffi_symbol }}({% for param in factory.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ factory.return_type }}
+{%- endfor %}
+{%- for method in class.methods %}
+    @JvmStatic external fun {{ method.ffi_symbol }}({% if !method.is_static %}handle: Long{% if !method.params.is_empty() %}, {% endif %}{% endif %}{% for param in method.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ method.return_type }}
+{%- endfor %}
+{%- endfor %}
+}
+
+{%- for function in module.functions %}
+internal fun {{ function.ffi_symbol }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }} = Native.{{ function.ffi_symbol }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endfor %}
+{%- for class in module.classes %}
+{%- for constructor in class.constructors %}
+internal fun {{ constructor.ffi_symbol }}({% for param in constructor.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): Long = Native.{{ constructor.ffi_symbol }}({% for param in constructor.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endfor %}
+{%- for factory in class.factories %}
+internal fun {{ factory.ffi_symbol }}({% for param in factory.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ factory.return_type }} = Native.{{ factory.ffi_symbol }}({% for param in factory.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endfor %}
+{%- for method in class.methods %}
+internal fun {{ method.ffi_symbol }}({% if !method.is_static %}handle: Long{% if !method.params.is_empty() %}, {% endif %}{% endif %}{% for param in method.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ method.return_type }} = Native.{{ method.ffi_symbol }}({% if !method.is_static %}handle{% if !method.params.is_empty() %}, {% endif %}{% endif %}{% for param in method.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endfor %}
+{%- endfor %}

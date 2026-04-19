@@ -40,6 +40,7 @@ impl<'a> KmpLowerer<'a> {
         let package_name = self.package_name.clone();
         let jvm_binding_package = format!("{}.jvmffi", package_name);
         let native_binding_package = format!("{}.native", package_name);
+        let native_interop_package = format!("{}.interop", native_binding_package);
 
         let records = self
             ._ffi_contract
@@ -264,6 +265,7 @@ impl<'a> KmpLowerer<'a> {
             library_name: self.library_name,
             jvm_binding_package,
             native_binding_package,
+            native_interop_package,
             records,
             enums,
             callbacks,
@@ -285,7 +287,7 @@ impl<'a> KmpLowerer<'a> {
         match returns {
             ReturnDef::Void => "Unit".to_string(),
             ReturnDef::Value(type_expr) => self.kotlin_type(type_expr),
-            ReturnDef::Result { ok, .. } => format!("Result<{}>", self.kotlin_type(ok)),
+            ReturnDef::Result { ok, .. } => self.kotlin_type(ok),
         }
     }
 
