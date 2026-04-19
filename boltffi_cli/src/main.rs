@@ -937,7 +937,7 @@ mod tests {
         BuildPlatformArg, Cli, Commands, ConfigPaths, GenerateTargetArg, PackTargetArg,
         configured_android_targets_for_diagnostics, configured_apple_targets_for_diagnostics,
         configured_wasm_target_triple_for_diagnostics, load_config_if_present,
-        release_pack_commands, release_requires_java_environment_validation, resolve_doctor_config,
+        release_pack_commands, release_requires_jvm_environment_validation, resolve_doctor_config,
         resolve_init_options,
     };
     use crate::commands::doctor::ConfigSummary;
@@ -1176,7 +1176,7 @@ enabled = true
                 .iter()
                 .any(|command| matches!(command, PackCommand::Java(_)))
         );
-        assert!(release_requires_java_environment_validation(
+        assert!(release_requires_jvm_environment_validation(
             &config,
             Some(BuildPlatformArg::All)
         ));
@@ -1276,11 +1276,11 @@ enabled = true
 "#,
         );
 
-        assert!(release_requires_java_environment_validation(
+        assert!(release_requires_jvm_environment_validation(
             &config,
             Some(BuildPlatformArg::All)
         ));
-        assert!(release_requires_java_environment_validation(&config, None));
+        assert!(release_requires_jvm_environment_validation(&config, None));
     }
 
     #[test]
@@ -1295,15 +1295,15 @@ enabled = true
 "#,
         );
 
-        assert!(!release_requires_java_environment_validation(
+        assert!(!release_requires_jvm_environment_validation(
             &config,
             Some(BuildPlatformArg::Apple)
         ));
-        assert!(!release_requires_java_environment_validation(
+        assert!(!release_requires_jvm_environment_validation(
             &config,
             Some(BuildPlatformArg::Android)
         ));
-        assert!(!release_requires_java_environment_validation(
+        assert!(!release_requires_jvm_environment_validation(
             &config,
             Some(BuildPlatformArg::Wasm)
         ));

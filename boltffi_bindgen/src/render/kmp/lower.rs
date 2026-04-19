@@ -61,6 +61,8 @@ impl<'a> KmpLowerer<'a> {
                             let kotlin_type = self.kotlin_type(&field.type_expr);
                             let (read_method, write_method) =
                                 self.wire_primitive_methods(&field.type_expr);
+                            let (seq_read_method, seq_write_method) =
+                                self.wire_sequential_methods(&field.type_expr);
                             KmpRecordField {
                                 name: NamingConvention::property_name(field.name.as_str()),
                                 kotlin_type,
@@ -70,6 +72,8 @@ impl<'a> KmpLowerer<'a> {
                                     .unwrap_or(0),
                                 read_method,
                                 write_method,
+                                seq_read_method,
+                                seq_write_method,
                             }
                         })
                         .collect(),
@@ -352,6 +356,56 @@ impl<'a> KmpLowerer<'a> {
                     ("readDoubleAt".to_string(), "writeDoubleAt".to_string())
                 }
             },
+            _ => ("readByteAt".to_string(), "writeByteAt".to_string()),
+        }
+    }
+
+    /// Returns sequential read/write method names for non-blittable wire codecs.
+    /// These methods do NOT take offset parameters and manage cursor position.
+    fn wire_sequential_methods(&self, type_expr: &TypeExpr) -> (String, String) {
+        match type_expr {
+            TypeExpr::Primitive(primitive) => match primitive {
+                crate::ir::types::PrimitiveType::Bool => {
+                    ("readBool".to_string(), "writeBool".to_string())
+                }
+                crate::ir::types::PrimitiveType::I8 => {
+                    ("readI8".to_string(), "writeI8".to_string())
+                }
+                crate::ir::types::PrimitiveType::U8 => {
+                    ("readU8".to_string(), "writeU8".to_string())
+                }
+                crate::ir::types::PrimitiveType::I16 => {
+                    ("readI16".to_string(), "writeI16".to_string())
+                }
+                crate::ir::types::PrimitiveType::U16 => {
+                    ("readU16".to_string(), "writeU16".to_string())
+                }
+                crate::ir::types::PrimitiveType::I32 => {
+                    ("readI32".to_string(), "writeI32".to_string())
+                }
+                crate::ir::types::PrimitiveType::U32 => {
+                    ("readU32".to_string(), "writeU32".to_string())
+                }
+                crate::ir::types::PrimitiveType::I64 | crate::ir::types::PrimitiveType::ISize => {
+                    ("readI64".to_string(), "writeI64".to_string())
+                }
+                crate::ir::types::PrimitiveType::U64 | crate::ir::types::PrimitiveType::USize => {
+                    ("readU64".to_string(), "writeU64".to_string())
+                }
+                crate::ir::types::PrimitiveType::F32 => {
+                    ("readF32".to_string(), "writeF32".to_string())
+                }
+                crate::ir::types::PrimitiveType::F64 => {
+                    ("readF64".to_string(), "writeF64".to_string())
+                }
+            },
+            TypeExpr::String => ("readString".to_string(), "writeString".to_string()),
+            TypeExpr::Bytes => ("readBytes".to_string(), "writeBytes".to_string()),
+            TypeExpr::Vec(_) => ("readList".to_string(), "writeList".to_string()),
+            TypeExpr::Option(_) => ("readOption".to_string(), "writeOption".to_string()),
+            TypeExpr::Result { .. } => ("readResult".to_string(), "writeResult".to_string()),
+            // For complex types (Record, Enum, Custom, Handle, Callback, etc.),
+            // we use generic read/write patterns (to be handled in templates)
             _ => ("readByteAt".to_string(), "writeByteAt".to_string()),
         }
     }

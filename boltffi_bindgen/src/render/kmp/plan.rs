@@ -25,6 +25,8 @@ pub struct KmpRecordField {
     pub offset: usize,
     pub read_method: String,
     pub write_method: String,
+    pub seq_read_method: String,
+    pub seq_write_method: String,
 }
 
 #[derive(Debug, Clone)]

@@ -9,7 +9,6 @@ expect class {{ record.name }}({% for field in record.fields %}{{ field.name }}:
 {%- for field in record.fields %}
     val {{ field.name }}: {{ field.kotlin_type }}
 {%- endfor %}
-{%- if record.is_blittable %}
 
     companion object {
         fun decode(reader: WireReader): {{ record.name }}
@@ -18,7 +17,6 @@ expect class {{ record.name }}({% for field in record.fields %}{{ field.name }}:
     fun wireEncodedSize(): Int
 
     fun wireEncodeTo(wire: WireWriter)
-{%- endif %}
 }
 
 {%- endfor %}

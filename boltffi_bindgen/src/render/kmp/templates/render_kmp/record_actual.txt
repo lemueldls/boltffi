@@ -1,4 +1,5 @@
-actual data class {{ record.name }} actual constructor({% for field in record.fields %}actual val {{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% if record.is_blittable %} {
+actual data class {{ record.name }} actual constructor({% for field in record.fields %}actual val {{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) {
+{%- if record.is_blittable %}
 
     actual companion object {
         actual fun decode(reader: WireReader): {{ record.name }} = {{ record.name }}({% for field in record.fields %}reader.{{ field.read_method }}({{ field.offset }}){% if !loop.last %}, {% endif %}{% endfor %})
@@ -11,4 +12,41 @@ actual data class {{ record.name }} actual constructor({% for field in record.fi
         wire.{{ field.write_method }}({{ field.offset }}, {{ field.name }})
 {%- endfor %}
     }
-}{% endif %}
+{%- else %}
+
+    actual companion object {
+        actual fun decode(reader: WireReader): {{ record.name }} {
+{%- for field in record.fields %}
+            val {{ field.name }} = reader.{{ field.seq_read_method }}()
+{%- endfor %}
+            return {{ record.name }}({% for field in record.fields %}{{ field.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+        }
+    }
+
+    actual fun wireEncodedSize(): Int {
+        var size = 0
+{%- for field in record.fields %}
+{%- if field.seq_read_method == "readString" %}
+        size += 4 + {{ field.name }}.encodeToByteArray().size
+{%- else if field.seq_read_method == "readBytes" %}
+        size += 4 + {{ field.name }}.size
+{%- else if field.seq_read_method == "readList" %}
+        size += 4 + ({{ field.name }}.size * 8)
+{%- else if field.seq_read_method == "readOption" || field.seq_read_method == "readOptional" %}
+        size += 1 + if ({{ field.name }} != null) 8 else 0
+{%- else if field.seq_read_method == "readResult" %}
+        size += 1 + 8
+{%- else %}
+        size += 8
+{%- endif %}
+{%- endfor %}
+        return size
+    }
+
+    actual fun wireEncodeTo(wire: WireWriter) {
+{%- for field in record.fields %}
+        wire.{{ field.seq_write_method }}({{ field.name }})
+{%- endfor %}
+    }
+{%- endif %}
+}
