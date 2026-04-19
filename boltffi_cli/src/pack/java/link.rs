@@ -339,14 +339,37 @@ pub(crate) fn compile_jni_library_with_output(
     build_artifacts: &JvmBuildArtifacts,
     step: &Step,
 ) -> Result<JvmPackagedNativeOutput> {
+    compile_jni_library_with_layout(
+        config,
+        output_root,
+        &output_root.join("jni"),
+        &output_root.join("jni"),
+        &packaging_target.cargo_context.artifact_name,
+        true,
+        packaging_target,
+        build_artifacts,
+        step,
+    )
+}
+
+pub(crate) fn compile_jni_library_with_layout(
+    config: &Config,
+    output_root: &Path,
+    jni_glue_dir: &Path,
+    jni_header_include_dir: &Path,
+    header_basename: &str,
+    write_flat_host_copies: bool,
+    packaging_target: &JvmPackagingTarget,
+    build_artifacts: &JvmBuildArtifacts,
+    step: &Step,
+) -> Result<JvmPackagedNativeOutput> {
     let cargo_context = &packaging_target.cargo_context;
     let host_target = cargo_context.host_target;
     validate_desktop_jni_symbol_stripping(config, host_target)?;
     let strip_mode = desktop_jni_strip_mode(config, &cargo_context.build_profile);
     let strip_symbols = !matches!(strip_mode, DesktopJniStripMode::Disabled);
-    let jni_dir = output_root.join("jni");
-    let jni_glue = jni_dir.join("jni_glue.c");
-    let header = jni_dir.join(format!("{}.h", cargo_context.artifact_name));
+    let jni_glue = jni_glue_dir.join("jni_glue.c");
+    let header = jni_header_include_dir.join(format!("{header_basename}.h"));
 
     if !jni_glue.exists() {
         return Err(CliError::FileNotFound(jni_glue));
@@ -393,7 +416,7 @@ pub(crate) fn compile_jni_library_with_output(
             output_lib: &output_lib,
             jni_glue: &jni_glue,
             link_input: link_input.path(),
-            jni_dir: &jni_dir,
+            jni_dir: jni_header_include_dir,
             jni_include_directories: &jni_include_directories,
             rustflag_linker_args: packaging_target.toolchain.jni_rustflag_linker_args(),
             native_link_search_paths: &build_artifacts.native_link_search_paths,
@@ -407,7 +430,7 @@ pub(crate) fn compile_jni_library_with_output(
             output_lib: &output_lib,
             jni_glue: &jni_glue,
             link_input: link_input.path(),
-            jni_dir: &jni_dir,
+            jni_dir: jni_header_include_dir,
             jni_include_directories: &jni_include_directories,
             rustflag_linker_args: packaging_target.toolchain.jni_rustflag_linker_args(),
             native_link_search_paths: &build_artifacts.native_link_search_paths,
@@ -452,7 +475,7 @@ pub(crate) fn compile_jni_library_with_output(
     }
 
     let current_host = JavaHostTarget::current();
-    if current_host == Some(host_target) {
+    if write_flat_host_copies && current_host == Some(host_target) {
         let compatibility_jni_copy =
             output_root.join(host_target.jni_library_filename(artifact_name));
         std::fs::copy(&output_lib, &compatibility_jni_copy).map_err(|source| {
@@ -485,7 +508,7 @@ pub(crate) fn compile_jni_library_with_output(
             )?;
         }
 
-        if current_host == Some(host_target) {
+        if write_flat_host_copies && current_host == Some(host_target) {
             let flat_copy = output_root.join(shared_library_name);
             std::fs::copy(&structured_copy, &flat_copy).map_err(|source| CliError::CopyFailed {
                 from: structured_copy.clone(),
