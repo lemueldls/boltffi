@@ -155,6 +155,23 @@ private object Native {
 {%- endfor %}
 {%- endfor %}
 }
+{%- else %}
+private object Native {
+{%- for function in module.functions %}
+    fun {{ function.ffi_symbol }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }} = {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endfor %}
+{%- for class in module.classes %}
+{%- for constructor in class.constructors %}
+    fun {{ constructor.ffi_symbol }}({% for param in constructor.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): Long = {{ self::symbol_alias(constructor.ffi_symbol, alias_prefix) }}({% for param in constructor.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endfor %}
+{%- for factory in class.factories %}
+    fun {{ factory.ffi_symbol }}({% for param in factory.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ factory.return_type }} = {{ self::symbol_alias(factory.ffi_symbol, alias_prefix) }}({% for param in factory.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endfor %}
+{%- for method in class.methods %}
+    fun {{ method.ffi_symbol }}({% if !method.is_static %}handle: Long{% if !method.params.is_empty() %}, {% endif %}{% endif %}{% for param in method.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ method.return_type }} = {{ self::symbol_alias(method.ffi_symbol, alias_prefix) }}({% if !method.is_static %}handle{% if !method.params.is_empty() %}, {% endif %}{% endif %}{% for param in method.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endfor %}
+{%- endfor %}
+}
 {%- endif %}
 
 {%- for import in imports %}
@@ -175,10 +192,8 @@ actual object {{ module.module_name }} {
     actual {% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }} {
 {%- if is_jvm %}
         Native.ensureLoaded()
-    return Native.{{ function.ffi_symbol }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- else %}
-    return {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- endif %}
+        return Native.{{ function.ffi_symbol }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
     }
 {%- endfor %}
 }

@@ -3,10 +3,8 @@ actual class {{ class.name }} private constructor(private val handle: Long) {
     actual constructor({{ self::render_params(constructor.params) }}) : this(run {
 {%- if is_jvm %}
         Native.ensureLoaded()
-    Native.{{ constructor.ffi_symbol }}({% for param in constructor.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- else %}
-    {{ self::symbol_alias(constructor.ffi_symbol, alias_prefix) }}({% for param in constructor.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- endif %}
+        Native.{{ constructor.ffi_symbol }}({% for param in constructor.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
     })
 {%- endfor %}
 {%- for method in class.methods %}
@@ -14,10 +12,8 @@ actual class {{ class.name }} private constructor(private val handle: Long) {
     actual {% if method.is_async %}suspend {% endif %}fun {{ method.name }}({{ self::render_params(method.params) }}): {{ method.return_type }} {
 {%- if is_jvm %}
         Native.ensureLoaded()
-        return Native.{{ method.ffi_symbol }}(handle{% for param in method.params %}, {{ param.name }}{% endfor %})
-    {%- else %}
-        return {{ self::symbol_alias(method.ffi_symbol, alias_prefix) }}(handle{% for param in method.params %}, {{ param.name }}{% endfor %})
 {%- endif %}
+        return Native.{{ method.ffi_symbol }}(handle{% for param in method.params %}, {{ param.name }}{% endfor %})
     }
 {%- endif %}
 {%- endfor %}
@@ -28,10 +24,8 @@ actual class {{ class.name }} private constructor(private val handle: Long) {
         actual {% if factory.is_async %}suspend {% endif %}fun {{ factory.name }}({{ self::render_params(factory.params) }}): {{ factory.return_type }} {
 {%- if is_jvm %}
             Native.ensureLoaded()
-            return Native.{{ factory.ffi_symbol }}({% for param in factory.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- else %}
-            return {{ self::symbol_alias(factory.ffi_symbol, alias_prefix) }}({% for param in factory.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- endif %}
+        return Native.{{ factory.ffi_symbol }}({% for param in factory.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
         }
 {%- endfor %}
 {%- for method in class.methods %}
@@ -39,10 +33,8 @@ actual class {{ class.name }} private constructor(private val handle: Long) {
         actual {% if method.is_async %}suspend {% endif %}fun {{ method.name }}({{ self::render_params(method.params) }}): {{ method.return_type }} {
 {%- if is_jvm %}
             Native.ensureLoaded()
-            return Native.{{ method.ffi_symbol }}({% for param in method.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- else %}
-            return {{ self::symbol_alias(method.ffi_symbol, alias_prefix) }}({% for param in method.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- endif %}
+        return Native.{{ method.ffi_symbol }}({% for param in method.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
         }
 {%- endif %}
 {%- endfor %}

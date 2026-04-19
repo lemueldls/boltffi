@@ -6,9 +6,10 @@ use crate::cli::{CliError, Result};
 use crate::commands::generate::run_generate_kmp_with_output_from_source_dir;
 use crate::commands::pack::PackKmpOptions;
 use crate::config::{Config, Target};
-use crate::pack::java::link::{build_jvm_native_library, compile_jni_library_with_layout};
+use crate::pack::java::link::{build_jvm_native_library, compile_jni_library_with_output};
 use crate::pack::java::outputs::{
-    remove_file_if_exists, remove_stale_requested_jvm_shared_library_copies_after_success,
+    remove_stale_flat_jvm_outputs_if_current_host_unrequested,
+    remove_stale_requested_jvm_shared_library_copies_after_success,
     remove_stale_structured_jvm_outputs,
 };
 use crate::pack::java::plan::{
@@ -74,10 +75,6 @@ pub(crate) fn pack_kmp(
     })?;
 
     let mut packaged_outputs = Vec::with_capacity(prepared.packaging_targets.len());
-    let kmp_library_name = config
-        .kmp_library_name()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| config.crate_artifact_name());
     for packaging_target in &prepared.packaging_targets {
         let host_target = packaging_target.cargo_context.host_target;
         let step = reporter.step(&format!(
@@ -92,13 +89,9 @@ pub(crate) fn pack_kmp(
             "Compiling JNI library for {}",
             host_target.canonical_name()
         ));
-        packaged_outputs.push(compile_jni_library_with_layout(
+        packaged_outputs.push(compile_jni_library_with_output(
             config,
             &output_root,
-            &output_root.join("jni"),
-            &output_root.join("include"),
-            &kmp_library_name,
-            false,
             packaging_target,
             &build_artifacts,
             &step,
@@ -120,7 +113,12 @@ pub(crate) fn pack_kmp(
         artifact_name,
     )?;
     remove_stale_structured_jvm_outputs(&output_root.join("native"), &prepared.java_host_targets)?;
-    remove_all_flat_jni_host_copies(&output_root, artifact_name)?;
+    remove_stale_flat_jvm_outputs_if_current_host_unrequested(
+        &output_root,
+        JavaHostTarget::current(),
+        &prepared.java_host_targets,
+        artifact_name,
+    )?;
 
     reporter.finish();
     Ok(())
@@ -145,7 +143,7 @@ fn generate_kmp_jni_sources(
     source_directory: &Path,
     crate_name: &str,
 ) -> Result<()> {
-    use boltffi_bindgen::{ir, scan_crate_with_pointer_width};
+    use boltffi_bindgen::{CHeaderLowerer, ir, scan_crate_with_pointer_width};
 
     let output_directory = config.kmp_output().join("jni");
     std::fs::create_dir_all(&output_directory).map_err(|source| {
@@ -170,6 +168,13 @@ fn generate_kmp_jni_sources(
 
     let contract = ir::build_contract(&mut module);
     let abi = ir::Lowerer::new(&contract).to_abi_contract();
+
+    let header_code = CHeaderLowerer::new(&contract, &abi).generate();
+    let header_path = output_directory.join(format!("{crate_name}.h"));
+    std::fs::write(&header_path, header_code).map_err(|source| CliError::WriteFailed {
+        path: header_path,
+        source,
+    })?;
 
     let jni_module = JniLowerer::new(
         &contract,
@@ -213,23 +218,6 @@ fn copy_host_jni_library_to_jnilibs(
         to: destination,
         source: source_error,
     })?;
-
-    Ok(())
-}
-
-fn remove_all_flat_jni_host_copies(output_root: &Path, artifact_name: &str) -> Result<()> {
-    for host_target in [
-        JavaHostTarget::DarwinArm64,
-        JavaHostTarget::DarwinX86_64,
-        JavaHostTarget::LinuxX86_64,
-        JavaHostTarget::LinuxAarch64,
-        JavaHostTarget::WindowsX86_64,
-    ] {
-        remove_file_if_exists(&output_root.join(host_target.jni_library_filename(artifact_name)))?;
-        remove_file_if_exists(
-            &output_root.join(host_target.shared_library_filename(artifact_name)),
-        )?;
-    }
 
     Ok(())
 }
