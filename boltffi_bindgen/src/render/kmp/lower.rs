@@ -14,8 +14,8 @@ use super::plan::{
 };
 
 pub struct KmpLowerer<'a> {
-    _ffi_contract: &'a FfiContract,
-    _abi_contract: &'a AbiContract,
+    ffi_contract: &'a FfiContract,
+    abi_contract: &'a AbiContract,
     package_name: String,
     module_name: String,
     library_name: String,
@@ -30,8 +30,8 @@ impl<'a> KmpLowerer<'a> {
         library_name: String,
     ) -> Self {
         Self {
-            _ffi_contract: ffi_contract,
-            _abi_contract: abi_contract,
+            ffi_contract,
+            abi_contract,
             package_name,
             module_name,
             library_name,
@@ -44,7 +44,7 @@ impl<'a> KmpLowerer<'a> {
         let native_binding_package = format!("{}.native", package_name);
 
         let records = self
-            ._ffi_contract
+            .ffi_contract
             .catalog
             .all_records()
             .map(|record| {
@@ -82,7 +82,7 @@ impl<'a> KmpLowerer<'a> {
             .collect();
 
         let enums = self
-            ._ffi_contract
+            .ffi_contract
             .catalog
             .all_enums()
             .map(|enumeration| {
@@ -140,7 +140,7 @@ impl<'a> KmpLowerer<'a> {
             .collect();
 
         let callbacks = self
-            ._ffi_contract
+            .ffi_contract
             .catalog
             .all_callbacks()
             .map(|callback| KmpCallback {
@@ -166,7 +166,7 @@ impl<'a> KmpLowerer<'a> {
             .collect();
 
         let classes = self
-            ._ffi_contract
+            .ffi_contract
             .catalog
             .all_classes()
             .map(|class| {
@@ -262,7 +262,7 @@ impl<'a> KmpLowerer<'a> {
             .collect();
 
         let functions = self
-            ._ffi_contract
+            .ffi_contract
             .functions
             .iter()
             .map(|function| KmpFunction {
@@ -296,7 +296,7 @@ impl<'a> KmpLowerer<'a> {
     }
 
     fn call_symbol(&self, call_id: CallId) -> String {
-        self._abi_contract
+        self.abi_contract
             .calls
             .iter()
             .find(|call| call.id == call_id)
@@ -305,7 +305,7 @@ impl<'a> KmpLowerer<'a> {
     }
 
     fn abi_record_for(&self, record_id: &crate::ir::ids::RecordId) -> Option<&AbiRecord> {
-        self._abi_contract
+        self.abi_contract
             .records
             .iter()
             .find(|record| record.id == *record_id)

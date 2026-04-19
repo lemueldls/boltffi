@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use askama::Template;
 
 use super::plan::{
-    KmpClass, KmpClassFactory, KmpClassMethod, KmpEnumKind, KmpFunction, KmpModule, KmpOutputs,
-    KmpParam, KmpRecord,
+    KmpClass, KmpClassFactory, KmpClassMethod, KmpEnumKind, KmpEnumVariant, KmpFunction,
+    KmpModule, KmpOutputs, KmpParam, KmpRecord,
 };
 
 pub struct KmpTemplates;
@@ -49,6 +49,21 @@ struct NativeDefTemplate<'a> {
 #[template(path = "render_kmp/record_actual.txt", escape = "none")]
 struct RecordActualTemplate<'a> {
     record: &'a KmpRecord,
+}
+
+#[derive(Template)]
+#[template(path = "render_kmp/class_actual.txt", escape = "none")]
+struct ClassActualTemplate<'a> {
+    class: &'a KmpClass,
+    alias_prefix: &'a str,
+    has_static_methods: bool,
+}
+
+#[derive(Template)]
+#[template(path = "render_kmp/data_enum_variant_actual.txt", escape = "none")]
+struct DataEnumVariantActualTemplate<'a> {
+    variant: &'a KmpEnumVariant,
+    enum_name: &'a str,
 }
 
 struct PlatformTemplateContext {
@@ -119,12 +134,15 @@ fn render_platform_data_classes(module: &KmpModule) -> String {
                 continue;
             }
 
-            out.push_str(&format!(
-                "actual data class {} actual constructor({}) : {}\n\n",
-                variant.name,
-                render_actual_property_params(&variant.fields),
-                enumeration.name
-            ));
+            out.push_str(
+                &DataEnumVariantActualTemplate {
+                    variant,
+                    enum_name: &enumeration.name,
+                }
+                .render()
+                .expect("render data enum variant actual"),
+            );
+            out.push('\n');
         }
     }
 
@@ -132,66 +150,23 @@ fn render_platform_data_classes(module: &KmpModule) -> String {
 }
 
 fn render_actual_class(class: &KmpClass, platform: Platform) -> String {
-    render_actual_class_with_alias_prefix(class, alias_prefix(platform))
+    ClassActualTemplate {
+        class,
+        alias_prefix: alias_prefix(platform),
+        has_static_methods: has_static_methods(class),
+    }
+    .render()
+    .expect("render class actual")
 }
 
 fn render_actual_class_with_alias_prefix(class: &KmpClass, alias_prefix: &str) -> String {
-    let mut out = String::new();
-    out.push_str(&format!(
-        "actual class {} private constructor(private val handle: Long) {{\n",
-        class.name
-    ));
-
-    for constructor in &class.constructors {
-        out.push_str(&format!(
-            "    actual constructor({}) : this({}({}))\n",
-            render_params(&constructor.params),
-            symbol_alias(&constructor.ffi_symbol, alias_prefix),
-            render_call_args(constructor.params.iter().map(|param| param.name.as_str()))
-        ));
+    ClassActualTemplate {
+        class,
+        alias_prefix,
+        has_static_methods: has_static_methods(class),
     }
-
-    for method in class.methods.iter().filter(|method| !method.is_static) {
-        let suspend_kw = if method.is_async { "suspend " } else { "" };
-        let params = render_params(&method.params);
-        let mut call_args = Vec::with_capacity(method.params.len() + 1);
-        call_args.push("handle".to_string());
-        call_args.extend(method.params.iter().map(|param| param.name.clone()));
-        let args = render_call_args(call_args.iter().map(String::as_str));
-        let alias = symbol_alias(&method.ffi_symbol, alias_prefix);
-        out.push_str(&format!(
-            "    actual {}fun {}({}): {} = {}({})\n",
-            suspend_kw, method.name, params, method.return_type, alias, args
-        ));
-    }
-
-    if !class.factories.is_empty() || class.methods.iter().any(|method| method.is_static) {
-        out.push_str("\n    actual companion object {\n");
-        for factory in &class.factories {
-            let suspend_kw = if factory.is_async { "suspend " } else { "" };
-            let params = render_params(&factory.params);
-            let args = render_call_args(factory.params.iter().map(|param| param.name.as_str()));
-            let alias = symbol_alias(&factory.ffi_symbol, alias_prefix);
-            out.push_str(&format!(
-                "        actual {}fun {}({}): {} = {}({})\n",
-                suspend_kw, factory.name, params, factory.return_type, alias, args
-            ));
-        }
-        for method in class.methods.iter().filter(|method| method.is_static) {
-            let suspend_kw = if method.is_async { "suspend " } else { "" };
-            let params = render_params(&method.params);
-            let args = render_call_args(method.params.iter().map(|param| param.name.as_str()));
-            let alias = symbol_alias(&method.ffi_symbol, alias_prefix);
-            out.push_str(&format!(
-                "        actual {}fun {}({}): {} = {}({})\n",
-                suspend_kw, method.name, params, method.return_type, alias, args
-            ));
-        }
-        out.push_str("    }\n");
-    }
-
-    out.push_str("}\n");
-    out
+    .render()
+    .expect("render class actual")
 }
 
 fn render_function_signature(function: &KmpFunction) -> String {
@@ -231,14 +206,6 @@ fn render_params(params: &[KmpParam]) -> String {
     params
         .iter()
         .map(|param| format!("{}: {}", param.name, param.kotlin_type))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn render_actual_property_params(params: &[KmpParam]) -> String {
-    params
-        .iter()
-        .map(|param| format!("actual val {}: {}", param.name, param.kotlin_type))
         .collect::<Vec<_>>()
         .join(", ")
 }

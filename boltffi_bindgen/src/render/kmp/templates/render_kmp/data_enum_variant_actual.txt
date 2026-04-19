@@ -1,0 +1,1 @@
+actual data class {{ variant.name }} actual constructor({% for field in variant.fields %}actual val {{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) : {{ enum_name }}
