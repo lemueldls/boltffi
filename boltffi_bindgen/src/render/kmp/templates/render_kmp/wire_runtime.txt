@@ -18,76 +18,179 @@ interface WireCodec<T> {
     fun wireEncodeTo(wire: WireWriter, value: T)
 }
 
-class WireReader(private val buffer: ByteArray) {
-    private fun byteAt(offset: Int): Byte = buffer[offset]
+class WireReader(private var data: ByteArray) {
+    internal fun reset(next: ByteArray) {
+        // Rebind to a different backing array when borrowed from the pool.
+        data = next
+    }
+
+    private fun byteAt(offset: Int): Byte = data[offset]
 
     fun readBooleanAt(offset: Int): Boolean = byteAt(offset) != 0.toByte()
     fun readByteAt(offset: Int): Byte = byteAt(offset)
     fun readUByteAt(offset: Int): UByte = byteAt(offset).toUByte()
     fun readShortAt(offset: Int): Short =
-        ((buffer[offset].toInt() and 0xFF) or ((buffer[offset + 1].toInt() and 0xFF) shl 8)).toShort()
+        ((data[offset].toInt() and 0xFF) or ((data[offset + 1].toInt() and 0xFF) shl 8)).toShort()
     fun readUShortAt(offset: Int): UShort = readShortAt(offset).toUShort()
     fun readIntAt(offset: Int): Int =
-        (buffer[offset].toInt() and 0xFF) or
-            ((buffer[offset + 1].toInt() and 0xFF) shl 8) or
-            ((buffer[offset + 2].toInt() and 0xFF) shl 16) or
-            ((buffer[offset + 3].toInt() and 0xFF) shl 24)
+        (data[offset].toInt() and 0xFF) or
+            ((data[offset + 1].toInt() and 0xFF) shl 8) or
+            ((data[offset + 2].toInt() and 0xFF) shl 16) or
+            ((data[offset + 3].toInt() and 0xFF) shl 24)
     fun readUIntAt(offset: Int): UInt = readIntAt(offset).toUInt()
     fun readLongAt(offset: Int): Long =
-        (buffer[offset].toLong() and 0xFFL) or
-            ((buffer[offset + 1].toLong() and 0xFFL) shl 8) or
-            ((buffer[offset + 2].toLong() and 0xFFL) shl 16) or
-            ((buffer[offset + 3].toLong() and 0xFFL) shl 24) or
-            ((buffer[offset + 4].toLong() and 0xFFL) shl 32) or
-            ((buffer[offset + 5].toLong() and 0xFFL) shl 40) or
-            ((buffer[offset + 6].toLong() and 0xFFL) shl 48) or
-            ((buffer[offset + 7].toLong() and 0xFFL) shl 56)
+        (data[offset].toLong() and 0xFFL) or
+            ((data[offset + 1].toLong() and 0xFFL) shl 8) or
+            ((data[offset + 2].toLong() and 0xFFL) shl 16) or
+            ((data[offset + 3].toLong() and 0xFFL) shl 24) or
+            ((data[offset + 4].toLong() and 0xFFL) shl 32) or
+            ((data[offset + 5].toLong() and 0xFFL) shl 40) or
+            ((data[offset + 6].toLong() and 0xFFL) shl 48) or
+            ((data[offset + 7].toLong() and 0xFFL) shl 56)
     fun readULongAt(offset: Int): ULong = readLongAt(offset).toULong()
     fun readFloatAt(offset: Int): Float = Float.fromBits(readIntAt(offset))
     fun readDoubleAt(offset: Int): Double = Double.fromBits(readLongAt(offset))
 }
 
-class WireWriter(private val buffer: ByteArray) {
+class WireWriter(private var data: ByteArray) {
+    internal fun reset(requiredCapacity: Int) {
+        if (requiredCapacity < 0) {
+            throw IllegalArgumentException("requiredCapacity must be >= 0")
+        }
+
+        if (data.size < requiredCapacity) {
+            data = ByteArray(requiredCapacity)
+        } else if (requiredCapacity > 0) {
+            data.fill(0, 0, requiredCapacity)
+        }
+    }
+
+    internal val capacity: Int
+        get() = data.size
+
     fun writeBooleanAt(offset: Int, value: Boolean) {
-        buffer[offset] = if (value) 1 else 0
+        data[offset] = if (value) 1 else 0
     }
 
     fun writeByteAt(offset: Int, value: Byte) {
-        buffer[offset] = value
+        data[offset] = value
     }
 
     fun writeUByteAt(offset: Int, value: UByte) {
-        buffer[offset] = value.toByte()
+        data[offset] = value.toByte()
     }
 
     fun writeShortAt(offset: Int, value: Short) {
-        buffer[offset] = (value.toInt() and 0xFF).toByte()
-        buffer[offset + 1] = ((value.toInt() ushr 8) and 0xFF).toByte()
+        data[offset] = (value.toInt() and 0xFF).toByte()
+        data[offset + 1] = ((value.toInt() ushr 8) and 0xFF).toByte()
     }
 
     fun writeUShortAt(offset: Int, value: UShort) = writeShortAt(offset, value.toShort())
 
     fun writeIntAt(offset: Int, value: Int) {
-        buffer[offset] = (value and 0xFF).toByte()
-        buffer[offset + 1] = ((value ushr 8) and 0xFF).toByte()
-        buffer[offset + 2] = ((value ushr 16) and 0xFF).toByte()
-        buffer[offset + 3] = ((value ushr 24) and 0xFF).toByte()
+        data[offset] = (value and 0xFF).toByte()
+        data[offset + 1] = ((value ushr 8) and 0xFF).toByte()
+        data[offset + 2] = ((value ushr 16) and 0xFF).toByte()
+        data[offset + 3] = ((value ushr 24) and 0xFF).toByte()
     }
 
     fun writeUIntAt(offset: Int, value: UInt) = writeIntAt(offset, value.toInt())
 
     fun writeLongAt(offset: Int, value: Long) {
-        buffer[offset] = (value and 0xFFL).toByte()
-        buffer[offset + 1] = ((value ushr 8) and 0xFFL).toByte()
-        buffer[offset + 2] = ((value ushr 16) and 0xFFL).toByte()
-        buffer[offset + 3] = ((value ushr 24) and 0xFFL).toByte()
-        buffer[offset + 4] = ((value ushr 32) and 0xFFL).toByte()
-        buffer[offset + 5] = ((value ushr 40) and 0xFFL).toByte()
-        buffer[offset + 6] = ((value ushr 48) and 0xFFL).toByte()
-        buffer[offset + 7] = ((value ushr 56) and 0xFFL).toByte()
+        data[offset] = (value and 0xFFL).toByte()
+        data[offset + 1] = ((value ushr 8) and 0xFFL).toByte()
+        data[offset + 2] = ((value ushr 16) and 0xFFL).toByte()
+        data[offset + 3] = ((value ushr 24) and 0xFFL).toByte()
+        data[offset + 4] = ((value ushr 32) and 0xFFL).toByte()
+        data[offset + 5] = ((value ushr 40) and 0xFFL).toByte()
+        data[offset + 6] = ((value ushr 48) and 0xFFL).toByte()
+        data[offset + 7] = ((value ushr 56) and 0xFFL).toByte()
     }
 
     fun writeULongAt(offset: Int, value: ULong) = writeLongAt(offset, value.toLong())
     fun writeFloatAt(offset: Int, value: Float) = writeIntAt(offset, value.toBits())
     fun writeDoubleAt(offset: Int, value: Double) = writeLongAt(offset, value.toBits())
+
+    fun toByteArray(size: Int): ByteArray {
+        if (size < 0 || size > data.size) {
+            throw IllegalArgumentException("size must be in 0..capacity")
+        }
+        return data.copyOf(size)
+    }
+}
+
+private const val MAX_CACHED_WIRE_BUFFER_BYTES: Int = 1024 * 1024
+
+class WireReaderPoolState(private val cacheSize: Int = 4) {
+    private val cachedReaders: Array<WireReader?> = arrayOfNulls(cacheSize)
+    private var depth: Int = 0
+
+    fun acquire(buffer: ByteArray): BorrowedWireReader {
+        val slot = depth
+        depth = slot + 1
+        val shouldCache = buffer.size <= MAX_CACHED_WIRE_BUFFER_BYTES && slot < cacheSize
+        val reader = if (shouldCache) {
+            cachedReaders[slot] ?: WireReader(buffer).also { cachedReaders[slot] = it }
+        } else {
+            WireReader(buffer)
+        }
+        reader.reset(buffer)
+        return BorrowedWireReader(this, reader)
+    }
+
+    fun release() {
+        depth -= 1
+    }
+}
+
+class BorrowedWireReader(
+    private val state: WireReaderPoolState,
+    val reader: WireReader,
+) {
+    fun close() {
+        state.release()
+    }
+}
+
+object WireReaderPool {
+    private val state = WireReaderPoolState()
+
+    fun acquire(buffer: ByteArray): BorrowedWireReader = state.acquire(buffer)
+}
+
+class WireWriterPoolState(private val cacheSize: Int = 4) {
+    private val cachedWriters: Array<WireWriter?> = arrayOfNulls(cacheSize)
+    private var depth: Int = 0
+
+    fun acquire(requiredCapacity: Int): BorrowedWireWriter {
+        val slot = depth
+        depth = slot + 1
+        val shouldCache = requiredCapacity <= MAX_CACHED_WIRE_BUFFER_BYTES && slot < cacheSize
+        val writer = if (shouldCache) {
+            cachedWriters[slot] ?: WireWriter(ByteArray(requiredCapacity)).also { cachedWriters[slot] = it }
+        } else {
+            WireWriter(ByteArray(requiredCapacity))
+        }
+        writer.reset(requiredCapacity)
+        return BorrowedWireWriter(this, writer)
+    }
+
+    fun release() {
+        depth -= 1
+    }
+}
+
+class BorrowedWireWriter(
+    private val state: WireWriterPoolState,
+    val writer: WireWriter,
+) {
+    fun close() {
+        state.release()
+    }
+}
+
+object WireWriterPool {
+    private val state = WireWriterPoolState()
+
+    fun acquire(requiredCapacity: Int): BorrowedWireWriter = state.acquire(requiredCapacity)
 }
