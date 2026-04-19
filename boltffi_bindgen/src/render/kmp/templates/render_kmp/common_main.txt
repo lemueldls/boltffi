@@ -1,6 +1,7 @@
 package {{ module.package_name }}
 
 import kotlin.Result
+import kotlin.jvm.JvmName
 
 {{ self::render_wire_runtime() }}
 

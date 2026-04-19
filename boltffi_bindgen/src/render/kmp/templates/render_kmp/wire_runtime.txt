@@ -369,11 +369,13 @@ class WireWriter(initialCapacity: Int = 256) {
         v.forEach(::writeBool)
     }
 
+    @JvmName("writeIntList")
     fun writePrimitiveList(v: List<Int>) {
         writeU32(v.size.toUInt())
         v.forEach(::writeI32)
     }
 
+    @JvmName("writeLongList")
     fun writePrimitiveList(v: List<Long>) {
         writeU32(v.size.toUInt())
         v.forEach(::writeI64)
