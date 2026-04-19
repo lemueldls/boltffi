@@ -3,9 +3,9 @@ use crate::config::{Config, Target};
 use crate::reporter::Reporter;
 
 use super::{
-    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackJavaOptions, PackPythonOptions,
-    PackWasmOptions, pack_android, pack_apple, pack_java, pack_python, pack_wasm,
-    prepare_java_packaging,
+    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackJavaOptions, PackKmpOptions,
+    PackPythonOptions, PackWasmOptions, pack_android, pack_apple, pack_java, pack_kmp, pack_python,
+    pack_wasm, prepare_java_packaging,
 };
 
 pub(super) fn pack_all(
@@ -63,6 +63,18 @@ pub(super) fn pack_all(
             config,
             PackWasmOptions {
                 execution: options.execution.clone(),
+            },
+            reporter,
+        )?;
+        packed_any = true;
+    }
+
+    if config.should_process(Target::Kmp, options.experimental) {
+        pack_kmp(
+            config,
+            PackKmpOptions {
+                execution: options.execution.clone(),
+                experimental: options.experimental,
             },
             reporter,
         )?;

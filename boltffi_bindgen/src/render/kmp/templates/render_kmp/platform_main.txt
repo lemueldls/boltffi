@@ -1,12 +1,9 @@
-{%- if is_jvm %}
-@file:kotlin.jvm.JvmName("{{ module.module_name }}JvmBindings")
-
-{%- endif %}
 package {{ module.package_name }}
 
 internal const val BOLTFFI_LIBRARY = "{{ module.library_name }}"
 
 {%- if is_jvm %}
+@Suppress("FunctionName")
 private object Native {
     init {
         System.loadLibrary(BOLTFFI_LIBRARY)
@@ -16,6 +13,17 @@ private object Native {
 
 {%- for function in module.functions %}
     @JvmStatic external fun {{ function.ffi_symbol }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }}
+{%- endfor %}
+{%- for class in module.classes %}
+{%- for constructor in class.constructors %}
+    @JvmStatic external fun {{ constructor.ffi_symbol }}({% for param in constructor.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): Long
+{%- endfor %}
+{%- for factory in class.factories %}
+    @JvmStatic external fun {{ factory.ffi_symbol }}({% for param in factory.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ factory.return_type }}
+{%- endfor %}
+{%- for method in class.methods %}
+    @JvmStatic external fun {{ method.ffi_symbol }}({% if !method.is_static %}handle: Long{% if !method.params.is_empty() %}, {% endif %}{% endif %}{% for param in method.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ method.return_type }}
+{%- endfor %}
 {%- endfor %}
 }
 {%- endif %}

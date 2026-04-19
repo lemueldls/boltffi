@@ -1,11 +1,31 @@
 use boltffi_bindgen::render::c::CHeaderLowerer;
 use boltffi_bindgen::render::kmp::{KmpEmitter, KmpLowerer};
+use std::path::{Path, PathBuf};
 
 use crate::cli::{CliError, Result};
-use crate::commands::generate::generator::{GenerateRequest, LanguageGenerator, ScanPointerWidth};
+use crate::commands::generate::generator::{
+    GenerateRequest, LanguageGenerator, ScanPointerWidth, SourceCrate,
+};
 use crate::config::Target;
 
 pub struct KmpGenerator;
+
+impl KmpGenerator {
+    pub fn generate_from_source_directory(
+        config: &crate::config::Config,
+        output_override: Option<PathBuf>,
+        source_directory: &Path,
+        crate_name: &str,
+    ) -> Result<()> {
+        let request = GenerateRequest::new(
+            config,
+            output_override,
+            SourceCrate::new(source_directory, crate_name),
+        );
+
+        Self::generate(&request)
+    }
+}
 
 impl LanguageGenerator for KmpGenerator {
     const TARGET: Target = Target::Kmp;

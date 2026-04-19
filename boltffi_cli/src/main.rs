@@ -20,7 +20,8 @@ use commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_outp
 use commands::init::InitOptions;
 use commands::pack::{
     PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackExecutionOptions,
-    PackJavaOptions, PackPythonOptions, PackWasmOptions, check_java_packaging_prereqs,
+    PackJavaOptions, PackKmpOptions, PackPythonOptions, PackWasmOptions,
+    check_java_packaging_prereqs, check_kmp_packaging_prereqs,
 };
 use commands::verify::VerifyOptions;
 use commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
@@ -136,7 +137,7 @@ enum Commands {
 
     #[command(
         about = "Package platform artifacts (xcframework/SPM/jniLibs/npm)",
-        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack wasm --release\n  boltffi pack python --experimental\n"
+        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack wasm --release\n  boltffi pack kmp --experimental\n  boltffi pack python --experimental\n"
     )]
     Pack {
         #[command(subcommand)]
@@ -289,6 +290,24 @@ enum PackTargetArg {
 
         #[arg(long)]
         no_build: bool,
+    },
+
+    #[command(
+        about = "Build + package Kotlin Multiplatform artifacts",
+        long_about = "Build + package Kotlin Multiplatform artifacts.\n\nOutputs:\n  - KMP bindings: {targets.kmp.output}/commonMain|jvmMain|nativeMain\n  - JNI glue:     {targets.kmp.output}/jni\n  - JNI binaries: {targets.kmp.output}/native and {targets.kmp.output}/jniLibs\n"
+    )]
+    Kmp {
+        #[arg(long)]
+        release: bool,
+
+        #[arg(long, default_value = "true")]
+        regenerate: bool,
+
+        #[arg(long)]
+        no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
     },
 
     #[command(
@@ -558,6 +577,20 @@ fn execute_command(
                     ),
                     experimental: false,
                 }),
+                PackTargetArg::Kmp {
+                    release,
+                    regenerate,
+                    no_build,
+                    experimental,
+                } => PackCommand::Kmp(PackKmpOptions {
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
+                    experimental,
+                }),
                 PackTargetArg::Python {
                     release,
                     regenerate,
@@ -760,11 +793,16 @@ fn run_release(
         return Ok(());
     }
 
-    if release_requires_java_environment_validation(config, platform)
-        && let Err(error) = check_java_packaging_prereqs(config, true, &cargo_args)
-    {
-        println!("JVM packaging preflight failed: {error}");
-        return Err(error);
+    if release_requires_jvm_environment_validation(config, platform) {
+        if let Err(error) = check_java_packaging_prereqs(config, true, &cargo_args) {
+            println!("JVM packaging preflight failed: {error}");
+            return Err(error);
+        }
+
+        if let Err(error) = check_kmp_packaging_prereqs(config, true, &cargo_args, false) {
+            println!("KMP packaging preflight failed: {error}");
+            return Err(error);
+        }
     }
     println!();
 
@@ -873,18 +911,24 @@ fn release_pack_commands(
                     experimental: false,
                 }));
             }
+            if config.should_process(Target::Kmp, false) {
+                commands.push(PackCommand::Kmp(PackKmpOptions {
+                    execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
+                    experimental: false,
+                }));
+            }
         }
     }
 
     commands
 }
 
-fn release_requires_java_environment_validation(
+fn release_requires_jvm_environment_validation(
     config: &Config,
     platform: Option<BuildPlatformArg>,
 ) -> bool {
     matches!(platform, Some(BuildPlatformArg::All) | None)
-        && config.should_process(Target::Java, false)
+        && (config.should_process(Target::Java, false) || config.should_process(Target::Kmp, false))
 }
 
 #[cfg(test)]

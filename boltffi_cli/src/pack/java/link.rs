@@ -323,13 +323,28 @@ pub(crate) fn compile_jni_library(
     build_artifacts: &JvmBuildArtifacts,
     step: &Step,
 ) -> Result<JvmPackagedNativeOutput> {
+    compile_jni_library_with_output(
+        config,
+        &config.java_jvm_output(),
+        packaging_target,
+        build_artifacts,
+        step,
+    )
+}
+
+pub(crate) fn compile_jni_library_with_output(
+    config: &Config,
+    output_root: &Path,
+    packaging_target: &JvmPackagingTarget,
+    build_artifacts: &JvmBuildArtifacts,
+    step: &Step,
+) -> Result<JvmPackagedNativeOutput> {
     let cargo_context = &packaging_target.cargo_context;
     let host_target = cargo_context.host_target;
     validate_desktop_jni_symbol_stripping(config, host_target)?;
     let strip_mode = desktop_jni_strip_mode(config, &cargo_context.build_profile);
     let strip_symbols = !matches!(strip_mode, DesktopJniStripMode::Disabled);
-    let java_output = config.java_jvm_output();
-    let jni_dir = java_output.join("jni");
+    let jni_dir = output_root.join("jni");
     let jni_glue = jni_dir.join("jni_glue.c");
     let header = jni_dir.join(format!("{}.h", cargo_context.artifact_name));
 
@@ -356,7 +371,7 @@ pub(crate) fn compile_jni_library(
         cargo_context.crate_outputs,
     );
 
-    let host_native_output = java_output
+    let host_native_output = output_root
         .join("native")
         .join(host_target.canonical_name());
     std::fs::create_dir_all(&host_native_output).map_err(|source| {
@@ -439,7 +454,7 @@ pub(crate) fn compile_jni_library(
     let current_host = JavaHostTarget::current();
     if current_host == Some(host_target) {
         let compatibility_jni_copy =
-            java_output.join(host_target.jni_library_filename(artifact_name));
+            output_root.join(host_target.jni_library_filename(artifact_name));
         std::fs::copy(&output_lib, &compatibility_jni_copy).map_err(|source| {
             CliError::CopyFailed {
                 from: output_lib.clone(),
@@ -471,7 +486,7 @@ pub(crate) fn compile_jni_library(
         }
 
         if current_host == Some(host_target) {
-            let flat_copy = java_output.join(shared_library_name);
+            let flat_copy = output_root.join(shared_library_name);
             std::fs::copy(&structured_copy, &flat_copy).map_err(|source| CliError::CopyFailed {
                 from: structured_copy.clone(),
                 to: flat_copy,

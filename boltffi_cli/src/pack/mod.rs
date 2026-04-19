@@ -1,6 +1,7 @@
 pub mod android;
 pub mod apple;
 pub mod java;
+pub mod kmp;
 pub mod python;
 pub mod wasm;
 
