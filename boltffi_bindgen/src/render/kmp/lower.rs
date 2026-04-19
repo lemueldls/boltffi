@@ -285,7 +285,7 @@ impl<'a> KmpLowerer<'a> {
         match returns {
             ReturnDef::Void => "Unit".to_string(),
             ReturnDef::Value(type_expr) => self.kotlin_type(type_expr),
-            ReturnDef::Result { ok, .. } => self.kotlin_type(ok),
+            ReturnDef::Result { ok, .. } => format!("Result<{}>", self.kotlin_type(ok)),
         }
     }
 

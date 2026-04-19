@@ -19,4 +19,9 @@ actual object {{ module.module_name }} {
 {%- endfor %}
 }
 
+{%- for function in module.functions %}
+{% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }} = {{ module.module_name }}.{{ function.name }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+
+{%- endfor %}
+
 internal const val BOLTFFI_LIBRARY = "{{ module.library_name }}"
