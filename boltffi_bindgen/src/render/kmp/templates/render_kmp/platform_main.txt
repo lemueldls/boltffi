@@ -1,0 +1,22 @@
+package {{ module.package_name }}
+
+{%- for import in imports %}
+{{ import }}
+{%- endfor %}
+{%- if !module.classes.is_empty() || !module.functions.is_empty() %}
+
+{%- endif %}
+{{ self::render_platform_data_classes(module) }}{%- if has_data_classes %}
+
+{%- endif %}
+{%- for class in module.classes %}
+{{ self::render_actual_class_with_alias_prefix(class, alias_prefix) }}
+
+{%- endfor %}
+actual object {{ module.module_name }} {
+{%- for function in module.functions %}
+    actual {% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }} = {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endfor %}
+}
+
+internal const val BOLTFFI_LIBRARY = "{{ module.library_name }}"

@@ -1,0 +1,73 @@
+package {{ module.package_name }}
+
+import kotlin.Result
+
+{%- for record in module.records %}
+expect class {{ record.name }}({% for field in record.fields %}{{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) {
+{%- for field in record.fields %}
+    val {{ field.name }}: {{ field.kotlin_type }}
+{%- endfor %}
+}
+
+{%- endfor %}
+{%- for enumeration in module.enums %}
+{%- match enumeration.kind %}
+{%- when KmpEnumKind::CStyle %}
+enum class {{ enumeration.name }} { {% for variant in enumeration.variants %}{{ variant.name }}{% if !loop.last %}, {% endif %}{% endfor %} }
+
+{%- when KmpEnumKind::Data %}
+sealed interface {{ enumeration.name }} {
+{%- for variant in enumeration.variants %}
+{%- if variant.fields.is_empty() %}
+    data object {{ variant.name }} : {{ enumeration.name }}
+{%- else %}
+    expect class {{ variant.name }}({% for field in variant.fields %}{{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) : {{ enumeration.name }} {
+{%- for field in variant.fields %}
+        val {{ field.name }}: {{ field.kotlin_type }}
+{%- endfor %}
+    }
+{%- endif %}
+{%- endfor %}
+}
+
+{%- endmatch %}
+{%- endfor %}
+{%- for callback in module.callbacks %}
+interface {{ callback.name }} {
+{%- for method in callback.methods %}
+    {% if method.is_async %}suspend {% endif %}fun {{ method.name }}({% for param in method.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ method.return_type }}
+{%- endfor %}
+}
+
+{%- endfor %}
+{%- for class in module.classes %}
+expect class {{ class.name }} {
+{%- for constructor in class.constructors %}
+    constructor({% for param in constructor.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endfor %}
+{%- for method in class.methods %}
+{%- if !method.is_static %}
+    {% if method.is_async %}suspend {% endif %}fun {{ method.name }}({% for param in method.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ method.return_type }}
+{%- endif %}
+{%- endfor %}
+{%- if !class.factories.is_empty() || self::has_static_methods(class) %}
+
+    companion object {
+{%- for factory in class.factories %}
+        {% if factory.is_async %}suspend {% endif %}fun {{ factory.name }}({% for param in factory.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ factory.return_type }}
+{%- endfor %}
+{%- for method in class.methods %}
+{%- if method.is_static %}
+        {% if method.is_async %}suspend {% endif %}fun {{ method.name }}({% for param in method.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ method.return_type }}
+{%- endif %}
+{%- endfor %}
+    }
+{%- endif %}
+}
+
+{%- endfor %}
+expect object {{ module.module_name }} {
+{%- for function in module.functions %}
+    {% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }}
+{%- endfor %}
+}
