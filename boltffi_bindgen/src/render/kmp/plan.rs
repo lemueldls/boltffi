@@ -17,6 +17,7 @@ pub struct KmpOutputs {
     pub common_main_source: String,
     pub jvm_main_source: String,
     pub native_main_source: String,
+    pub native_def_source: String,
 }
 
 #[derive(Debug, Clone)]

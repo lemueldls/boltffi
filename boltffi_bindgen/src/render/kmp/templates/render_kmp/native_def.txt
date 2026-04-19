@@ -1,0 +1,2 @@
+package = {{ module.native_binding_package }}
+headers = {{ module.library_name }}.h

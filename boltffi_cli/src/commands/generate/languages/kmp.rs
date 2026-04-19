@@ -1,3 +1,4 @@
+use boltffi_bindgen::render::c::CHeaderLowerer;
 use boltffi_bindgen::render::kmp::{KmpEmitter, KmpLowerer};
 
 use crate::cli::{CliError, Result};
@@ -34,18 +35,23 @@ impl LanguageGenerator for KmpGenerator {
         let common_directory = output_root.join("commonMain/kotlin").join(&package_path);
         let jvm_directory = output_root.join("jvmMain/kotlin").join(&package_path);
         let native_directory = output_root.join("nativeMain/kotlin").join(package_path);
+        let include_directory = output_root.join("include");
 
         request.ensure_output_directory(&common_directory)?;
         request.ensure_output_directory(&jvm_directory)?;
         request.ensure_output_directory(&native_directory)?;
+        request.ensure_output_directory(&include_directory)?;
 
         let lowered_crate = request.lowered_crate(ScanPointerWidth::Flexible)?;
+        let header_source =
+            CHeaderLowerer::new(&lowered_crate.ffi_contract, &lowered_crate.abi_contract)
+                .generate();
         let module = KmpLowerer::new(
             &lowered_crate.ffi_contract,
             &lowered_crate.abi_contract,
             package_name,
             module_name.clone(),
-            library_name,
+            library_name.clone(),
         )
         .lower();
         let outputs = KmpEmitter::emit(&module);
@@ -63,6 +69,14 @@ impl LanguageGenerator for KmpGenerator {
         request.write_output(
             &native_directory.join(output_file_name),
             outputs.native_main_source,
+        )?;
+        request.write_output(
+            &include_directory.join(format!("{library_name}.h")),
+            header_source,
+        )?;
+        request.write_output(
+            &include_directory.join(format!("{library_name}.def")),
+            outputs.native_def_source,
         )
     }
 }
