@@ -31,7 +31,31 @@ actual object {{ module.module_name }} {
 {%- if is_jvm %}
         Native.ensureLoaded()
 {%- endif %}
-        return {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- for line in function.setup_lines %}
+    {{ line }}
+{%- endfor %}
+{%- if !function.cleanup_lines.is_empty() %}
+    try {
+{%- endif %}
+    val callResult = {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for arg in function.call_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- match function.decode_record_return %}
+{%- when Some with (record_type) %}
+    val callResultReader = WireReaderPool.acquire(callResult)
+    try {
+        return {{ record_type }}.decode(callResultReader.reader)
+    } finally {
+        callResultReader.close()
+    }
+{%- when None %}
+    return callResult
+{%- endmatch %}
+{%- if !function.cleanup_lines.is_empty() %}
+    } finally {
+{%- for line in function.cleanup_lines %}
+        {{ line }}
+{%- endfor %}
+    }
+{%- endif %}
     }
 {%- endfor %}
 }

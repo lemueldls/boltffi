@@ -42,6 +42,10 @@ pub struct KmpFunction {
     pub return_type: String,
     pub is_async: bool,
     pub ffi_symbol: String,
+    pub call_args: Vec<String>,
+    pub setup_lines: Vec<String>,
+    pub cleanup_lines: Vec<String>,
+    pub decode_record_return: Option<String>,
 }
 
 #[derive(Debug, Clone)]
