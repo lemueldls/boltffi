@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use askama::Template;
 
 use super::plan::{
-    KmpClass, KmpClassFactory, KmpClassMethod, KmpEnumKind, KmpEnumVariant, KmpFunction,
-    KmpModule, KmpOutputs, KmpParam, KmpRecord,
+    KmpClass, KmpClassFactory, KmpClassMethod, KmpEnumKind, KmpEnumVariant, KmpFunction, KmpModule,
+    KmpOutputs, KmpParam, KmpRecord,
 };
 
 pub struct KmpTemplates;
@@ -37,6 +37,7 @@ struct PlatformMainTemplate<'a> {
     imports: &'a [String],
     alias_prefix: &'a str,
     has_data_classes: bool,
+    is_jvm: bool,
 }
 
 #[derive(Template)]
@@ -57,6 +58,7 @@ struct ClassActualTemplate<'a> {
     class: &'a KmpClass,
     alias_prefix: &'a str,
     has_static_methods: bool,
+    is_jvm: bool,
 }
 
 #[derive(Template)]
@@ -88,6 +90,12 @@ enum Platform {
     Native,
 }
 
+impl Platform {
+    const fn is_jvm(self) -> bool {
+        matches!(self, Self::Jvm)
+    }
+}
+
 fn render_common_main(module: &KmpModule) -> String {
     CommonMainTemplate { module }.render().unwrap()
 }
@@ -103,6 +111,7 @@ fn render_platform_main(module: &KmpModule, platform: Platform) -> String {
         imports: &context.imports,
         alias_prefix: context.alias_prefix,
         has_data_classes: context.has_data_classes,
+        is_jvm: platform.is_jvm(),
     }
     .render()
     .unwrap()
@@ -154,16 +163,22 @@ fn render_actual_class(class: &KmpClass, platform: Platform) -> String {
         class,
         alias_prefix: alias_prefix(platform),
         has_static_methods: has_static_methods(class),
+        is_jvm: platform.is_jvm(),
     }
     .render()
     .expect("render class actual")
 }
 
-fn render_actual_class_with_alias_prefix(class: &KmpClass, alias_prefix: &str) -> String {
+fn render_actual_class_with_alias_prefix(
+    class: &KmpClass,
+    alias_prefix: &str,
+    is_jvm: &bool,
+) -> String {
     ClassActualTemplate {
         class,
         alias_prefix,
         has_static_methods: has_static_methods(class),
+        is_jvm: *is_jvm,
     }
     .render()
     .expect("render class actual")

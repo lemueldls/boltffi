@@ -1,5 +1,17 @@
 package {{ module.package_name }}
 
+internal const val BOLTFFI_LIBRARY = "{{ module.library_name }}"
+
+{%- if is_jvm %}
+private object Native {
+    init {
+        System.loadLibrary(BOLTFFI_LIBRARY)
+    }
+
+    fun ensureLoaded() = Unit
+}
+{%- endif %}
+
 {%- for import in imports %}
 {{ import }}
 {%- endfor %}
@@ -10,13 +22,16 @@ package {{ module.package_name }}
 
 {%- endif %}
 {%- for class in module.classes %}
-{{ self::render_actual_class_with_alias_prefix(class, alias_prefix) }}
+{{ self::render_actual_class_with_alias_prefix(class, alias_prefix, is_jvm) }}
 
 {%- endfor %}
 actual object {{ module.module_name }} {
 {%- for function in module.functions %}
-    actual {% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }} = {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+    actual {% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }} {
+{%- if is_jvm %}
+        Native.ensureLoaded()
+{%- endif %}
+        return {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for param in function.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %})
+    }
 {%- endfor %}
 }
-
-internal const val BOLTFFI_LIBRARY = "{{ module.library_name }}"
