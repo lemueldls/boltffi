@@ -1,3 +1,7 @@
+{%- if is_jvm %}
+@file:kotlin.jvm.JvmName("{{ module.module_name }}JvmBindings")
+
+{%- endif %}
 package {{ module.package_name }}
 
 internal const val BOLTFFI_LIBRARY = "{{ module.library_name }}"

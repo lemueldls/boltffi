@@ -1077,7 +1077,7 @@ impl Config {
             .kmp
             .module_name
             .clone()
-            .unwrap_or_else(|| format!("{}Kmp", self.kotlin_class_name()))
+            .unwrap_or_else(|| self.kotlin_class_name())
     }
 
     pub fn kmp_library_name(&self) -> Option<&str> {
