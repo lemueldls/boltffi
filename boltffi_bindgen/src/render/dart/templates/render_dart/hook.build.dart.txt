@@ -71,8 +71,8 @@ final class BoltFFIBuilder implements Builder {
       return;
     }
 
-    const crateName = "{{ crate_name }}";
-    const assetName = "{{ crate_name }}.dart";
+    const artifactName = "{{ artifact_name }}";
+    const assetName = "{{ artifact_name }}.dart";
 
     final codeConfig = input.config.code;
     final targetTriple = targetTripleFromCodeConfig(codeConfig);
@@ -84,7 +84,7 @@ final class BoltFFIBuilder implements Builder {
         nativeDir.toFilePath(),
         targetTriple,
         codeConfig.targetOS
-            .libraryFileName(crateName, linkMode)
+            .libraryFileName(artifactName, linkMode)
             .replaceAll('-', '_'),
       ),
     );
@@ -102,7 +102,7 @@ Library for target `$targetTriple` not found.
       path.join(
         outputNativeDir.toFilePath(),
         codeConfig.targetOS
-            .libraryFileName(crateName, linkMode)
+            .libraryFileName(artifactName, linkMode)
             .replaceAll('-', '_'),
       ),
     );

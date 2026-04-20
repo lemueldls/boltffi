@@ -20,13 +20,13 @@ pub struct NativeRecordTemplate<'a> {
 #[derive(Template)]
 #[template(path = "render_dart/hook.build.dart.txt", escape = "none")]
 pub struct BuildHookTemplate<'a> {
-    pub crate_name: &'a str,
+    pub artifact_name: &'a str,
 }
 
 #[derive(Template)]
 #[template(path = "render_dart/pubspec.yaml.txt", escape = "none")]
 pub struct PubspecTemplate<'a> {
-    pub package_name: &'a str,
+    pub artifact_name: &'a str,
     pub description: Option<&'a str>,
     pub version: Option<&'a str>,
     pub repository: Option<&'a str>,

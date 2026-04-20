@@ -1,4 +1,4 @@
-name: {{ package_name }}
+name: {{ artifact_name }}
 
 environment:
   sdk: ^3.10.8

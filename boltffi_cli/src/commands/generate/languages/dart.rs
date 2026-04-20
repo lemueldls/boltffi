@@ -31,7 +31,7 @@ impl LanguageGenerator for DartGenerator {
             &request.config().package.name,
         )
         .library();
-        let package = DartEmitter::emit(&dart_library, &request.config().package.name);
+        let package = DartEmitter::emit(&dart_library, &request.config().crate_artifact_name());
 
         let package_dir = output_directory.join(&request.config().package.name);
         request.ensure_output_directory(&package_dir)?;

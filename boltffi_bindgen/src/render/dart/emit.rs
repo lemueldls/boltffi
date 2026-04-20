@@ -23,7 +23,7 @@ pub struct DartPackage {
 pub struct DartEmitter {}
 
 impl DartEmitter {
-    pub fn emit(library: &DartLibrary, package_name: &str) -> DartPackage {
+    pub fn emit(library: &DartLibrary, artifact_name: &str) -> DartPackage {
         let mut output = String::new();
 
         output.push_str(PreludeTemplate {}.render().unwrap().as_str());
@@ -56,7 +56,7 @@ impl DartEmitter {
 
         DartPackage {
             pubspec: PubspecTemplate {
-                package_name,
+                artifact_name,
                 description: None,
                 version: None,
                 repository: None,
@@ -64,11 +64,7 @@ impl DartEmitter {
             .render()
             .unwrap(),
             lib: output,
-            build: BuildHookTemplate {
-                crate_name: package_name,
-            }
-            .render()
-            .unwrap(),
+            build: BuildHookTemplate { artifact_name }.render().unwrap(),
         }
     }
 }
@@ -133,22 +129,22 @@ pub fn type_expr_dart_type(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Primitive(p) => primitive_dart_type(*p),
         TypeExpr::String => "String".to_string(),
-        TypeExpr::Bytes => "Uint8List".to_string(),
+        TypeExpr::Bytes => "$$typed_data.Uint8List".to_string(),
         TypeExpr::Vec(inner) => match inner.as_ref() {
             TypeExpr::Primitive(primitive) => match primitive {
-                PrimitiveType::I32 => "Int32List".to_string(),
-                PrimitiveType::U32 => "Uint32List".to_string(),
-                PrimitiveType::I16 => "Int16List".to_string(),
-                PrimitiveType::U16 => "Uint16List".to_string(),
-                PrimitiveType::I64 => "Int64List".to_string(),
-                PrimitiveType::U64 => "Uint64List".to_string(),
-                PrimitiveType::ISize => "Int64List".to_string(),
-                PrimitiveType::USize => "Uint64List".to_string(),
-                PrimitiveType::F32 => "Float32List".to_string(),
-                PrimitiveType::F64 => "Float64List".to_string(),
-                PrimitiveType::U8 => "Uint8List".to_string(),
-                PrimitiveType::I8 => "Int8List".to_string(),
-                PrimitiveType::Bool => "Uint8List".to_string(),
+                PrimitiveType::I32 => "$$typed_data.Int32List".to_string(),
+                PrimitiveType::U32 => "$$typed_data.Uint32List".to_string(),
+                PrimitiveType::I16 => "$$typed_data.Int16List".to_string(),
+                PrimitiveType::U16 => "$$typed_data.Uint16List".to_string(),
+                PrimitiveType::I64 => "$$typed_data.Int64List".to_string(),
+                PrimitiveType::U64 => "$$typed_data.Uint64List".to_string(),
+                PrimitiveType::ISize => "$$typed_data.Int64List".to_string(),
+                PrimitiveType::USize => "$$typed_data.Uint64List".to_string(),
+                PrimitiveType::F32 => "$$typed_data.Float32List".to_string(),
+                PrimitiveType::F64 => "$$typed_data.Float64List".to_string(),
+                PrimitiveType::U8 => "$$typed_data.Uint8List".to_string(),
+                PrimitiveType::I8 => "$$typed_data.Int8List".to_string(),
+                PrimitiveType::Bool => "$$typed_data.Uint8List".to_string(),
             },
             _ => format!("List<{}>", type_expr_dart_type(inner)),
         },
@@ -204,6 +200,24 @@ pub fn primitive_as_num(primitive: PrimitiveType, value: &str) -> String {
     }
 }
 
+pub fn num_as_primitive(primitive: PrimitiveType, value: &str) -> String {
+    match primitive {
+        PrimitiveType::Bool => format!("({} == 1)", value),
+        PrimitiveType::I8
+        | PrimitiveType::U8
+        | PrimitiveType::I16
+        | PrimitiveType::U16
+        | PrimitiveType::I32
+        | PrimitiveType::U32
+        | PrimitiveType::I64
+        | PrimitiveType::U64
+        | PrimitiveType::ISize
+        | PrimitiveType::USize
+        | PrimitiveType::F32
+        | PrimitiveType::F64 => value.to_string(),
+    }
+}
+
 pub fn primitive_blittable_write_method(primitive: PrimitiveType) -> &'static str {
     match primitive {
         PrimitiveType::I8 => "setInt8",
@@ -223,14 +237,18 @@ pub fn emit_write_blittable_value(
     offset: &str,
     primitive: PrimitiveType,
     value: &str,
-    writer_name: &str,
+    bytes_name: &str,
 ) -> String {
     format!(
-        "{}.{}({}, {}, $$typed_data.Endian.little)",
-        writer_name,
+        "{}.{}({}, {}{})",
+        bytes_name,
         primitive_blittable_write_method(primitive),
         offset,
-        primitive_as_num(primitive, value)
+        primitive_as_num(primitive, value),
+        match primitive {
+            PrimitiveType::U8 | PrimitiveType::I8 | PrimitiveType::Bool => "",
+            _ => ", $$typed_data.Endian.little",
+        }
     )
 }
 
@@ -254,11 +272,19 @@ pub fn emit_read_blittable_value(
     primitive: PrimitiveType,
     bytes_name: &str,
 ) -> String {
-    format!(
-        "{}.{}({}, $$typed_data.Endian.little)",
-        bytes_name,
-        primitive_blittable_read_method(primitive),
-        offset,
+    num_as_primitive(
+        primitive,
+        format!(
+            "{}.{}({}{})",
+            bytes_name,
+            primitive_blittable_read_method(primitive),
+            offset,
+            match primitive {
+                PrimitiveType::U8 | PrimitiveType::I8 | PrimitiveType::Bool => "",
+                _ => ", $$typed_data.Endian.little",
+            }
+        )
+        .as_str(),
     )
 }
 
@@ -428,7 +454,7 @@ pub fn emit_reader_read(seq: &ReadSeq) -> String {
         ReadOp::Result { ok, err, .. } => {
             let _ok_expr = emit_reader_read(ok);
             let _err_expr = emit_reader_read(err);
-            todo!()
+            String::new()
         }
         ReadOp::Builtin { id, .. } => match id.as_str() {
             "Duration" => "reader.readDuration()".to_string(),
