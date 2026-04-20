@@ -22,11 +22,8 @@ pub struct KmpOutputs {
 pub struct KmpRecordField {
     pub name: String,
     pub kotlin_type: String,
-    pub offset: usize,
     pub read_method: String,
     pub write_method: String,
-    pub seq_read_method: String,
-    pub seq_write_method: String,
 }
 
 #[derive(Debug, Clone)]
@@ -57,8 +54,6 @@ pub struct KmpFunction {
 #[derive(Debug, Clone)]
 pub struct KmpRecord {
     pub name: String,
-    pub is_blittable: bool,
-    pub struct_size: usize,
     pub fields: Vec<KmpRecordField>,
 }
 

@@ -1,23 +1,8 @@
 actual data class {{ record.name }} actual constructor({% for field in record.fields %}actual val {{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) {
-{%- if record.is_blittable %}
-
-    actual companion object {
-        actual fun decode(reader: WireReader): {{ record.name }} = {{ record.name }}({% for field in record.fields %}reader.{{ field.read_method }}({{ field.offset }}){% if !loop.last %}, {% endif %}{% endfor %})
-    }
-
-    actual fun wireEncodedSize(): Int = {{ record.struct_size }}
-
-    actual fun wireEncodeTo(wire: WireWriter) {
-{%- for field in record.fields %}
-        wire.{{ field.write_method }}({{ field.offset }}, {{ field.name }})
-{%- endfor %}
-    }
-{%- else %}
-
     actual companion object {
         actual fun decode(reader: WireReader): {{ record.name }} {
 {%- for field in record.fields %}
-            val {{ field.name }} = reader.{{ field.seq_read_method }}()
+            val {{ field.name }} = reader.{{ field.read_method }}()
 {%- endfor %}
             return {{ record.name }}({% for field in record.fields %}{{ field.name }}{% if !loop.last %}, {% endif %}{% endfor %})
         }
@@ -26,15 +11,23 @@ actual data class {{ record.name }} actual constructor({% for field in record.fi
     actual fun wireEncodedSize(): Int {
         var size = 0
 {%- for field in record.fields %}
-{%- if field.seq_read_method == "readString" %}
+{%- if field.read_method == "readString" %}
         size += 4 + {{ field.name }}.encodeToByteArray().size
-{%- else if field.seq_read_method == "readBytes" %}
+{%- else if field.read_method == "readBytes" %}
         size += 4 + {{ field.name }}.size
-{%- else if field.seq_read_method == "readList" %}
+{%- else if field.read_method == "readBool" || field.read_method == "readI8" || field.read_method == "readU8" %}
+        size += 1
+{%- else if field.read_method == "readI16" || field.read_method == "readU16" %}
+        size += 2
+{%- else if field.read_method == "readI32" || field.read_method == "readU32" || field.read_method == "readF32" %}
+        size += 4
+{%- else if field.read_method == "readI64" || field.read_method == "readU64" || field.read_method == "readF64" %}
+        size += 8
+{%- else if field.read_method == "readList" %}
         size += 4 + ({{ field.name }}.size * 8)
-{%- else if field.seq_read_method == "readOption" || field.seq_read_method == "readOptional" %}
+{%- else if field.read_method == "readOption" || field.read_method == "readOptional" %}
         size += 1 + if ({{ field.name }} != null) 8 else 0
-{%- else if field.seq_read_method == "readResult" %}
+{%- else if field.read_method == "readResult" %}
         size += 1 + 8
 {%- else %}
         size += 8
@@ -45,8 +38,7 @@ actual data class {{ record.name }} actual constructor({% for field in record.fi
 
     actual fun wireEncodeTo(wire: WireWriter) {
 {%- for field in record.fields %}
-        wire.{{ field.seq_write_method }}({{ field.name }})
+        wire.{{ field.write_method }}({{ field.name }})
 {%- endfor %}
     }
-{%- endif %}
 }

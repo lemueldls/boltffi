@@ -1,12 +1,11 @@
 use boltffi_ffi_rules::callable::ExecutionKind;
 
-use crate::ir::abi::{AbiRecord, CallId};
+use crate::ir::abi::CallId;
 use crate::ir::abi::ParamRole;
 use crate::ir::definitions::{ConstructorDef, EnumRepr, Receiver, ReturnDef, VariantPayload};
-use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq};
 use crate::ir::types::TypeExpr;
 use crate::ir::{AbiContract, FfiContract};
-use crate::render::kotlin::{emit_size_expr_for_write_seq, emit_write_expr, NamingConvention};
+use crate::render::kotlin::{NamingConvention, emit_size_expr_for_write_seq, emit_write_expr};
 
 use super::plan::{
     KmpCallback, KmpCallbackMethod, KmpClass, KmpClassConstructor, KmpClassFactory, KmpClassMethod,
@@ -44,41 +43,24 @@ impl<'a> KmpLowerer<'a> {
             .ffi_contract
             .catalog
             .all_records()
-            .map(|record| {
-                let abi_record = self.abi_record_for(&record.id);
-                let is_blittable = abi_record.is_some_and(|record| record.is_blittable);
-                let struct_size = abi_record.and_then(|record| record.size).unwrap_or(0);
-                let offsets = abi_record.and_then(|record| self.record_field_offsets(record));
+            .map(|record| KmpRecord {
+                name: NamingConvention::class_name(record.id.as_str()),
+                fields: record
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        let kotlin_type = self.kotlin_type(&field.type_expr);
+                        let (read_method, write_method) =
+                            self.wire_sequential_methods(&field.type_expr);
 
-                KmpRecord {
-                    name: NamingConvention::class_name(record.id.as_str()),
-                    is_blittable,
-                    struct_size,
-                    fields: record
-                        .fields
-                        .iter()
-                        .enumerate()
-                        .map(|(index, field)| {
-                            let kotlin_type = self.kotlin_type(&field.type_expr);
-                            let (read_method, write_method) =
-                                self.wire_primitive_methods(&field.type_expr);
-                            let (seq_read_method, seq_write_method) =
-                                self.wire_sequential_methods(&field.type_expr);
-                            KmpRecordField {
-                                name: NamingConvention::property_name(field.name.as_str()),
-                                kotlin_type,
-                                offset: offsets
-                                    .as_ref()
-                                    .and_then(|offsets| offsets.get(index).copied())
-                                    .unwrap_or(0),
-                                read_method,
-                                write_method,
-                                seq_read_method,
-                                seq_write_method,
-                            }
-                        })
-                        .collect(),
-                }
+                        KmpRecordField {
+                            name: NamingConvention::property_name(field.name.as_str()),
+                            kotlin_type,
+                            read_method,
+                            write_method,
+                        }
+                    })
+                    .collect(),
             })
             .collect();
 
@@ -123,6 +105,7 @@ impl<'a> KmpLowerer<'a> {
                                         })
                                         .collect(),
                                 };
+
                                 KmpEnumVariant {
                                     name: NamingConvention::class_name(variant.name.as_str()),
                                     fields,
@@ -294,8 +277,8 @@ impl<'a> KmpLowerer<'a> {
                         })
                     });
 
-                    if let Some(abi_param)
-                        = abi_param && let ParamRole::Input {
+                    if let Some(abi_param) = abi_param
+                        && let ParamRole::Input {
                             encode_ops: Some(encode_ops),
                             ..
                         } = &abi_param.role
@@ -310,7 +293,7 @@ impl<'a> KmpLowerer<'a> {
                             name: param_name,
                             kotlin_type: "ByteArray".to_string(),
                         });
-                        native_args.push(format!("{}.toByteArray()", binding_name));
+                        native_args.push(format!("{}.buffer", binding_name));
                     } else {
                         ffi_params.push(KmpParam {
                             name: param_name.clone(),
@@ -352,64 +335,6 @@ impl<'a> KmpLowerer<'a> {
             .find(|call| call.id == call_id)
             .map(|call| call.symbol.as_str().to_string())
             .unwrap_or_else(|| "boltffi_missing_symbol".to_string())
-    }
-
-    fn abi_record_for(&self, record_id: &crate::ir::ids::RecordId) -> Option<&AbiRecord> {
-        self.abi_contract
-            .records
-            .iter()
-            .find(|record| record.id == *record_id)
-    }
-
-    fn record_field_offsets(&self, record: &AbiRecord) -> Option<Vec<usize>> {
-        match record.decode_ops.ops.first() {
-            Some(ReadOp::Record { fields, .. }) => fields
-                .iter()
-                .map(|field| read_seq_offset(&field.seq))
-                .collect(),
-            _ => None,
-        }
-    }
-
-    fn wire_primitive_methods(&self, type_expr: &TypeExpr) -> (String, String) {
-        match type_expr {
-            TypeExpr::Primitive(primitive) => match primitive {
-                crate::ir::types::PrimitiveType::Bool => {
-                    ("readBooleanAt".to_string(), "writeBooleanAt".to_string())
-                }
-                crate::ir::types::PrimitiveType::I8 => {
-                    ("readByteAt".to_string(), "writeByteAt".to_string())
-                }
-                crate::ir::types::PrimitiveType::U8 => {
-                    ("readUByteAt".to_string(), "writeUByteAt".to_string())
-                }
-                crate::ir::types::PrimitiveType::I16 => {
-                    ("readShortAt".to_string(), "writeShortAt".to_string())
-                }
-                crate::ir::types::PrimitiveType::U16 => {
-                    ("readUShortAt".to_string(), "writeUShortAt".to_string())
-                }
-                crate::ir::types::PrimitiveType::I32 => {
-                    ("readIntAt".to_string(), "writeIntAt".to_string())
-                }
-                crate::ir::types::PrimitiveType::U32 => {
-                    ("readUIntAt".to_string(), "writeUIntAt".to_string())
-                }
-                crate::ir::types::PrimitiveType::I64 | crate::ir::types::PrimitiveType::ISize => {
-                    ("readLongAt".to_string(), "writeLongAt".to_string())
-                }
-                crate::ir::types::PrimitiveType::U64 | crate::ir::types::PrimitiveType::USize => {
-                    ("readULongAt".to_string(), "writeULongAt".to_string())
-                }
-                crate::ir::types::PrimitiveType::F32 => {
-                    ("readFloatAt".to_string(), "writeFloatAt".to_string())
-                }
-                crate::ir::types::PrimitiveType::F64 => {
-                    ("readDoubleAt".to_string(), "writeDoubleAt".to_string())
-                }
-            },
-            _ => ("readByteAt".to_string(), "writeByteAt".to_string()),
-        }
     }
 
     /// Returns sequential read/write method names for non-blittable wire codecs.
@@ -458,7 +383,7 @@ impl<'a> KmpLowerer<'a> {
             TypeExpr::Result { .. } => ("readResult".to_string(), "writeResult".to_string()),
             // For complex types (Record, Enum, Custom, Handle, Callback, etc.),
             // we use generic read/write patterns (to be handled in templates)
-            _ => ("readByteAt".to_string(), "writeByteAt".to_string()),
+            _ => ("readI8".to_string(), "writeI8".to_string()),
         }
     }
 
@@ -508,25 +433,5 @@ impl<'a> KmpLowerer<'a> {
             TypeExpr::Callback(callback_id) => NamingConvention::class_name(callback_id.as_str()),
             TypeExpr::Void => "Unit".to_string(),
         }
-    }
-}
-
-fn read_seq_offset(seq: &ReadSeq) -> Option<usize> {
-    let op = seq.ops.first()?;
-    let offset = match op {
-        ReadOp::Primitive { offset, .. }
-        | ReadOp::String { offset }
-        | ReadOp::Bytes { offset }
-        | ReadOp::Builtin { offset, .. }
-        | ReadOp::Record { offset, .. }
-        | ReadOp::Enum { offset, .. } => offset,
-        _ => return None,
-    };
-
-    match offset {
-        OffsetExpr::Fixed(value) => Some(*value),
-        OffsetExpr::Base => Some(0),
-        OffsetExpr::BasePlus(value) => Some(*value),
-        _ => None,
     }
 }

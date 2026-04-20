@@ -77,8 +77,6 @@ expect class {{ class.name }} {
 }
 
 {%- endfor %}
-expect object {{ module.module_name }} {
 {%- for function in module.functions %}
-    {% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }}
+expect {% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }}
 {%- endfor %}
-}

@@ -168,35 +168,33 @@ private object Native {
 {{ self::render_actual_class_with_alias_prefix(class, alias_prefix, is_jvm) }}
 
 {%- endfor %}
-actual object {{ module.module_name }} {
 {%- for function in module.functions %}
-    actual {% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }} {
+actual {% if function.is_async %}suspend {% endif %}fun {{ function.name }}({% for param in function.params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }} {
 {%- if !function.wire_writers.is_empty() %}
 {%- for writer in function.wire_writers %}
-        val {{ writer.binding_name }} = WireWriterPool.acquire({{ writer.size_expr }})
-        kotlin.run {
-            val wire = {{ writer.binding_name }}.writer
-            {{ writer.encode_expr }}
-        }
+    val {{ writer.binding_name }} = WireWriterPool.acquire({{ writer.size_expr }})
+    kotlin.run {
+        val wire = {{ writer.binding_name }}.writer
+        {{ writer.encode_expr }}
+    }
 {%- endfor %}
-        try {
-{%- if is_jvm %}
-            return Native.{{ function.ffi_symbol }}({% for arg in function.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- else %}
-            return {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for arg in function.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- endif %}
-        } finally {
-{%- for writer in function.wire_writers %}
-            {{ writer.binding_name }}.close()
-{%- endfor %}
-        }
-{%- else %}
+    try {
 {%- if is_jvm %}
         return Native.{{ function.ffi_symbol }}({% for arg in function.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- else %}
         return {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for arg in function.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- endif %}
-{%- endif %}
-    }
+    } finally {
+{%- for writer in function.wire_writers %}
+        {{ writer.binding_name }}.close()
 {%- endfor %}
+    }
+{%- else %}
+{%- if is_jvm %}
+    return Native.{{ function.ffi_symbol }}({% for arg in function.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- else %}
+    return {{ self::symbol_alias(function.ffi_symbol, alias_prefix) }}({% for arg in function.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endif %}
+{%- endif %}
 }
+{%- endfor %}
