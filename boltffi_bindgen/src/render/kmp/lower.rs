@@ -93,6 +93,7 @@ impl<'a> KmpLowerer<'a> {
                                         .map(|(index, type_expr)| KmpParam {
                                             name: format!("p{}", index),
                                             kotlin_type: self.kotlin_type(type_expr),
+                                            is_wire_buffer: false,
                                         })
                                         .collect(),
                                     VariantPayload::Struct(fields) => fields
@@ -102,6 +103,7 @@ impl<'a> KmpLowerer<'a> {
                                                 field.name.as_str(),
                                             ),
                                             kotlin_type: self.kotlin_type(&field.type_expr),
+                                            is_wire_buffer: false,
                                         })
                                         .collect(),
                                 };
@@ -140,6 +142,7 @@ impl<'a> KmpLowerer<'a> {
                             .map(|param| KmpParam {
                                 name: NamingConvention::param_name(param.name.as_str()),
                                 kotlin_type: self.kotlin_type(&param.type_expr),
+                                is_wire_buffer: false,
                             })
                             .collect(),
                         return_type: self.kotlin_return_type(&method.returns),
@@ -170,6 +173,7 @@ impl<'a> KmpLowerer<'a> {
                             .map(|param| KmpParam {
                                 name: NamingConvention::param_name(param.name.as_str()),
                                 kotlin_type: self.kotlin_type(&param.type_expr),
+                                is_wire_buffer: false,
                             })
                             .collect(),
                         ffi_symbol: self.call_symbol(CallId::Constructor {
@@ -198,6 +202,7 @@ impl<'a> KmpLowerer<'a> {
                             .map(|param| KmpParam {
                                 name: NamingConvention::param_name(param.name.as_str()),
                                 kotlin_type: self.kotlin_type(&param.type_expr),
+                                is_wire_buffer: false,
                             })
                             .collect(),
                         return_type: if constructor.is_optional() {
@@ -224,6 +229,7 @@ impl<'a> KmpLowerer<'a> {
                             .map(|param| KmpParam {
                                 name: NamingConvention::param_name(param.name.as_str()),
                                 kotlin_type: self.kotlin_type(&param.type_expr),
+                                is_wire_buffer: false,
                             })
                             .collect(),
                         return_type: self.kotlin_return_type(&method.returns),
@@ -268,6 +274,7 @@ impl<'a> KmpLowerer<'a> {
                     params.push(KmpParam {
                         name: param_name.clone(),
                         kotlin_type: kotlin_type.clone(),
+                        is_wire_buffer: false,
                     });
 
                     let abi_param = call.and_then(|call| {
@@ -292,12 +299,14 @@ impl<'a> KmpLowerer<'a> {
                         ffi_params.push(KmpParam {
                             name: param_name,
                             kotlin_type: "ByteArray".to_string(),
+                            is_wire_buffer: true,
                         });
                         native_args.push(format!("{}.buffer", binding_name));
                     } else {
                         ffi_params.push(KmpParam {
                             name: param_name.clone(),
                             kotlin_type,
+                            is_wire_buffer: false,
                         });
                         native_args.push(param_name);
                     }

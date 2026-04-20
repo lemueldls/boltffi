@@ -3,8 +3,6 @@ package {{ module.package_name }}
 import kotlin.Result
 import kotlin.jvm.JvmName
 
-{{ self::render_wire_runtime() }}
-
 {%- for record in module.records %}
 expect class {{ record.name }}({% for field in record.fields %}{{ field.name }}: {{ field.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}) {
 {%- for field in record.fields %}

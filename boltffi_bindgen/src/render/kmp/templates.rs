@@ -28,7 +28,11 @@ struct CommonMainTemplate<'a> {
 
 #[derive(Template)]
 #[template(path = "render_kmp/wire_runtime.txt", escape = "none")]
-struct WireRuntimeTemplate;
+struct WireRuntimeNativeTemplate;
+
+#[derive(Template)]
+#[template(path = "render_kmp/wire_runtime_jvm.txt", escape = "none")]
+struct WireRuntimeJvmTemplate;
 
 #[derive(Template)]
 #[template(path = "render_kmp/platform_main.txt", escape = "none")]
@@ -100,8 +104,12 @@ fn render_common_main(module: &KmpModule) -> String {
     CommonMainTemplate { module }.render().unwrap()
 }
 
-fn render_wire_runtime() -> String {
-    WireRuntimeTemplate.render().unwrap()
+fn render_wire_runtime(is_jvm: &bool) -> String {
+    if *is_jvm {
+        WireRuntimeJvmTemplate.render().unwrap()
+    } else {
+        WireRuntimeNativeTemplate.render().unwrap()
+    }
 }
 
 fn render_platform_main(module: &KmpModule, platform: Platform) -> String {

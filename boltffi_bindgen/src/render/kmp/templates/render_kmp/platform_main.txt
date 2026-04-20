@@ -1,6 +1,12 @@
 package {{ module.package_name }}
 
+{%- for import in imports %}
+{{ import }}
+{%- endfor %}
+
 internal const val BOLTFFI_LIBRARY = "{{ module.library_name }}"
+
+{{ self::render_wire_runtime(is_jvm) }}
 
 {%- if is_jvm %}
 @Suppress("FunctionName")
@@ -139,7 +145,7 @@ private object Native {
     }
 
 {%- for function in module.functions %}
-    @JvmStatic external fun {{ function.ffi_symbol }}({% for param in function.ffi_params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }}
+    @JvmStatic external fun {{ function.ffi_symbol }}({% for param in function.ffi_params %}{{ param.name }}: {% if param.is_wire_buffer %}java.nio.ByteBuffer{% else %}{{ param.kotlin_type }}{% endif %}{% if !loop.last %}, {% endif %}{% endfor %}): {{ function.return_type }}
 {%- endfor %}
 {%- for class in module.classes %}
 {%- for constructor in class.constructors %}
@@ -155,9 +161,6 @@ private object Native {
 }
 {%- endif %}
 
-{%- for import in imports %}
-{{ import }}
-{%- endfor %}
 {%- if !module.classes.is_empty() || !module.functions.is_empty() %}
 
 {%- endif %}

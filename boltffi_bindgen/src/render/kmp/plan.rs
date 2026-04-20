@@ -30,6 +30,7 @@ pub struct KmpRecordField {
 pub struct KmpParam {
     pub name: String,
     pub kotlin_type: String,
+    pub is_wire_buffer: bool,
 }
 
 #[derive(Debug, Clone)]
