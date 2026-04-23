@@ -7,7 +7,6 @@ pub enum PackCommand {
     Wasm(PackWasmOptions),
     Java(PackJavaOptions),
     Python(PackPythonOptions),
-    Dart(PackDartOptions),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,9 +48,4 @@ pub struct PackPythonOptions {
     pub execution: PackExecutionOptions,
     pub experimental: bool,
     pub python_interpreters: Vec<String>,
-}
-
-pub struct PackDartOptions {
-    pub execution: PackExecutionOptions,
-    pub experimental: bool,
 }

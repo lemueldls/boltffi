@@ -1,6 +1,5 @@
 pub mod android;
 pub mod apple;
-pub mod dart;
 pub mod java;
 pub mod python;
 pub mod symbols;

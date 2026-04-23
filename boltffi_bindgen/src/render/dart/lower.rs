@@ -389,14 +389,10 @@ mod test {
 
         let library = lower(&ffi);
 
-        let output = DartEmitter::emit(&library, "test");
+        let output = DartEmitter::emit(&library);
 
         assert!(library.records[0].blittable_layout.is_some());
-        assert!(
-            output
-                .lib
-                .contains("final class ___Point extends $$ffi.Struct")
-        );
+        assert!(output.contains("final class ___Point extends $$ffi.Struct"));
     }
 
     #[test]
